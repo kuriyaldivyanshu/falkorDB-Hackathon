@@ -1,0 +1,199 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:threadline:checkpoint-manifest-v1",
+  "title": "Threadline structured checkpoint manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "task_id",
+    "run_id",
+    "graph_epoch",
+    "task_revision",
+    "requirement_revision",
+    "candidate_digest",
+    "environment_digest",
+    "covered_capture_positions",
+    "progress",
+    "next_action",
+    "tactical_plan",
+    "unresolved_effects",
+    "pending_question_id",
+    "episode_source_ids",
+    "visibility",
+    "producer_kind"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "task_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "run_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "graph_epoch": {
+      "type": "string",
+      "minLength": 1
+    },
+    "task_revision": {
+      "type": "string",
+      "pattern": "^[0-9]+$"
+    },
+    "requirement_revision": {
+      "type": "string",
+      "pattern": "^[0-9]+$"
+    },
+    "candidate_digest": {
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "covered_capture_positions": {
+      "type": "array",
+      "maxItems": 4,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "session_id",
+          "capture_seq",
+          "graph_admitted_capture_seq"
+        ],
+        "properties": {
+          "session_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "capture_seq": {
+            "type": "string",
+            "pattern": "^[0-9]+$"
+          },
+          "graph_admitted_capture_seq": {
+            "type": "string",
+            "pattern": "^[0-9]+$"
+          }
+        }
+      }
+    },
+    "progress": {
+      "type": "string",
+      "maxLength": 2000
+    },
+    "next_action": {
+      "type": "string",
+      "maxLength": 1000
+    },
+    "tactical_plan": {
+      "type": "array",
+      "maxItems": 8,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "step_id",
+          "text",
+          "status"
+        ],
+        "properties": {
+          "step_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "text": {
+            "type": "string",
+            "maxLength": 300
+          },
+          "status": {
+            "enum": [
+              "pending",
+              "in_progress",
+              "completed"
+            ]
+          }
+        }
+      }
+    },
+    "unresolved_effects": {
+      "type": "array",
+      "maxItems": 80,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "execution_id",
+          "status",
+          "source_id"
+        ],
+        "properties": {
+          "execution_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "status": {
+            "enum": [
+              "running",
+              "unknown"
+            ]
+          },
+          "source_id": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "pending_question_id": {
+      "anyOf": [
+        {
+          "type": "string",
+          "minLength": 1
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "episode_source_ids": {
+      "type": "array",
+      "maxItems": 80,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "visibility": {
+      "enum": [
+        "project",
+        "user",
+        "session"
+      ]
+    },
+    "producer_kind": {
+      "enum": [
+        "service",
+        "agent_proposal"
+      ]
+    },
+    "environment_digest": {
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  }
+}

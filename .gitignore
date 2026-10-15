@@ -1,0 +1,24 @@
+# Keep reference code archives ignored; retain the relocated documentation.
+archive/*
+!archive/plans/
+!archive/notes/
+.DS_Store
+
+# Installed dependencies
+node_modules/
+
+# Generated build output and incremental compiler state
+dist/
+*.tsbuildinfo
+
+# Local runtime data and logs
+.threadline/
+*.log
+npm-debug.log*
+
+# Credential-bearing local files
+.env
+.env.*
+!.env.example
+*.pem
+*.key

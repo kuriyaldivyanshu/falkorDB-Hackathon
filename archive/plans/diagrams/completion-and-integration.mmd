@@ -1,0 +1,14 @@
+flowchart TD
+  patch["Builder candidate checkpoint"] --> snapshot["Immutable candidate manifest"]
+  snapshot --> verify["Verifier assignment plus protected acceptance bundle"]
+  verify --> evidence["Receipts: candidate, environment, criteria, bundle, launcher, requirement"]
+  evidence --> check{"All current required evidence valid?"}
+  check -->|"No"| work["Return findings and require new work/checks"]
+  check -->|"Yes"| complete["Guarded graph completion and receipt"]
+  complete --> review["Human reviews patch and evidence"]
+  review --> integrate["Authorized IntegrationIntent with expected target"]
+  integrate --> external["Apply patch / Git operation outside graph transaction"]
+  external --> actual["Inspect resulting tree and reconcile outcome"]
+  actual --> match{"Expected integrated candidate?"}
+  match -->|"No"| reverify["Block acceptance or run fresh verification"]
+  match -->|"Yes"| receipt["Record integration result"]

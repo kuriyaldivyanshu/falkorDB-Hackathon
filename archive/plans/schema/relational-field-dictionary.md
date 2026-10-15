@@ -1,0 +1,822 @@
+# Threadline relational field dictionary
+
+**Proposed PostgreSQL 18 schema, 14 October 2026.** Generated from the same model as [the reference DDL](postgresql-reference.sql). No database migration has been executed. `id` is an application UUID primary key on every table. Nullable fields lack `NOT NULL`; all references default to restrictive deletion. External graph IDs deliberately have no SQL foreign key.
+
+33 tables; core and extension status is marked individually. Composite scope constraints are listed after each field table.
+
+## users
+
+**Identity / core.** Human account; local bootstrap or future federated identity
+
+| Column | SQL contract | Meaning |
+|---|---|---|
+| `id` | `uuid PRIMARY KEY` | Application-generated immutable identity |
+| `display_name` | `text NOT NULL` | Display label, not authentication |
+| `status` | `text NOT NULL CHECK (status IN ('active','disabled','deleted'))` | Account availability |
+| `created_at` | `timestamptz NOT NULL DEFAULT now()` | Creation instant |
+
+Constraints:
+
+## auth_identities
+
+**Identity / core.** Federated/local subject mapping; never provider inference credentials
+
+| Column | SQL contract | Meaning |
+|---|---|---|
+| `id` | `uuid PRIMARY KEY` | Application-generated immutable identity |
+| `user_id` | `uuid NOT NULL REFERENCES users(id)` | Human account |
+| `issuer` | `text NOT NULL` | Verified issuer or local OS bootstrap namespace |
+| `subject` | `text NOT NULL` | Verified stable subject |
+| `created_at` | `timestamptz NOT NULL DEFAULT now()` | Creation instant |
+
+Constraints:
+- `UNIQUE (issuer, subject)`
+
+## tenants
+
+**Identity / core.** Isolation boundary and account namespace
+
+| Column | SQL contract | Meaning |
+|---|---|---|
+| `id` | `uuid PRIMARY KEY` | Application-generated immutable identity |
+| `slug` | `text NOT NULL UNIQUE` | Human-friendly stable identifier |
+| `name` | `text NOT NULL` | Display name |
+| `status` | `text NOT NULL CHECK (status IN ('active','suspended','deleted'))` | Admission status |
+| `created_at` | `timestamptz NOT NULL DEFAULT now()` | Creation instant |
+
+Constraints:
+
+## tenant_memberships
+
+**Identity / core.** Human membership and role in one tenant
+
+| Column | SQL contract | Meaning |
+|---|---|---|
+| `tenant_id` | `uuid NOT NULL` | Owning tenant; trusted routing scope |
+| `id` | `uuid PRIMARY KEY` | Application-generated immutable identity |
+| `user_id` | `uuid NOT NULL REFERENCES users(id)` | Member identity |
+| `role` | `text NOT NULL CHECK (role IN ('owner','admin','member','viewer'))` | Tenant role |
+| `status` | `text NOT NULL CHECK (status IN ('active','revoked'))` | Authorization state |
+| `created_at` | `timestamptz NOT NULL DEFAULT now()` | Creation instant |
+
+Constraints:
+- `UNIQUE (tenant_id, user_id)`
+- `UNIQUE (tenant_id, id)`
+- `FOREIGN KEY (tenant_id) REFERENCES tenants(id)`
+
+## projects
+
+**Identity / core.** Trusted graph routing and project lifecycle
+
+| Column | SQL contract | Meaning |
+|---|---|---|
+| `tenant_id` | `uuid NOT NULL` | Owning tenant; trusted routing scope |
+| `id` | `uuid PRIMARY KEY` | Application-generated immutable identity |
+| `slug` | `text NOT NULL` | Name within tenant |
+| `graph_key` | `text NOT NULL UNIQUE` | Opaque backend-only FalkorDB key |
+| `graph_epoch` | `uuid NOT NULL` | Restore incarnation; shared with graph ProjectRoot |
+| `status` | `text NOT NULL CHECK (status IN ('initializing','ready','paused','archived','deleted'))` | Admission status |
+| `schema_version` | `integer NOT NULL CHECK (schema_version > 0)` | Expected graph contract |
+| `created_at` | `timestamptz NOT NULL DEFAULT now()` | Creation instant |
+
+Constraints:
+- `UNIQUE (tenant_id, slug)`
+- `UNIQUE (tenant_id, id)`
+- `FOREIGN KEY (tenant_id) REFERENCES tenants(id)`
+
+## project_memberships
+
+**Identity / core.** Project role; tenant membership is a prerequisite
+
+| Column | SQL contract | Meaning |
+|---|---|---|
+| `tenant_id` | `uuid NOT NULL` | Owning tenant; trusted routing scope |
+| `project_id` | `uuid NOT NULL` | Owning project; scope-aware foreign keys |
+| `id` | `uuid PRIMARY KEY` | Application-generated immutable identity |
+| `user_id` | `uuid NOT NULL` | Human member |
+| `role` | `text NOT NULL CHECK (role IN ('owner','editor','reviewer','viewer'))` | Project authorization |
+| `status` | `text NOT NULL CHECK (status IN ('active','revoked'))` | Current grant |
+| `created_at` | `timestamptz NOT NULL DEFAULT now()` | Creation instant |
+
+Constraints:
+- `UNIQUE (tenant_id, project_id, user_id)`
+- `FOREIGN KEY (tenant_id, user_id) REFERENCES tenant_memberships(tenant_id, user_id)`
+- `UNIQUE (tenant_id, project_id, id)`
+- `FOREIGN KEY (tenant_id, project_id) REFERENCES projects(tenant_id, id)`
+
+## user_sessions
+
+**Identity / core.** Human application authentication; distinct from agent sessions
+
+| Column | SQL contract | Meaning |
+|---|---|---|
+| `tenant_id` | `uuid NOT NULL` | Owning tenant; trusted routing scope |
+| `id` | `uuid PRIMARY KEY` | Application-generated immutable identity |
+| `user_id` | `uuid NOT NULL` | Authenticated human |
+| `token_hash` | `char(64) NOT NULL UNIQUE` | Hash of random bearer token; never plaintext |
+| `auth_method` | `text NOT NULL CHECK (auth_method IN ('local_bootstrap','oidc'))` | Authentication route |
+| `created_at` | `timestamptz NOT NULL DEFAULT now()` | Token issue time |
+| `last_seen_at` | `timestamptz NOT NULL` | Used for idle expiry |
+| `expires_at` | `timestamptz NOT NULL` | Absolute expiry |
+| `idle_expires_at` | `timestamptz NOT NULL` | Idle expiry |
+| `revoked_at` | `timestamptz` | Revocation time |
+| `client_label` | `text NOT NULL` | TUI/device display label |
+
+Constraints:
+- `FOREIGN KEY (tenant_id, user_id) REFERENCES tenant_memberships(tenant_id, user_id)`
+- `CHECK (expires_at > created_at)`
+- `CHECK (idle_expires_at <= expires_at)`
+- `UNIQUE (tenant_id, id)`
+- `FOREIGN KEY (tenant_id) REFERENCES tenants(id)`
+- `UNIQUE (tenant_id, user_id, id)`
+
+## worker_hosts
+
+**Execution / core.** Enrolled execution host; local first
+
+| Column | SQL contract | Meaning |
+|---|---|---|
+| `tenant_id` | `uuid NOT NULL` | Owning tenant; trusted routing scope |
+| `id` | `uuid PRIMARY KEY` | Application-generated immutable identity |
+| `user_id` | `uuid NOT NULL` | Host enrolling human |
+| `name` | `text NOT NULL` | Display name |
+| `credential_hash` | `char(64) NOT NULL UNIQUE` | Scoped worker credential hash |
+| `credential_expires_at` | `timestamptz NOT NULL` | Credential rotation boundary |
+| `boot_id` | `uuid NOT NULL` | Current agent-supervisor incarnation |
+| `allowed_roots` | `jsonb NOT NULL` | Reviewed canonical roots |
+| `capabilities` | `jsonb NOT NULL` | Platform and isolation capabilities |
+| `last_seen_at` | `timestamptz` | Heartbeat |
+| `revoked_at` | `timestamptz` | Host revocation |
+| `created_at` | `timestamptz NOT NULL DEFAULT now()` | Creation instant |
+
+Constraints:
+- `FOREIGN KEY (tenant_id, user_id) REFERENCES tenant_memberships(tenant_id, user_id)`
+- `UNIQUE (tenant_id, id)`
+- `FOREIGN KEY (tenant_id) REFERENCES tenants(id)`
+
+## provider_accounts
+
+**Providers / core.** Nonsecret native or API route metadata for one human
+
+| Column | SQL contract | Meaning |
+|---|---|---|
+| `tenant_id` | `uuid NOT NULL` | Owning tenant; trusted routing scope |
+| `id` | `uuid PRIMARY KEY` | Application-generated immutable identity |
+| `user_id` | `uuid NOT NULL` | Credential owner |
+| `provider` | `text NOT NULL` | Provider family |
+| `runtime` | `text NOT NULL` | codex / claude / api / ollama |
+| `auth_route` | `text NOT NULL CHECK (auth_route IN ('native','api_key','chatgpt_plan_oauth','cloud_identity','local'))` | Selected billing/auth route |
+| `label` | `text NOT NULL` | User label |
+| `secret_ref` | `text` | API or app-owned OAuth secret-store reference; never token bytes |
+| `native_profile_ref` | `text` | Native profile reference; no auth cache content |
+| `last_probe_at` | `timestamptz` | Most recent explicit diagnostics |
+| `probe_status` | `text NOT NULL` | unknown / ready / unavailable / quota |
+| `created_at` | `timestamptz NOT NULL DEFAULT now()` | Creation instant |
+
+Constraints:
+- `UNIQUE (tenant_id, user_id, id)`
+- `FOREIGN KEY (tenant_id, user_id) REFERENCES tenant_memberships(tenant_id, user_id)`
+- `CHECK (auth_route <> 'native' OR secret_ref IS NULL)`
+- `UNIQUE (tenant_id, id)`
+- `FOREIGN KEY (tenant_id) REFERENCES tenants(id)`
+
+## provider_profiles
+
+**Providers / core.** Project-selectable versioned execution settings
+
+| Column | SQL contract | Meaning |
+|---|---|---|
+| `tenant_id` | `uuid NOT NULL` | Owning tenant; trusted routing scope |
+| `project_id` | `uuid NOT NULL` | Owning project; scope-aware foreign keys |
+| `id` | `uuid PRIMARY KEY` | Application-generated immutable identity |
+| `owner_user_id` | `uuid NOT NULL` | Account owner |
+| `provider_account_id` | `uuid NOT NULL` | Selected account route |
+| `name` | `text NOT NULL` | Profile label |
+| `model_id` | `text NOT NULL` | Provider-specific exact model identifier |
+| `adapter_version` | `text NOT NULL` | Pinned adapter contract |
+| `effort` | `text` | Provider-specific reasoning/effort option |
+| `settings` | `jsonb NOT NULL` | Nonsecret validated settings including endpoint if selected |
+| `config_digest` | `char(64) NOT NULL` | Canonical configuration digest |
+| `created_at` | `timestamptz NOT NULL DEFAULT now()` | Immutable profile version instant |
+
+Constraints:
+- `FOREIGN KEY (tenant_id, owner_user_id, provider_account_id) REFERENCES provider_accounts(tenant_id, user_id, id)`
+- `UNIQUE (tenant_id, project_id, id)`
+- `FOREIGN KEY (tenant_id, project_id) REFERENCES projects(tenant_id, id)`
+
+## workspace_registrations
+
+**Execution / core.** Authorized worktree/snapshot binding to a project and host
+
+| Column | SQL contract | Meaning |
+|---|---|---|
+| `tenant_id` | `uuid NOT NULL` | Owning tenant; trusted routing scope |
+| `project_id` | `uuid NOT NULL` | Owning project; scope-aware foreign keys |
+| `id` | `uuid PRIMARY KEY` | Application-generated immutable identity |
+| `host_id` | `uuid NOT NULL` | Execution host |
+| `canonical_path` | `text NOT NULL` | Host-specific resolved path |
+| `repository_fingerprint` | `char(64) NOT NULL` | Repository identity evidence |
+| `kind` | `text NOT NULL CHECK (kind IN ('builder','verifier','investigator','fixture'))` | Tool/write profile |
+| `status` | `text NOT NULL CHECK (status IN ('registered','active','quarantined','retired'))` | Operational access state |
+| `base_commit` | `text` | Git base when applicable |
+| `created_at` | `timestamptz NOT NULL DEFAULT now()` | Registration instant |
+
+Constraints:
+- `FOREIGN KEY (tenant_id, host_id) REFERENCES worker_hosts(tenant_id, id)`
+- `UNIQUE (tenant_id, host_id, canonical_path)`
+- `UNIQUE (tenant_id, project_id, id)`
+- `FOREIGN KEY (tenant_id, project_id) REFERENCES projects(tenant_id, id)`
+
+## runs
+
+**Execution / core.** Run index and immutable admitted policy; current authority in graph Run
+
+| Column | SQL contract | Meaning |
+|---|---|---|
+| `tenant_id` | `uuid NOT NULL` | Owning tenant; trusted routing scope |
+| `project_id` | `uuid NOT NULL` | Owning project; scope-aware foreign keys |
+| `id` | `uuid PRIMARY KEY` | Application-generated immutable identity |
+| `initiated_by` | `uuid NOT NULL` | Human run owner |
+| `initial_profile_id` | `uuid NOT NULL` | Initial selected provider profile |
+| `policy` | `jsonb NOT NULL` | Immutable limits, permissions, detach behavior |
+| `policy_digest` | `char(64) NOT NULL` | Must match graph Run policy |
+| `observed_status` | `text NOT NULL` | Projection only; never completes tasks |
+| `projected_epoch` | `uuid` | Epoch of status projection |
+| `projected_seq` | `bigint CHECK (projected_seq >= 0)` | Last applied graph event |
+| `created_at` | `timestamptz NOT NULL DEFAULT now()` | Run registration instant |
+| `finished_at` | `timestamptz` | Observed terminal instant |
+
+Constraints:
+- `FOREIGN KEY (tenant_id, project_id, initial_profile_id) REFERENCES provider_profiles(tenant_id, project_id, id)`
+- `FOREIGN KEY (tenant_id, project_id, initiated_by) REFERENCES project_memberships(tenant_id, project_id, user_id)`
+- `UNIQUE (tenant_id, project_id, id)`
+- `FOREIGN KEY (tenant_id, project_id) REFERENCES projects(tenant_id, id)`
+
+## agent_sessions
+
+**Execution / core.** One actual runtime instance; fresh successors get new identities
+
+| Column | SQL contract | Meaning |
+|---|---|---|
+| `tenant_id` | `uuid NOT NULL` | Owning tenant; trusted routing scope |
+| `project_id` | `uuid NOT NULL` | Owning project; scope-aware foreign keys |
+| `id` | `uuid PRIMARY KEY` | Application-generated immutable identity |
+| `run_id` | `uuid NOT NULL` | Owning run |
+| `task_graph_id` | `uuid NOT NULL` | External graph Task ID; not SQL FK |
+| `parent_session_id` | `uuid` | Parent in same run |
+| `profile_id` | `uuid NOT NULL` | Immutable provider settings |
+| `workspace_id` | `uuid NOT NULL` | Authorized working snapshot |
+| `role` | `text NOT NULL CHECK (role IN ('builder','verifier','investigator'))` | Execution role |
+| `authorization_kind` | `text NOT NULL CHECK (authorization_kind IN ('task_claim','verification_assignment','investigation_assignment'))` | Role-specific authority, no shared Builder claim |
+| `authorization_manifest` | `jsonb NOT NULL` | Immutable graph epoch, task, role, candidate, criteria and reservation binding |
+| `authorization_digest` | `char(64) NOT NULL` | Must match graph session and launch contract |
+| `runtime_status` | `text NOT NULL` | Observed process lifecycle; not task state |
+| `capture_seq` | `bigint NOT NULL DEFAULT 0 CHECK (capture_seq >= 0)` | Highest durable local capture order |
+| `started_at` | `timestamptz` | Observed launch |
+| `ended_at` | `timestamptz` | Observed end |
+| `created_at` | `timestamptz NOT NULL DEFAULT now()` | Session registration |
+
+Constraints:
+- `FOREIGN KEY (tenant_id, project_id, run_id) REFERENCES runs(tenant_id, project_id, id)`
+- `FOREIGN KEY (tenant_id, project_id, profile_id) REFERENCES provider_profiles(tenant_id, project_id, id)`
+- `FOREIGN KEY (tenant_id, project_id, workspace_id) REFERENCES workspace_registrations(tenant_id, project_id, id)`
+- `UNIQUE (tenant_id, project_id, run_id, id)`
+- `FOREIGN KEY (tenant_id, project_id, run_id, parent_session_id) REFERENCES agent_sessions(tenant_id, project_id, run_id, id)`
+- `UNIQUE (tenant_id, project_id, id)`
+- `FOREIGN KEY (tenant_id, project_id) REFERENCES projects(tenant_id, id)`
+
+## native_bindings
+
+**Execution / extension.** Native thread/session correlation per resume/launch binding
+
+| Column | SQL contract | Meaning |
+|---|---|---|
+| `tenant_id` | `uuid NOT NULL` | Owning tenant; trusted routing scope |
+| `project_id` | `uuid NOT NULL` | Owning project; scope-aware foreign keys |
+| `id` | `uuid PRIMARY KEY` | Application-generated immutable identity |
+| `agent_session_id` | `uuid NOT NULL` | Threadline session |
+| `native_session_id` | `text NOT NULL` | Provider/runtime session ID; not auth |
+| `native_runtime` | `text NOT NULL` | codex / claude compatibility runtime |
+| `native_version` | `text NOT NULL` | Actual executable version |
+| `protocol_digest` | `char(64) NOT NULL` | Pinned observed protocol contract |
+| `mode` | `text NOT NULL CHECK (mode IN ('fresh','resume','fork'))` | Fresh proof cannot use resume/fork |
+| `created_at` | `timestamptz NOT NULL DEFAULT now()` | Binding instant |
+
+Constraints:
+- `FOREIGN KEY (tenant_id, project_id, agent_session_id) REFERENCES agent_sessions(tenant_id, project_id, id)`
+- `UNIQUE (tenant_id, project_id, agent_session_id, native_runtime, native_session_id)`
+- `UNIQUE (tenant_id, project_id, id)`
+- `FOREIGN KEY (tenant_id, project_id) REFERENCES projects(tenant_id, id)`
+
+## launch_attempts
+
+**Execution / core.** Observed runtime registration attempts; process identity only for actual external runtime
+
+| Column | SQL contract | Meaning |
+|---|---|---|
+| `tenant_id` | `uuid NOT NULL` | Owning tenant; trusted routing scope |
+| `project_id` | `uuid NOT NULL` | Owning project; scope-aware foreign keys |
+| `id` | `uuid PRIMARY KEY` | Application-generated immutable identity |
+| `agent_session_id` | `uuid NOT NULL` | Target execution identity |
+| `launch_graph_id` | `uuid NOT NULL` | External graph LaunchIntent ID |
+| `host_id` | `uuid NOT NULL` | Execution host |
+| `attempt_no` | `integer NOT NULL CHECK (attempt_no > 0)` | Attempt within stable launch ID |
+| `process_id` | `bigint` | External runtime process identifier; null for in-process Builder |
+| `process_start_identity` | `text` | Start-time/boot identity prevents PID reuse confusion |
+| `status` | `text NOT NULL CHECK (status IN ('starting','registered','failed','unknown','terminated'))` | Observed launch state |
+| `created_at` | `timestamptz NOT NULL DEFAULT now()` | Attempt instant |
+| `reconciled_at` | `timestamptz` | Last outcome reconciliation |
+
+Constraints:
+- `FOREIGN KEY (tenant_id, project_id, agent_session_id) REFERENCES agent_sessions(tenant_id, project_id, id)`
+- `FOREIGN KEY (tenant_id, host_id) REFERENCES worker_hosts(tenant_id, id)`
+- `UNIQUE (tenant_id, project_id, launch_graph_id, attempt_no)`
+- `UNIQUE (tenant_id, project_id, id)`
+- `FOREIGN KEY (tenant_id, project_id) REFERENCES projects(tenant_id, id)`
+
+## artifacts
+
+**Evidence / core.** Immutable content metadata; bytes are project-scoped external objects
+
+| Column | SQL contract | Meaning |
+|---|---|---|
+| `tenant_id` | `uuid NOT NULL` | Owning tenant; trusted routing scope |
+| `project_id` | `uuid NOT NULL` | Owning project; scope-aware foreign keys |
+| `id` | `uuid PRIMARY KEY` | Application-generated immutable identity |
+| `content_digest` | `char(64) NOT NULL` | SHA-256 of exact stored bytes |
+| `storage_key` | `text NOT NULL` | Project-relative locator, never arbitrary URL |
+| `kind` | `text NOT NULL` | log / patch / snapshot / context / corpus / checkpoint |
+| `media_type` | `text NOT NULL` | Content type |
+| `byte_size` | `bigint NOT NULL CHECK (byte_size >= 0)` | Stored byte count |
+| `visibility` | `text NOT NULL CHECK (visibility IN ('project','user','session'))` | Read/publication policy |
+| `owner_user_id` | `uuid` | Private user owner |
+| `owner_session_id` | `uuid` | Private session owner |
+| `status` | `text NOT NULL CHECK (status IN ('available','missing','tombstoned'))` | Availability |
+| `created_at` | `timestamptz NOT NULL DEFAULT now()` | Creation instant |
+
+Constraints:
+- `FOREIGN KEY (tenant_id, project_id, owner_session_id) REFERENCES agent_sessions(tenant_id, project_id, id)`
+- `FOREIGN KEY (tenant_id, owner_user_id) REFERENCES tenant_memberships(tenant_id, user_id)`
+- `CHECK ((visibility='project') OR (visibility='user' AND owner_user_id IS NOT NULL) OR (visibility='session' AND owner_session_id IS NOT NULL))`
+- `UNIQUE (tenant_id, project_id, storage_key)`
+- `UNIQUE (tenant_id, project_id, id)`
+- `FOREIGN KEY (tenant_id, project_id) REFERENCES projects(tenant_id, id)`
+
+## capture_events
+
+**History / core.** Immutable normalized visible observation, authoritative before graph ingestion
+
+| Column | SQL contract | Meaning |
+|---|---|---|
+| `tenant_id` | `uuid NOT NULL` | Owning tenant; trusted routing scope |
+| `project_id` | `uuid NOT NULL` | Owning project; scope-aware foreign keys |
+| `id` | `uuid PRIMARY KEY` | Application-generated immutable identity |
+| `agent_session_id` | `uuid NOT NULL` | Observed runtime |
+| `source_key` | `text NOT NULL` | Stable adapter dedup key |
+| `capture_seq` | `bigint NOT NULL CHECK (capture_seq > 0)` | Per-session capture order |
+| `kind` | `text NOT NULL` | message / tool / lifecycle / approval / usage / gap |
+| `payload` | `jsonb NOT NULL` | Bounded normalized event |
+| `payload_digest` | `char(64) NOT NULL` | Digest of canonical event bytes |
+| `raw_artifact_id` | `uuid` | Optional permitted original raw payload |
+| `observed_at` | `timestamptz NOT NULL` | Adapter observation time |
+| `captured_at` | `timestamptz NOT NULL DEFAULT now()` | Durable admission time |
+
+Constraints:
+- `FOREIGN KEY (tenant_id, project_id, agent_session_id) REFERENCES agent_sessions(tenant_id, project_id, id)`
+- `FOREIGN KEY (tenant_id, project_id, raw_artifact_id) REFERENCES artifacts(tenant_id, project_id, id)`
+- `UNIQUE (tenant_id, project_id, agent_session_id, source_key)`
+- `UNIQUE (tenant_id, project_id, agent_session_id, capture_seq)`
+- `UNIQUE (tenant_id, project_id, agent_session_id, id)`
+- `UNIQUE (tenant_id, project_id, id)`
+- `FOREIGN KEY (tenant_id, project_id) REFERENCES projects(tenant_id, id)`
+
+## session_messages
+
+**History / core.** Ordered visible user/assistant/tool text; graph Message anchors cite these
+
+| Column | SQL contract | Meaning |
+|---|---|---|
+| `tenant_id` | `uuid NOT NULL` | Owning tenant; trusted routing scope |
+| `project_id` | `uuid NOT NULL` | Owning project; scope-aware foreign keys |
+| `id` | `uuid PRIMARY KEY` | Application-generated immutable identity |
+| `agent_session_id` | `uuid NOT NULL` | Conversation owner |
+| `capture_event_id` | `uuid NOT NULL` | Durable originating observation |
+| `message_seq` | `bigint NOT NULL CHECK (message_seq > 0)` | Per-session message order |
+| `role` | `text NOT NULL CHECK (role IN ('user','assistant','tool','system'))` | Visible message role |
+| `body` | `text` | Bounded text; hidden reasoning excluded |
+| `body_artifact_id` | `uuid` | Large content object instead of inline body |
+| `body_digest` | `char(64) NOT NULL` | Exact content hash |
+| `visibility` | `text NOT NULL CHECK (visibility IN ('project','user','session'))` | Read policy |
+| `owner_user_id` | `uuid` | Required for user-private messages |
+| `is_partial` | `boolean NOT NULL DEFAULT false` | Incomplete stream at interruption |
+| `created_at` | `timestamptz NOT NULL DEFAULT now()` | Capture instant |
+
+Constraints:
+- `FOREIGN KEY (tenant_id, project_id, agent_session_id) REFERENCES agent_sessions(tenant_id, project_id, id)`
+- `FOREIGN KEY (tenant_id, project_id, agent_session_id, capture_event_id) REFERENCES capture_events(tenant_id, project_id, agent_session_id, id)`
+- `FOREIGN KEY (tenant_id, project_id, body_artifact_id) REFERENCES artifacts(tenant_id, project_id, id)`
+- `FOREIGN KEY (tenant_id, owner_user_id) REFERENCES tenant_memberships(tenant_id, user_id)`
+- `CHECK ((body IS NULL) <> (body_artifact_id IS NULL))`
+- `CHECK (visibility <> 'user' OR owner_user_id IS NOT NULL)`
+- `UNIQUE (tenant_id, project_id, agent_session_id, message_seq)`
+- `UNIQUE (tenant_id, project_id, id)`
+- `FOREIGN KEY (tenant_id, project_id) REFERENCES projects(tenant_id, id)`
+
+## tool_executions
+
+**History / core.** Observed external tool action and effect certainty
+
+| Column | SQL contract | Meaning |
+|---|---|---|
+| `tenant_id` | `uuid NOT NULL` | Owning tenant; trusted routing scope |
+| `project_id` | `uuid NOT NULL` | Owning project; scope-aware foreign keys |
+| `id` | `uuid PRIMARY KEY` | Application-generated immutable identity |
+| `agent_session_id` | `uuid NOT NULL` | Calling runtime |
+| `capture_event_id` | `uuid NOT NULL` | Initial observation |
+| `runtime_call_id` | `text NOT NULL` | Stable owned/native runtime call correlation |
+| `tool_name` | `text NOT NULL` | Owned/native/MCP tool name |
+| `input_digest` | `char(64) NOT NULL` | Canonical scoped invocation digest |
+| `input_artifact_id` | `uuid` | Redacted invocation payload |
+| `output_artifact_id` | `uuid` | Observed output/log object |
+| `status` | `text NOT NULL CHECK (status IN ('requested','running','succeeded','failed','denied','unknown'))` | Execution status |
+| `exit_code` | `integer` | Actual process code where applicable |
+| `candidate_digest` | `char(64)` | Candidate observed or checked |
+| `started_at` | `timestamptz` | Start observation |
+| `finished_at` | `timestamptz` | End observation |
+
+Constraints:
+- `FOREIGN KEY (tenant_id, project_id, agent_session_id) REFERENCES agent_sessions(tenant_id, project_id, id)`
+- `FOREIGN KEY (tenant_id, project_id, agent_session_id, capture_event_id) REFERENCES capture_events(tenant_id, project_id, agent_session_id, id)`
+- `FOREIGN KEY (tenant_id, project_id, input_artifact_id) REFERENCES artifacts(tenant_id, project_id, id)`
+- `FOREIGN KEY (tenant_id, project_id, output_artifact_id) REFERENCES artifacts(tenant_id, project_id, id)`
+- `UNIQUE (tenant_id, project_id, agent_session_id, runtime_call_id)`
+- `UNIQUE (tenant_id, project_id, agent_session_id, id)`
+- `UNIQUE (tenant_id, project_id, id)`
+- `FOREIGN KEY (tenant_id, project_id) REFERENCES projects(tenant_id, id)`
+
+## tool_approvals
+
+**History / core.** One scoped native approval request and user response
+
+| Column | SQL contract | Meaning |
+|---|---|---|
+| `tenant_id` | `uuid NOT NULL` | Owning tenant; trusted routing scope |
+| `project_id` | `uuid NOT NULL` | Owning project; scope-aware foreign keys |
+| `id` | `uuid PRIMARY KEY` | Application-generated immutable identity |
+| `agent_session_id` | `uuid NOT NULL` | Native runtime |
+| `runtime_request_id` | `text NOT NULL` | Owned/native runtime approval correlation |
+| `tool_execution_id` | `uuid` | Associated invocation when known |
+| `request_digest` | `char(64) NOT NULL` | Exact permission/command/path scope |
+| `request_payload` | `jsonb NOT NULL` | Redacted approval presentation |
+| `status` | `text NOT NULL CHECK (status IN ('pending','approved','denied','expired','cancelled'))` | Decision state |
+| `decided_by` | `uuid` | Human responder |
+| `expires_at` | `timestamptz NOT NULL` | No stale approvals |
+| `decided_at` | `timestamptz` | Decision time |
+| `created_at` | `timestamptz NOT NULL DEFAULT now()` | Request instant |
+
+Constraints:
+- `FOREIGN KEY (tenant_id, project_id, agent_session_id) REFERENCES agent_sessions(tenant_id, project_id, id)`
+- `FOREIGN KEY (tenant_id, project_id, agent_session_id, tool_execution_id) REFERENCES tool_executions(tenant_id, project_id, agent_session_id, id)`
+- `FOREIGN KEY (tenant_id, project_id, decided_by) REFERENCES project_memberships(tenant_id, project_id, user_id)`
+- `UNIQUE (tenant_id, project_id, agent_session_id, runtime_request_id)`
+- `UNIQUE (tenant_id, project_id, id)`
+- `FOREIGN KEY (tenant_id, project_id) REFERENCES projects(tenant_id, id)`
+
+## capture_gaps
+
+**History / core.** Explicit unobserved interval; never synthesize missing content
+
+| Column | SQL contract | Meaning |
+|---|---|---|
+| `tenant_id` | `uuid NOT NULL` | Owning tenant; trusted routing scope |
+| `project_id` | `uuid NOT NULL` | Owning project; scope-aware foreign keys |
+| `id` | `uuid PRIMARY KEY` | Application-generated immutable identity |
+| `agent_session_id` | `uuid NOT NULL` | Affected runtime |
+| `from_seq` | `bigint NOT NULL CHECK (from_seq >= 0)` | Last known boundary |
+| `to_seq` | `bigint` | Next known boundary; null if open |
+| `reason` | `text NOT NULL` | Disconnect / unsupported / spool overflow |
+| `status` | `text NOT NULL CHECK (status IN ('open','reconciled','unrecoverable'))` | Recovery result |
+| `created_at` | `timestamptz NOT NULL DEFAULT now()` | Discovery time |
+
+Constraints:
+- `FOREIGN KEY (tenant_id, project_id, agent_session_id) REFERENCES agent_sessions(tenant_id, project_id, id)`
+- `CHECK (to_seq IS NULL OR to_seq >= from_seq)`
+- `UNIQUE (tenant_id, project_id, id)`
+- `FOREIGN KEY (tenant_id, project_id) REFERENCES projects(tenant_id, id)`
+
+## capture_outbox
+
+**Synchronization / core.** SQL-to-graph delivery; payload resides in capture event
+
+| Column | SQL contract | Meaning |
+|---|---|---|
+| `tenant_id` | `uuid NOT NULL` | Owning tenant; trusted routing scope |
+| `project_id` | `uuid NOT NULL` | Owning project; scope-aware foreign keys |
+| `id` | `uuid PRIMARY KEY` | Application-generated immutable identity |
+| `capture_event_id` | `uuid NOT NULL` | Observation to admit |
+| `operation_id` | `uuid NOT NULL` | Stable graph RequestReceipt identity |
+| `request_digest` | `char(64) NOT NULL` | Immutable idempotency fingerprint |
+| `status` | `text NOT NULL CHECK (status IN ('pending','leased','committed','quarantined'))` | Delivery lifecycle |
+| `attempts` | `integer NOT NULL DEFAULT 0 CHECK (attempts >= 0)` | Retry count |
+| `lease_owner` | `uuid` | Ingester incarnation |
+| `lease_expires_at` | `timestamptz` | Crash recovery bound |
+| `next_attempt_at` | `timestamptz NOT NULL DEFAULT now()` | Backoff schedule |
+| `graph_epoch` | `uuid` | Receipt incarnation |
+| `graph_event_seq` | `bigint` | Accepted event sequence |
+| `last_error_code` | `text` | Redacted typed failure |
+| `created_at` | `timestamptz NOT NULL DEFAULT now()` | Enqueue instant |
+
+Constraints:
+- `FOREIGN KEY (tenant_id, project_id, capture_event_id) REFERENCES capture_events(tenant_id, project_id, id)`
+- `UNIQUE (tenant_id, project_id, capture_event_id)`
+- `UNIQUE (tenant_id, project_id, operation_id)`
+- `UNIQUE (tenant_id, project_id, id)`
+- `FOREIGN KEY (tenant_id, project_id) REFERENCES projects(tenant_id, id)`
+
+## graph_event_projection
+
+**Synchronization / core.** Replayable SQL copy of committed graph Events
+
+| Column | SQL contract | Meaning |
+|---|---|---|
+| `tenant_id` | `uuid NOT NULL` | Owning tenant; trusted routing scope |
+| `project_id` | `uuid NOT NULL` | Owning project; scope-aware foreign keys |
+| `id` | `uuid PRIMARY KEY` | Application-generated immutable identity |
+| `graph_epoch` | `uuid NOT NULL` | Source incarnation |
+| `event_seq` | `bigint NOT NULL CHECK (event_seq > 0)` | Contiguous project order |
+| `event_graph_id` | `uuid NOT NULL` | Source Event ID |
+| `kind` | `text NOT NULL` | Domain event kind |
+| `aggregate_graph_id` | `uuid NOT NULL` | Task/run/source affected |
+| `payload` | `jsonb NOT NULL` | Authorized projection payload |
+| `payload_digest` | `char(64) NOT NULL` | Detect conflicting event replay |
+| `committed_at` | `timestamptz NOT NULL` | Graph application commit time |
+| `projected_at` | `timestamptz NOT NULL DEFAULT now()` | Projection instant |
+
+Constraints:
+- `UNIQUE (tenant_id, project_id, graph_epoch, event_seq)`
+- `UNIQUE (tenant_id, project_id, graph_epoch, event_graph_id)`
+- `UNIQUE (tenant_id, project_id, id)`
+- `FOREIGN KEY (tenant_id, project_id) REFERENCES projects(tenant_id, id)`
+
+## projection_offsets
+
+**Synchronization / core.** Cursor advanced atomically with projection rows
+
+| Column | SQL contract | Meaning |
+|---|---|---|
+| `tenant_id` | `uuid NOT NULL` | Owning tenant; trusted routing scope |
+| `project_id` | `uuid NOT NULL` | Owning project; scope-aware foreign keys |
+| `id` | `uuid PRIMARY KEY` | Application-generated immutable identity |
+| `consumer_name` | `text NOT NULL` | Projection version/name |
+| `graph_epoch` | `uuid NOT NULL` | Bound incarnation |
+| `last_contiguous_seq` | `bigint NOT NULL CHECK (last_contiguous_seq >= 0)` | No advance over gaps |
+| `updated_at` | `timestamptz NOT NULL DEFAULT now()` | Last applied transaction |
+
+Constraints:
+- `UNIQUE (tenant_id, project_id, consumer_name)`
+- `UNIQUE (tenant_id, project_id, id)`
+- `FOREIGN KEY (tenant_id, project_id) REFERENCES projects(tenant_id, id)`
+
+## context_packets
+
+**Evidence / core.** Immutable rendered packet; graph ContextPacket owns inclusion relationships
+
+| Column | SQL contract | Meaning |
+|---|---|---|
+| `tenant_id` | `uuid NOT NULL` | Owning tenant; trusted routing scope |
+| `project_id` | `uuid NOT NULL` | Owning project; scope-aware foreign keys |
+| `id` | `uuid PRIMARY KEY` | Application-generated immutable identity |
+| `task_graph_id` | `uuid NOT NULL` | External Task ID |
+| `graph_epoch` | `uuid NOT NULL` | Authority incarnation |
+| `task_revision` | `bigint NOT NULL CHECK (task_revision >= 0)` | Version observed |
+| `requirement_revision` | `bigint NOT NULL CHECK (requirement_revision >= 0)` | Required criteria version |
+| `graph_generation` | `bigint NOT NULL CHECK (graph_generation >= 0)` | Snapshot consistency marker |
+| `content_artifact_id` | `uuid NOT NULL` | Exact rendered input object |
+| `content_digest` | `char(64) NOT NULL` | Actual submitted bytes digest |
+| `token_count` | `integer NOT NULL CHECK (token_count >= 0)` | Count/estimate |
+| `count_precision` | `text NOT NULL CHECK (count_precision IN ('exact','estimated'))` | Tokenizer precision |
+| `created_at` | `timestamptz NOT NULL DEFAULT now()` | Assembly time |
+
+Constraints:
+- `FOREIGN KEY (tenant_id, project_id, content_artifact_id) REFERENCES artifacts(tenant_id, project_id, id)`
+- `UNIQUE (tenant_id, project_id, id)`
+- `FOREIGN KEY (tenant_id, project_id) REFERENCES projects(tenant_id, id)`
+
+## context_deliveries
+
+**Evidence / core.** Transport insertion evidence; graph ACK is acceptance authority
+
+| Column | SQL contract | Meaning |
+|---|---|---|
+| `tenant_id` | `uuid NOT NULL` | Owning tenant; trusted routing scope |
+| `project_id` | `uuid NOT NULL` | Owning project; scope-aware foreign keys |
+| `id` | `uuid PRIMARY KEY` | Application-generated immutable identity |
+| `agent_session_id` | `uuid NOT NULL` | Recipient |
+| `context_packet_id` | `uuid NOT NULL` | Rendered packet |
+| `submission_id` | `uuid NOT NULL` | Stable application ID for one packet insertion into one turn |
+| `runtime_turn_id` | `text` | Turn receiving context |
+| `status` | `text NOT NULL CHECK (status IN ('staged','submitted','acknowledged','unknown','failed'))` | Delivery stage |
+| `submitted_at` | `timestamptz` | Transport accepted bytes |
+| `acknowledged_at` | `timestamptz` | Supported insertion acknowledgement |
+| `graph_ack_id` | `uuid` | External graph ContextLoad/receipt |
+| `created_at` | `timestamptz NOT NULL DEFAULT now()` | Staging time |
+
+Constraints:
+- `FOREIGN KEY (tenant_id, project_id, agent_session_id) REFERENCES agent_sessions(tenant_id, project_id, id)`
+- `FOREIGN KEY (tenant_id, project_id, context_packet_id) REFERENCES context_packets(tenant_id, project_id, id)`
+- `UNIQUE (tenant_id, project_id, agent_session_id, submission_id)`
+- `UNIQUE (tenant_id, project_id, id)`
+- `FOREIGN KEY (tenant_id, project_id) REFERENCES projects(tenant_id, id)`
+
+## usage_ledger
+
+**Providers / core.** Observed usage; graph owns admission/reservations
+
+| Column | SQL contract | Meaning |
+|---|---|---|
+| `tenant_id` | `uuid NOT NULL` | Owning tenant; trusted routing scope |
+| `project_id` | `uuid NOT NULL` | Owning project; scope-aware foreign keys |
+| `id` | `uuid PRIMARY KEY` | Application-generated immutable identity |
+| `agent_session_id` | `uuid NOT NULL` | Billed execution |
+| `source_key` | `text NOT NULL` | Provider usage dedup key |
+| `input_tokens` | `bigint CHECK (input_tokens >= 0)` | Null when not reported |
+| `output_tokens` | `bigint CHECK (output_tokens >= 0)` | Null when not reported |
+| `cost_microunits` | `bigint CHECK (cost_microunits >= 0)` | Nullable priced amount |
+| `currency` | `char(3)` | Currency of priced cost |
+| `precision` | `text NOT NULL CHECK (precision IN ('reported','estimated','unknown'))` | Usage certainty |
+| `reservation_graph_id` | `uuid` | External graph BudgetReservation |
+| `observed_at` | `timestamptz NOT NULL` | Provider observation |
+
+Constraints:
+- `FOREIGN KEY (tenant_id, project_id, agent_session_id) REFERENCES agent_sessions(tenant_id, project_id, id)`
+- `UNIQUE (tenant_id, project_id, agent_session_id, source_key)`
+- `UNIQUE (tenant_id, project_id, id)`
+- `FOREIGN KEY (tenant_id, project_id) REFERENCES projects(tenant_id, id)`
+
+## audit_events
+
+**Identity / core.** Security/configuration audit; exclude secrets and full private prompts
+
+| Column | SQL contract | Meaning |
+|---|---|---|
+| `tenant_id` | `uuid NOT NULL` | Owning tenant; trusted routing scope |
+| `id` | `uuid PRIMARY KEY` | Application-generated immutable identity |
+| `actor_user_id` | `uuid` | Human actor |
+| `kind` | `text NOT NULL` | Enrollment / membership / session / export / configuration |
+| `target_id` | `uuid` | Opaque target |
+| `request_id` | `uuid NOT NULL` | Idempotent action correlation |
+| `payload` | `jsonb NOT NULL` | Redacted bounded audit metadata |
+| `created_at` | `timestamptz NOT NULL DEFAULT now()` | Audit instant |
+
+Constraints:
+- `FOREIGN KEY (tenant_id, actor_user_id) REFERENCES tenant_memberships(tenant_id, user_id)`
+- `UNIQUE (tenant_id, id)`
+- `FOREIGN KEY (tenant_id) REFERENCES tenants(id)`
+
+## schema_migrations
+
+**Operations / core.** Reference migration inventory; application and graph compatibility checked separately
+
+| Column | SQL contract | Meaning |
+|---|---|---|
+| `id` | `uuid PRIMARY KEY` | Application-generated immutable identity |
+| `store` | `text NOT NULL CHECK (store IN ('postgres','falkor'))` | Schema target |
+| `version` | `integer NOT NULL CHECK (version > 0)` | Monotonic migration version |
+| `checksum` | `char(64) NOT NULL` | Reviewed migration content digest |
+| `applied_at` | `timestamptz NOT NULL DEFAULT now()` | Application time |
+
+Constraints:
+- `UNIQUE (store, version)`
+
+## project_messages
+
+**History / core.** Human goals and requirement changes captured independently of agent execution
+
+| Column | SQL contract | Meaning |
+|---|---|---|
+| `tenant_id` | `uuid NOT NULL` | Owning tenant; trusted routing scope |
+| `project_id` | `uuid NOT NULL` | Owning project; scope-aware foreign keys |
+| `id` | `uuid PRIMARY KEY` | Application-generated immutable identity |
+| `author_user_id` | `uuid NOT NULL` | Human source authority |
+| `user_session_id` | `uuid NOT NULL` | Authenticated application session |
+| `run_id` | `uuid` | Optional run; goal may precede run creation |
+| `request_id` | `uuid NOT NULL` | Idempotent user input identity |
+| `body` | `text NOT NULL` | Exact authored goal/change text |
+| `body_digest` | `char(64) NOT NULL` | Exact UTF-8 content digest |
+| `visibility` | `text NOT NULL CHECK (visibility IN ('project','user'))` | Publication policy |
+| `created_at` | `timestamptz NOT NULL DEFAULT now()` | Durable input time |
+
+Constraints:
+- `FOREIGN KEY (tenant_id, project_id, author_user_id) REFERENCES project_memberships(tenant_id, project_id, user_id)`
+- `FOREIGN KEY (tenant_id, author_user_id, user_session_id) REFERENCES user_sessions(tenant_id, user_id, id)`
+- `FOREIGN KEY (tenant_id, project_id, run_id) REFERENCES runs(tenant_id, project_id, id)`
+- `UNIQUE (tenant_id, project_id, request_id)`
+- `UNIQUE (tenant_id, project_id, id)`
+- `FOREIGN KEY (tenant_id, project_id) REFERENCES projects(tenant_id, id)`
+
+## provider_oauth_registrations
+
+**Providers / extension.** Optional app-owned ChatGPT registration metadata; credentials remain in secret store
+
+| Column | SQL contract | Meaning |
+|---|---|---|
+| `tenant_id` | `uuid NOT NULL` | Owning tenant; trusted routing scope |
+| `id` | `uuid PRIMARY KEY` | Application-generated immutable identity |
+| `user_id` | `uuid NOT NULL` | Local credential owner |
+| `provider_account_id` | `uuid NOT NULL` | Account containing protected bundle reference |
+| `host_id` | `uuid NOT NULL` | Registered local execution host |
+| `issuer` | `text NOT NULL` | Verified OIDC issuer |
+| `subject` | `text NOT NULL` | Verified provider subject; not email |
+| `client_id` | `text NOT NULL` | Issued account/workspace-bound registration; never bootstrap ID |
+| `ext_agent_host_id` | `text NOT NULL` | Stable installation identifier; not a secret |
+| `scopes` | `text[] NOT NULL` | Validated granted permissions |
+| `status` | `text NOT NULL CHECK (status IN ('identity_only','plan_enabled','revoked','reauth_required'))` | Observed authorization state |
+| `credential_version` | `bigint NOT NULL DEFAULT 0 CHECK (credential_version >= 0)` | Secret-bundle generation for refresh reconciliation |
+| `validated_at` | `timestamptz NOT NULL` | Last successful identity/scope validation |
+| `created_at` | `timestamptz NOT NULL DEFAULT now()` | Registration instant |
+
+Constraints:
+- `FOREIGN KEY (tenant_id, user_id, provider_account_id) REFERENCES provider_accounts(tenant_id, user_id, id)`
+- `FOREIGN KEY (tenant_id, host_id) REFERENCES worker_hosts(tenant_id, id)`
+- `UNIQUE (tenant_id, provider_account_id, host_id, client_id)`
+- `CHECK (client_id <> 'dynamic_agent_client')`
+- `UNIQUE (tenant_id, id)`
+- `FOREIGN KEY (tenant_id) REFERENCES tenants(id)`
+
+## command_inbox
+
+**Synchronization / core.** Durable human command envelope and graph-admission retry journal
+
+| Column | SQL contract | Meaning |
+|---|---|---|
+| `tenant_id` | `uuid NOT NULL` | Owning tenant; trusted routing scope |
+| `project_id` | `uuid NOT NULL` | Owning project; scope-aware foreign keys |
+| `id` | `uuid PRIMARY KEY` | Application-generated immutable identity |
+| `initiated_by` | `uuid NOT NULL` | Authenticated local human |
+| `user_session_id` | `uuid NOT NULL` | Application session that submitted command |
+| `source_message_id` | `uuid` | Exact authored goal or requirement source |
+| `request_id` | `uuid NOT NULL` | Stable application operation ID |
+| `graph_epoch` | `uuid NOT NULL` | Expected authority incarnation; never silently rebound |
+| `operation` | `text NOT NULL` | Allowlisted typed human domain command |
+| `payload` | `jsonb NOT NULL` | Complete immutable normalized command including expected revisions |
+| `request_digest` | `char(64) NOT NULL` | Canonical epoch/principal/scope/operation/payload digest |
+| `status` | `text NOT NULL CHECK (status IN ('pending','leased','committed','rejected','quarantined'))` | Durable admission outcome; pending is not accepted authority |
+| `attempts` | `integer NOT NULL DEFAULT 0 CHECK (attempts >= 0)` | Delivery attempts |
+| `lease_owner` | `uuid` | Coordinator incarnation holding retry lease |
+| `lease_expires_at` | `timestamptz` | Retry lease expiry |
+| `next_attempt_at` | `timestamptz NOT NULL DEFAULT now()` | Bounded retry schedule |
+| `graph_receipt_id` | `uuid` | Committed external RequestReceipt |
+| `graph_event_seq` | `bigint CHECK (graph_event_seq > 0)` | Accepted sequence in the bound epoch |
+| `last_error_code` | `text` | Redacted failure classification |
+| `created_at` | `timestamptz NOT NULL DEFAULT now()` | Command and source captured atomically |
+| `settled_at` | `timestamptz` | Committed/rejected/quarantined outcome instant |
+
+Constraints:
+- `FOREIGN KEY (tenant_id, project_id, initiated_by) REFERENCES project_memberships(tenant_id, project_id, user_id)`
+- `FOREIGN KEY (tenant_id, initiated_by, user_session_id) REFERENCES user_sessions(tenant_id, user_id, id)`
+- `FOREIGN KEY (tenant_id, project_id, source_message_id) REFERENCES project_messages(tenant_id, project_id, id)`
+- `UNIQUE (tenant_id, project_id, request_id)`
+- `CHECK (status <> 'committed' OR (graph_receipt_id IS NOT NULL AND graph_event_seq IS NOT NULL AND settled_at IS NOT NULL))`
+- `UNIQUE (tenant_id, project_id, id)`
+- `FOREIGN KEY (tenant_id, project_id) REFERENCES projects(tenant_id, id)`
+
+## model_requests
+
+**History / core.** One durable provider transport attempt within a stable logical turn
+
+| Column | SQL contract | Meaning |
+|---|---|---|
+| `tenant_id` | `uuid NOT NULL` | Owning tenant; trusted routing scope |
+| `project_id` | `uuid NOT NULL` | Owning project; scope-aware foreign keys |
+| `id` | `uuid PRIMARY KEY` | Application-generated immutable identity |
+| `agent_session_id` | `uuid NOT NULL` | Runtime making the request |
+| `logical_request_id` | `uuid NOT NULL` | Stable logical inference request; retries retain this ID |
+| `attempt_no` | `integer NOT NULL CHECK (attempt_no > 0)` | Explicit transport attempt; each may be billed |
+| `profile_id` | `uuid NOT NULL` | Immutable provider/model/billing settings |
+| `context_packet_id` | `uuid` | Exact applicable graph context packet when present |
+| `input_artifact_id` | `uuid NOT NULL` | Protected exact supported provider input without credentials |
+| `input_digest` | `char(64) NOT NULL` | Canonical actual request body |
+| `profile_digest` | `char(64) NOT NULL` | Pinned effective provider capabilities and parameters |
+| `graph_epoch` | `uuid NOT NULL` | Admission incarnation |
+| `requirement_revision` | `bigint NOT NULL CHECK (requirement_revision >= 0)` | Governing revision at request |
+| `reservation_graph_id` | `uuid NOT NULL` | Admitted shared budget reservation |
+| `provider_request_id` | `text` | Provider correlation if available; not assumed resumable |
+| `status` | `text NOT NULL CHECK (status IN ('prepared','dispatched','streaming','completed','failed','unknown','cancelled'))` | Durable transport lifecycle |
+| `response_artifact_id` | `uuid` | Completed visible normalized response and supported opaque state |
+| `usage_source_key` | `text` | Observed usage row in same session; absent means unknown |
+| `failure_code` | `text` | Typed redacted terminal/unknown error |
+| `created_at` | `timestamptz NOT NULL DEFAULT now()` | Persisted before network transmission |
+| `dispatched_at` | `timestamptz` | Durable dispatch intent time; not proof provider received request |
+| `finished_at` | `timestamptz` | Known terminal observation |
+
+Constraints:
+- `FOREIGN KEY (tenant_id, project_id, agent_session_id) REFERENCES agent_sessions(tenant_id, project_id, id)`
+- `FOREIGN KEY (tenant_id, project_id, profile_id) REFERENCES provider_profiles(tenant_id, project_id, id)`
+- `FOREIGN KEY (tenant_id, project_id, context_packet_id) REFERENCES context_packets(tenant_id, project_id, id)`
+- `FOREIGN KEY (tenant_id, project_id, input_artifact_id) REFERENCES artifacts(tenant_id, project_id, id)`
+- `FOREIGN KEY (tenant_id, project_id, response_artifact_id) REFERENCES artifacts(tenant_id, project_id, id)`
+- `FOREIGN KEY (tenant_id, project_id, agent_session_id, usage_source_key) REFERENCES usage_ledger(tenant_id, project_id, agent_session_id, source_key)`
+- `UNIQUE (tenant_id, project_id, agent_session_id, logical_request_id, attempt_no)`
+- `CHECK (status <> 'completed' OR (response_artifact_id IS NOT NULL AND finished_at IS NOT NULL))`
+- `UNIQUE (tenant_id, project_id, id)`
+- `FOREIGN KEY (tenant_id, project_id) REFERENCES projects(tenant_id, id)`

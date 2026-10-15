@@ -1,0 +1,98 @@
+erDiagram
+    direction LR
+    %% Graph edges are associations; exact multiplicities are in the graph dictionary.
+    Workspace {
+        string id PK
+        integer schema_version
+        integer created_at_ms
+        string producer_id
+        string visibility
+        string visibility_user_id
+        string visibility_session_id
+        string sql_id
+        string kind
+        string host_id
+        string repository_fingerprint
+    }
+    AgentSession {
+        string id PK
+        integer schema_version
+        integer created_at_ms
+        string producer_id
+        string visibility
+        string visibility_user_id
+        string visibility_session_id
+        string sql_id
+        string run_id
+        string role
+        string status
+        integer last_capture_seq
+        integer loaded_requirement_revision
+        string authorization_kind
+        string authorization_digest
+        string authorization_json
+        string output_visibility
+        string output_owner_user_id
+        string output_owner_session_id
+    }
+    Handoff {
+        string id PK
+        integer schema_version
+        integer created_at_ms
+        string producer_id
+        string visibility
+        string visibility_user_id
+        string visibility_session_id
+        string task_id
+        string from_session_id
+        string to_session_id
+        string status
+        integer old_fence
+        integer expected_revision
+        string packet_id
+        boolean termination_confirmed
+    }
+    BudgetReservation {
+        string id PK
+        integer schema_version
+        integer created_at_ms
+        string producer_id
+        string visibility
+        string visibility_user_id
+        string visibility_session_id
+        string run_id
+        string launch_id
+        integer slots
+        integer tokens_reserved
+        integer max_cost_microunits
+        string status
+        integer deadline_ms
+        string usage_precision
+    }
+    LaunchIntent {
+        string id PK
+        integer schema_version
+        integer created_at_ms
+        string producer_id
+        string visibility
+        string visibility_user_id
+        string visibility_session_id
+        string run_id
+        string task_id
+        string agent_session_id
+        string parent_session_id
+        string request_signature
+        string status
+        string reservation_id
+        integer claim_fence
+        string authorization_digest
+    }
+    AgentSession }o..o{ Observation : "PRODUCED"
+    AgentSession }o..o{ Message : "HAS_MESSAGE"
+    AgentSession }o..o{ ContextPacket : "LOADED"
+    Handoff }o..o{ Task : "TRANSFERS"
+    Handoff }o..o{ AgentSession : "FROM_SESSION"
+    Handoff }o..o{ AgentSession : "TO_SESSION"
+    LaunchIntent }o..o{ BudgetReservation : "CONSUMES"
+    LaunchIntent }o..o{ AgentSession : "STARTS"
+    LaunchIntent }o..o{ Task : "FOR_TASK"

@@ -1,0 +1,12 @@
+# RESP command templates; <graph-key> is resolved by trusted backend. Not shell commands.
+# Supporting indexes must exist before UNIQUE. Wait until db.constraints() reports OPERATIONAL.
+GRAPH.CONSTRAINT CREATE <graph-key> MANDATORY NODE Entity PROPERTIES 5 id schema_version created_at_ms producer_id visibility
+GRAPH.CONSTRAINT CREATE <graph-key> UNIQUE NODE Entity PROPERTIES 1 id
+GRAPH.CONSTRAINT CREATE <graph-key> MANDATORY NODE Event PROPERTIES 2 graph_epoch seq
+GRAPH.CONSTRAINT CREATE <graph-key> UNIQUE NODE Event PROPERTIES 2 graph_epoch seq
+GRAPH.CONSTRAINT CREATE <graph-key> MANDATORY NODE RequestReceipt PROPERTIES 3 graph_epoch request_id request_digest
+GRAPH.CONSTRAINT CREATE <graph-key> UNIQUE NODE RequestReceipt PROPERTIES 2 graph_epoch request_id
+GRAPH.CONSTRAINT CREATE <graph-key> UNIQUE NODE TaskState PROPERTIES 2 task_id revision
+GRAPH.CONSTRAINT CREATE <graph-key> UNIQUE NODE Observation PROPERTIES 1 capture_event_id
+GRAPH.CONSTRAINT CREATE <graph-key> UNIQUE NODE Message PROPERTIES 2 session_id message_seq
+GRAPH.RO_QUERY <graph-key> "CALL db.constraints()"

@@ -1,0 +1,17 @@
+flowchart TD
+  phase["Post-hackathon reference; absent from core release"]
+  proposal["Builder proposes narrow read-only investigation"] --> scope["Validate current claim, scope and prerequisite state"]
+  scope --> duplicate{"Duplicate, cycle or depth exceeded?"}
+  duplicate -->|"Yes"| deny["Reject or reuse existing result"]
+  duplicate -->|"No"| capacity{"Shared slot and budget available?"}
+  capacity -->|"No"| queue["Queue or continue sequentially"]
+  capacity -->|"Yes"| reserve["Atomic Task, reservation, LaunchIntent and Event"]
+  reserve --> launch["Supervisor starts tracked worker"]
+  launch --> registered{"Launch token registered?"}
+  registered -->|"Unknown"| reconcile["Keep reservation and reconcile stable launch ID"]
+  registered -->|"Yes"| child["Child receives current packet and restricted tools"]
+  child --> finding["Compact finding with source and artifact versions"]
+  finding --> validate["Publication and applicability checks"]
+  validate --> refresh["Refresh only relevant authorized work"]
+  child --> stop["Deadline, tool cap, completion or cancel"]
+  stop --> terminate["Confirm termination, settle usage and release slot"]

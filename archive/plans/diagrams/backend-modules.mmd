@@ -1,0 +1,16 @@
+flowchart LR
+  request["Typed user or worker command"] --> auth["Authenticate and resolve principal"]
+  auth --> membership["Active tenant / project / source grants"]
+  membership --> schema["Validate schema, sizes and canonical digest"]
+  schema --> receipt["Resolve existing request receipt"]
+  receipt --> guard["Check revision, fence, scope and evidence"]
+  guard --> write["One atomic graph mutation"]
+  write --> state["State revision plus current pointer"]
+  write --> event["Event sequence plus RequestReceipt"]
+  event --> notify["Wakeup hint"]
+  event --> replay["Durable event replay"]
+  replay --> sqlView["SQL projection with atomic cursor advance"]
+  replay --> refresh["Affected context closure and worker refresh"]
+  refresh --> insertion["Exact packet submission and ACK"]
+  state --> selector["Bounded context selection"]
+  selector --> insertion

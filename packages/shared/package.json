@@ -1,0 +1,26 @@
+{
+  "name": "@threadline/shared",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Threadline wire contracts — identifiers, command/result/event envelopes, health and typed errors",
+  "license": "UNLICENSED",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "clean": "tsc -b --clean"
+  }
+}

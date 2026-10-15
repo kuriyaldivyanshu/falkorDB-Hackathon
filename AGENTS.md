@@ -2,38 +2,40 @@
 
 ## Project Structure & Module Organization
 
-This is a documentation-only architecture and research export for **Threadline**, a proposed FalkorDB Track 2 memory and coordination tool.
+Threadline is a TypeScript/npm workspace for a local coding harness and FalkorDB Track 2 memory and coordination tool.
 
-- `README.md` indexes the collection and identifies the current recommendation.
-- `notes/track2-*.md` contains architecture decisions, adapter investigations, delivery plans, and historical alternatives.
-- `notes/falkordb-*.md` and `notes/agentic-rag-memory-evaluation.md` provide technical research.
+- `packages/shared/` contains the public protocol, event, identifier, health, and error contracts.
+- `packages/backend/` contains backend composition, domain dispatch, HTTP routes, event streaming, and backend tests.
+- `packages/cli/` contains the terminal client, TUI, and transport client.
+- `archive/notes/` and `archive/plans/` retain architecture decisions, research, schemas, delivery plans, and historical alternatives.
+- `README.md` indexes the documentation and identifies the current recommendation.
 
-There are no source, test, or asset directories. Before changing architecture or delivery guidance, read the four documents under README's **Start here** section. The local npm/TUI proposal takes precedence over earlier web-first and independent SDK proposals.
+Before changing architecture or delivery guidance, read the four documents under README's **Start here** section. The owned npm/TUI proposal takes precedence over earlier web-first and independent SDK proposals. The current code is an M00 development scaffold; persistence, model providers, memory continuity, and protected completion remain unimplemented.
 
 ## Build, Test, and Development Commands
 
-No build, runtime, dependency manifest, or automated validation tooling is configured. Useful documentation commands from the repository root:
+Use Node.js 22 or later and npm from the repository root:
 
-- `rg --files` — list documents before adding or moving files.
-- `rg -n '^#{1,3} ' README.md notes/` — inspect headings and locate related sections.
-- `rg -n 'search term' README.md notes/` — find claims that may need coordinated updates.
+- `npm run build` — build all workspace packages with TypeScript project references.
+- `npm test` — build, then run each workspace's tests.
+- `npm start --workspace @threadline/backend` — start the local backend.
+- `node packages/cli/dist/index.js tui` — start the TUI after building.
+- `node packages/cli/dist/index.js health` and `node packages/cli/dist/index.js echo "hello"` — exercise the development CLI commands.
 
-Commands shown inside architecture notes describe proposed workflows; they are not working repository entry points.
+The backend and echo command are development-only and non-durable. Commands in architecture notes describe proposed future workflows unless they are listed above.
 
 ## Documentation Style & Naming Conventions
 
-Use Markdown with one descriptive H1, hierarchical headings, short paragraphs, and fenced code blocks with language identifiers. Keep list indentation consistent with surrounding content. No formatter or linter is configured.
-
-Use lowercase, hyphen-separated filenames; follow `track2-<topic>.md` for Track 2 notes. Add new documents to `README.md` using relative links. Include evidence dates and primary-source links for researched claims. Clearly distinguish proposals, documented capabilities, and tested behavior; preserve historical notes and identify superseded assumptions.
+Use Markdown with one descriptive H1, hierarchical headings, short paragraphs, and fenced code blocks with language identifiers. Keep list indentation consistent with surrounding content. Use lowercase, hyphen-separated filenames; follow `track2-<topic>.md` for Track 2 notes. Add new documents to the relevant index using relative links. Include evidence dates and primary-source links for researched claims. Clearly distinguish proposals, documented capabilities, and tested behavior; preserve historical notes and identify superseded assumptions.
 
 ## Testing Guidelines
 
-No test framework or coverage target exists. Preview changed Markdown, verify relative links and code fences, and check consistency with current decisions. When reporting experiments, include versions, setup, observable results, and limitations. Recovery, isolation, persistence, and load checks remain proposed acceptance gates until executed.
+Run `npm test` for changes to workspace code. For documentation-only changes, check changed Markdown, relative links, code fences, and consistency with current decisions. When reporting experiments, include versions, setup, observable results, and limitations. Recovery, isolation, persistence, and load checks remain proposed acceptance gates until executed.
 
 ## Commit & Pull Request Guidelines
 
-This export has no Git metadata, so existing commit conventions cannot be verified. In a Git checkout, use concise imperative subjects, such as `docs: clarify native adapter recovery`. PR descriptions should state affected documents, decision changes, supporting sources, and validation performed; link relevant issues when available.
+Use concise imperative commit subjects, such as `docs: clarify native adapter recovery`. PR descriptions should state affected packages or documents, behavior or decision changes, supporting sources, and validation performed; link relevant issues when available.
 
 ## Security & Configuration
 
-Keep credentials, tokens, and private transcripts out of notes and examples. Use authored, public, or synthetic demonstration data and placeholders for secrets.
+Keep credentials, tokens, and private transcripts out of notes, source, and examples. Use authored, public, or synthetic demonstration data and placeholders for secrets.

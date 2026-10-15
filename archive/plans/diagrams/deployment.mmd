@@ -1,0 +1,25 @@
+flowchart LR
+  subgraph host["Developer host"]
+    cli["npm CLI / React Ink TUI"]
+    service["Node 24 TypeScript coordinator and provider broker"]
+    secrets["Coordinator-only API environment and hashed app token"]
+    own["Logical Builder sessions inside backend"]
+    optionalNative["Post-hackathon official native clients"]
+    files[("Project-scoped immutable artifact storage")]
+  end
+  subgraph containers["Pinned local containers"]
+    pg[("PostgreSQL 18 and SQL volume")]
+    falkor[("FalkorDB and configured persistence volume")]
+    tools["Restricted command sandbox and workspace mount"]
+  end
+  providers["Selected remote or local inference"]
+  cli --> service
+  service --> secrets
+  service --> own
+  service --> pg
+  service --> falkor
+  own --> service
+  own --> tools
+  service --> files
+  service --> providers
+  service -.-> optionalNative
