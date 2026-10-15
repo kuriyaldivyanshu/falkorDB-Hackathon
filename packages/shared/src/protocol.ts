@@ -1,5 +1,6 @@
-import type { CommandId, EchoId } from './ids.js';
+import type { GoalAdmissionInput, GoalAdmissionResult } from './admission.js';
 import type { ThreadlineErrorPayload } from './errors.js';
+import type { CommandId, EchoId } from './ids.js';
 
 /**
  * Wire contract version. Incremented only when an existing field changes
@@ -28,14 +29,17 @@ export interface DevelopmentEchoResult {
 }
 
 /**
- * The single command registry for M00. Adding a name here is the only way a
- * client can reach a domain operation; unknown names are rejected at the
- * boundary.
+ * The command registry. Adding a name here is the only way a client can reach a
+ * domain operation; unknown names are rejected at the boundary.
  */
 export interface CommandMap {
   readonly 'development.echo': {
     readonly input: DevelopmentEchoInput;
     readonly result: DevelopmentEchoResult;
+  };
+  readonly 'task.accept_goal': {
+    readonly input: GoalAdmissionInput;
+    readonly result: GoalAdmissionResult;
   };
 }
 
@@ -79,6 +83,22 @@ export interface CommandOutcome<C extends CommandName = CommandName> {
   readonly body: CommandResponse<C>;
 }
 
+/**
+ * Narrows a command result to the development echo shape without a cast.
+ *
+ * `CommandSuccess` carries the union of every registered result, so a client
+ * needs a guard rather than a discriminated field. This is additive: the
+ * existing envelope shapes are unchanged.
+ */
+export function isDevelopmentEchoResult(value: unknown): value is DevelopmentEchoResult {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    typeof (value as { echoId?: unknown }).echoId === 'string' &&
+    typeof (value as { durability?: unknown }).durability === 'string'
+  );
+}
+
 export function isCommandName(value: unknown): value is CommandName {
-  return value === 'development.echo';
+  return value === 'development.echo' || value === 'task.accept_goal';
 }

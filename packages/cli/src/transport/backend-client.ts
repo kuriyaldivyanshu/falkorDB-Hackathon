@@ -1,5 +1,7 @@
 import {
   PROTOCOL_VERSION,
+  isAuthorityView, isPrincipalView, isGoalAdmissionResult,
+  type PrincipalView, type AuthorityView, type GoalAdmissionResult,
   isCommandId,
   isHealthReport,
   isThreadlineErrorPayload,
@@ -19,6 +21,7 @@ import {
   describeCause,
   isAbortError,
 } from './errors.js';
+import { authHeaders } from './auth.js';
 import { ACCEPT_EVENT_STREAM, BACKEND_ROUTES } from './routes.js';
 import { SseDecoder } from './sse.js';
 
@@ -53,6 +56,11 @@ export interface EventStreamHandle {
 export interface BackendClient {
   readonly baseUrl: string;
   readonly requestTimeoutMs: number;
+  /** True when a bearer token will be attached. The token itself is not exposed. */
+  readonly authenticated: boolean;
+  principal(): Promise<PrincipalView>;
+  authority(projectId:string): Promise<AuthorityView>;
+  admission(projectId:string,requestId:string): Promise<GoalAdmissionResult>;
   health(signal?: AbortSignal): Promise<HealthReport>;
   sendCommand<C extends CommandName>(
     command: C,
@@ -65,6 +73,13 @@ export interface BackendClient {
 export interface BackendClientOptions {
   readonly baseUrl: string;
   readonly requestTimeoutMs: number;
+  /**
+   * Local owner session bearer token.
+   *
+   * It is sent only as a request header, never in a URL or a body. When it is
+   * absent the client behaves as the unauthenticated M00 development client.
+   */
+  readonly token?: string | null;
   /** Injected so a check can drive the client without a live socket. */
   readonly fetchImpl?: typeof fetch;
 }
@@ -75,6 +90,9 @@ export function createBackendClient(options: BackendClientOptions): BackendClien
 
   const endpoint = (route: string): string => `${baseUrl}${route}`;
 
+  const token = options.token ?? null;
+  const bearer = authHeaders(token);
+
   const send = async (
     route: string,
     init: RequestInit,
@@ -84,7 +102,11 @@ export function createBackendClient(options: BackendClientOptions): BackendClien
     const timeout = AbortSignal.timeout(options.requestTimeoutMs);
     const combined = signal === undefined ? timeout : AbortSignal.any([signal, timeout]);
     try {
-      return await doFetch(url, { ...init, signal: combined });
+      return await doFetch(url, {
+        ...init,
+        headers: { ...bearer, ...init.headers },
+        signal: combined,
+      });
     } catch (error) {
       if (signal?.aborted === true) {
         throw error;
@@ -109,9 +131,22 @@ export function createBackendClient(options: BackendClientOptions): BackendClien
     }
   };
 
+  // Authenticated read routes return direct views rather than command envelopes.
+  const readView = async <T>(route:string,validate:(value:unknown)=>value is T):Promise<T> => {
+    const response = await send(route,{method:'GET'},undefined);
+    const value = await readJson(response);
+    if (!response.ok) throw new BackendProtocolError(response.url,
+      isThreadlineErrorPayload(value) ? `${value.code}: ${value.message}` : `request failed (${response.status})`,response.status);
+    if (!validate(value)) throw new BackendProtocolError(response.url,'response does not match the published view contract',response.status);
+    return value;
+  };
   return {
     baseUrl,
+    principal: () => readView<PrincipalView>(BACKEND_ROUTES.authSession,isPrincipalView),
+    authority: projectId => readView<AuthorityView>(BACKEND_ROUTES.authority.replace(':projectId',encodeURIComponent(projectId)),isAuthorityView),
+    admission: (projectId,requestId) => readView<GoalAdmissionResult>(BACKEND_ROUTES.admission.replace(':projectId',encodeURIComponent(projectId)).replace(':requestId',encodeURIComponent(requestId)),isGoalAdmissionResult),
     requestTimeoutMs: options.requestTimeoutMs,
+    authenticated: token !== null && token.length > 0,
 
     async health(signal?: AbortSignal): Promise<HealthReport> {
       const response = await send(BACKEND_ROUTES.health, { method: 'GET' }, signal);
@@ -148,7 +183,10 @@ export function createBackendClient(options: BackendClientOptions): BackendClien
       // The HTTP status is deliberately ignored here: the envelope's `ok`
       // field is the discriminator, and a rejection carries a typed error the
       // interface renders instead of throwing.
-      return parseCommandResponse<C>(response, payload);
+      const parsed = parseCommandResponse<C>(response, payload);
+      if (command === 'task.accept_goal' && parsed.ok && !isGoalAdmissionResult(parsed.result))
+        throw new BackendProtocolError(response.url,'invalid admission result',response.status);
+      return parsed;
     },
 
     openEventStream(handlers: EventStreamHandlers): EventStreamHandle {
@@ -180,6 +218,7 @@ export function createBackendClient(options: BackendClientOptions): BackendClien
         doFetch, endpoint(BACKEND_ROUTES.events), controller.signal, () => closed,
         { ...handlers, onEnd: (reason) => { closed = true; handlers.onEnd(reason); } },
         () => finishHandshake(true),
+        bearer,
       ).finally(() => finishHandshake(false));
       return handle;
     },
@@ -193,10 +232,14 @@ async function runEventStream(
   isClosed: () => boolean,
   handlers: EventStreamHandlers,
   onOpen: () => void,
+  bearer: Record<string, string>,
 ): Promise<void> {
   let response: Response;
   try {
-    response = await doFetch(url, { headers: { accept: ACCEPT_EVENT_STREAM }, signal });
+    response = await doFetch(url, {
+      headers: { ...bearer, accept: ACCEPT_EVENT_STREAM },
+      signal,
+    });
   } catch (error) {
     if (isClosed()) {
       handlers.onEnd('closed-by-client');

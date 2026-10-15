@@ -5,6 +5,7 @@ import type { HealthReport } from '@threadline/shared';
 import type { BackendConfig } from '../config.js';
 import type { CommandDispatcher } from '../domain/dispatcher.js';
 import type { EventPublisher } from '../events/publisher.js';
+import type { ApplicationServices } from '../domain/services.js';
 import type { Logger } from '../log.js';
 import { silentLogger } from '../log.js';
 import { createEventStreamManager, type EventStreamManager } from './events-stream.js';
@@ -30,6 +31,13 @@ export interface HttpServerDeps {
   readonly dispatch: CommandDispatcher;
   readonly publisher: EventPublisher;
   readonly health: () => HealthReport;
+  readonly services: () => ApplicationServices | null;
+  readonly localBootstrap: () => {
+    tenantId: string;
+    userId: string;
+    projectId: string;
+    projectSlug: string;
+  } | null;
   readonly logger?: Logger;
 }
 
@@ -53,7 +61,14 @@ export function createHttpServer(deps: HttpServerDeps): HttpServerHandle {
     maxBacklogBytes: deps.config.limits.maxEventBacklogBytes,
   });
 
-  registerRoutes(app, { config: deps.config, dispatch: deps.dispatch, streams, health: deps.health });
+  registerRoutes(app, {
+    config: deps.config,
+    dispatch: deps.dispatch,
+    streams,
+    health: deps.health,
+    services: deps.services,
+    localBootstrap: deps.localBootstrap,
+  });
 
   let listening = false;
   let boundAddress: BackendAddress | null = null;

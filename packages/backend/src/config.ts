@@ -25,6 +25,70 @@ export type BackendConfig = {
   readonly port: number;
   readonly dataDirectory: string;
   readonly limits: BackendLimits;
+  readonly storage: StorageConfig;
+};
+
+/**
+ * Real store settings. Nothing here is defaulted into existence: a missing
+ * database name in `required` mode is a configuration error, not a reason to
+ * start with pretend memory.
+ */
+export type StorageConfig = {
+  readonly mode: 'unconfigured' | 'required';
+  readonly postgres: PostgresConfig;
+  readonly falkordb: FalkorDbConfig;
+  /** Stable local identifiers created by owner-only bootstrap. */
+  readonly local: LocalIdentityConfig;
+};
+
+export type PostgresConfig = {
+  readonly host: string;
+  readonly port: number;
+  readonly database: string;
+  /**
+   * The application identity. It must NOT be a superuser and must not hold
+   * BYPASSRLS, or the tenant fence is decorative. Checked at startup.
+   */
+  readonly user: string;
+  /** Never logged, never returned in a response, never included in a digest. */
+  readonly password: string;
+  /**
+   * Optional schema-owner identity used only to apply and read migrations.
+   * Absent means the application identity is also the owner, which is refused
+   * when it can bypass row-level security.
+   */
+  readonly migrationUser: string;
+  readonly migrationPassword: string;
+  /**
+   * Role the migration grants table privileges to, when the application
+   * connects as a separate non-owner identity. Empty means "the application
+   * identity already has the rights", which is refused if it can bypass RLS.
+   */
+  readonly applicationRole: string;
+  readonly ssl: 'disable' | 'require';
+  readonly connectTimeoutMs: number;
+  readonly maxConnections: number;
+};
+
+export type FalkorDbConfig = {
+  readonly host: string;
+  readonly port: number;
+  readonly username: string;
+  readonly password: string;
+  readonly connectTimeoutMs: number;
+  /** Bounds one graph write. Matches development-profile `graph_write_timeout_ms`. */
+  readonly writeTimeoutMs: number;
+};
+
+export type LocalIdentityConfig = {
+  readonly tenantSlug: string;
+  readonly tenantName: string;
+  readonly userDisplayName: string;
+  readonly projectSlug: string;
+  /** development-profile `local_auth.idle_expiry_hours`. */
+  readonly idleExpiryMs: number;
+  /** development-profile `local_auth.absolute_expiry_days`. */
+  readonly absoluteExpiryMs: number;
 };
 
 export interface ConfigSource {
@@ -40,6 +104,27 @@ const ENV_KEYS = {
   maxRequestBodyBytes: 'THREADLINE_MAX_REQUEST_BODY_BYTES',
   maxCommandTextLength: 'THREADLINE_MAX_COMMAND_TEXT_LENGTH',
   maxEventBacklogBytes: 'THREADLINE_MAX_EVENT_BACKLOG_BYTES',
+  storageMode: 'THREADLINE_STORAGE_MODE',
+  pgHost: 'THREADLINE_PG_HOST',
+  pgPort: 'THREADLINE_PG_PORT',
+  pgDatabase: 'THREADLINE_PG_DATABASE',
+  pgUser: 'THREADLINE_PG_USER',
+  pgPassword: 'THREADLINE_PG_PASSWORD',
+  pgMigrationUser: 'THREADLINE_PG_MIGRATION_USER',
+  pgMigrationPassword: 'THREADLINE_PG_MIGRATION_PASSWORD',
+  pgApplicationRole: 'THREADLINE_PG_APPLICATION_ROLE',
+  pgSsl: 'THREADLINE_PG_SSL',
+  pgConnectTimeoutMs: 'THREADLINE_PG_CONNECT_TIMEOUT_MS',
+  pgMaxConnections: 'THREADLINE_PG_MAX_CONNECTIONS',
+  graphHost: 'THREADLINE_FALKORDB_HOST',
+  graphPort: 'THREADLINE_FALKORDB_PORT',
+  graphUsername: 'THREADLINE_FALKORDB_USERNAME',
+  graphPassword: 'THREADLINE_FALKORDB_PASSWORD',
+  graphConnectTimeoutMs: 'THREADLINE_FALKORDB_CONNECT_TIMEOUT_MS',
+  graphWriteTimeoutMs: 'THREADLINE_FALKORDB_WRITE_TIMEOUT_MS',
+  tenantSlug: 'THREADLINE_TENANT_SLUG',
+  userDisplayName: 'THREADLINE_USER_DISPLAY_NAME',
+  projectSlug: 'THREADLINE_PROJECT_SLUG',
 } as const;
 
 const LOOPBACK_HOSTS: readonly string[] = ['127.0.0.1', '::1', 'localhost'];
@@ -119,10 +204,133 @@ export function parseBackendConfig(source: ConfigSource = {}): BackendConfig {
     ),
   };
 
+  const storage = parseStorageConfig(env, issues);
+
   if (issues.length > 0) {
     throw new ConfigurationError(issues);
   }
-  return { host, port, dataDirectory, limits };
+  return { host, port, dataDirectory, limits, storage };
+}
+
+const STORAGE_MODES = ['unconfigured', 'required'] as const;
+
+function parseStorageConfig(
+  env: Readonly<Record<string, string | undefined>>,
+  issues: ConfigurationIssue[],
+): StorageConfig {
+  const modeRaw = readString(env[ENV_KEYS.storageMode], 'unconfigured');
+  if (!STORAGE_MODES.includes(modeRaw as (typeof STORAGE_MODES)[number])) {
+    issues.push({
+      field: ENV_KEYS.storageMode,
+      problem: `must be one of ${STORAGE_MODES.join(' or ')}.`,
+      hint: 'Use "required" when a real PostgreSQL and FalkorDB are reachable.',
+    });
+  }
+  const mode = STORAGE_MODES.includes(modeRaw as (typeof STORAGE_MODES)[number])
+    ? (modeRaw as StorageConfig['mode'])
+    : 'unconfigured';
+
+  const sslRaw = readString(env[ENV_KEYS.pgSsl], 'disable');
+  if (sslRaw !== 'disable' && sslRaw !== 'require') {
+    issues.push({
+      field: ENV_KEYS.pgSsl,
+      problem: 'must be "disable" or "require".',
+      hint: 'Local Compose PostgreSQL uses "disable"; a managed database uses "require".',
+    });
+  }
+
+  const postgres: PostgresConfig = {
+    host: readString(env[ENV_KEYS.pgHost], '127.0.0.1'),
+    port: readInteger(env[ENV_KEYS.pgPort], 55432, ENV_KEYS.pgPort, issues, { min: 1, max: 65_535 }),
+    database: readString(env[ENV_KEYS.pgDatabase], ''),
+    user: readString(env[ENV_KEYS.pgUser], ''),
+    password: readString(env[ENV_KEYS.pgPassword], ''),
+    migrationUser: readString(env[ENV_KEYS.pgMigrationUser], ''),
+    migrationPassword: readString(env[ENV_KEYS.pgMigrationPassword], ''),
+    applicationRole: readString(env[ENV_KEYS.pgApplicationRole], ''),
+    ssl: sslRaw === 'require' ? 'require' : 'disable',
+    connectTimeoutMs: readInteger(
+      env[ENV_KEYS.pgConnectTimeoutMs],
+      5_000,
+      ENV_KEYS.pgConnectTimeoutMs,
+      issues,
+      { min: 250, max: 120_000 },
+    ),
+    maxConnections: readInteger(
+      env[ENV_KEYS.pgMaxConnections],
+      8,
+      ENV_KEYS.pgMaxConnections,
+      issues,
+      { min: 1, max: 64 },
+    ),
+  };
+
+  const falkordb: FalkorDbConfig = {
+    host: readString(env[ENV_KEYS.graphHost], '127.0.0.1'),
+    port: readInteger(
+      env[ENV_KEYS.graphPort],
+      56379,
+      ENV_KEYS.graphPort,
+      issues,
+      { min: 1, max: 65_535 },
+    ),
+    username: readString(env[ENV_KEYS.graphUsername], ''),
+    password: readString(env[ENV_KEYS.graphPassword], ''),
+    connectTimeoutMs: readInteger(
+      env[ENV_KEYS.graphConnectTimeoutMs],
+      5_000,
+      ENV_KEYS.graphConnectTimeoutMs,
+      issues,
+      { min: 250, max: 120_000 },
+    ),
+    writeTimeoutMs: readInteger(
+      env[ENV_KEYS.graphWriteTimeoutMs],
+      2_000,
+      ENV_KEYS.graphWriteTimeoutMs,
+      issues,
+      { min: 250, max: 60_000 },
+    ),
+  };
+
+  if (mode === 'required') {
+    requireNonEmpty(env, ENV_KEYS.pgDatabase, 'the PostgreSQL database name', issues);
+    requireNonEmpty(env, ENV_KEYS.pgUser, 'the PostgreSQL user', issues);
+    requireNonEmpty(env, ENV_KEYS.pgPassword, 'the PostgreSQL password', issues);
+    if ((env[ENV_KEYS.pgMigrationUser] ?? '').length > 0) {
+      requireNonEmpty(
+        env,
+        ENV_KEYS.pgMigrationPassword,
+        'the PostgreSQL migration password when a migration user is set',
+        issues,
+      );
+    }
+  }
+
+  const local: LocalIdentityConfig = {
+    tenantSlug: readString(env[ENV_KEYS.tenantSlug], 'local'),
+    tenantName: 'Local',
+    userDisplayName: readString(env[ENV_KEYS.userDisplayName], 'Local Owner'),
+    projectSlug: readString(env[ENV_KEYS.projectSlug], 'threadline'),
+    idleExpiryMs: 12 * 60 * 60 * 1000,
+    absoluteExpiryMs: 7 * 24 * 60 * 60 * 1000,
+  };
+
+  return { mode, postgres, falkordb, local };
+}
+
+function requireNonEmpty(
+  env: Readonly<Record<string, string | undefined>>,
+  key: string,
+  label: string,
+  issues: ConfigurationIssue[],
+): void {
+  if ((env[key] ?? '').length === 0) {
+    issues.push({
+      field: key,
+      problem: `is required in "${'required'}" storage mode but is missing.`,
+      hint: `Set ${label}. It comes from the local Compose .env and is never committed.`,
+    });
+  }
 }
 
 function validateHost(host: string, issues: ConfigurationIssue[]): void {
@@ -217,19 +425,78 @@ export type BackendConfigSummary = {
   readonly port: number;
   readonly dataDirectory: string;
   readonly limits: BackendLimits;
+  readonly storage: StorageConfigSummary;
 };
 
 /**
- * Builds the only representation of configuration that may be logged or
- * returned to a client. It is an explicit allowlist, so adding a credential
- * field to `BackendConfig` cannot accidentally start exposing it.
+ * The only representation of configuration that may be logged or returned to a
+ * client. It is an explicit allowlist, so adding a credential field to
+ * `BackendConfig` cannot accidentally start exposing it. Passwords are reduced
+ * to a boolean saying whether one is configured.
  */
+export type StorageConfigSummary = {
+  readonly mode: 'unconfigured' | 'required';
+  readonly postgres: {
+    readonly host: string;
+    readonly port: number;
+    readonly database: string;
+    readonly user: string;
+    readonly ssl: 'disable' | 'require';
+    readonly maxConnections: number;
+    readonly passwordConfigured: boolean;
+    readonly migrationUserConfigured: boolean;
+    readonly applicationRole: string;
+  };
+  readonly falkordb: {
+    readonly host: string;
+    readonly port: number;
+    readonly username: string;
+    readonly writeTimeoutMs: number;
+    readonly passwordConfigured: boolean;
+  };
+  readonly local: {
+    readonly tenantSlug: string;
+    readonly userDisplayName: string;
+    readonly projectSlug: string;
+    readonly idleExpiryMs: number;
+    readonly absoluteExpiryMs: number;
+  };
+};
+
 export function describeConfig(config: BackendConfig): BackendConfigSummary {
   return {
     host: config.host,
     port: config.port,
     dataDirectory: config.dataDirectory,
     limits: { ...config.limits },
+    storage: {
+      mode: config.storage.mode,
+      postgres: {
+        host: config.storage.postgres.host,
+        port: config.storage.postgres.port,
+        database: config.storage.postgres.database,
+        user: config.storage.postgres.user,
+        ssl: config.storage.postgres.ssl,
+        maxConnections: config.storage.postgres.maxConnections,
+        passwordConfigured: config.storage.postgres.password.length > 0,
+        migrationUserConfigured: config.storage.postgres.migrationUser.length > 0,
+        applicationRole: config.storage.postgres.applicationRole,
+      },
+      falkordb: {
+        host: config.storage.falkordb.host,
+        port: config.storage.falkordb.port,
+        username: config.storage.falkordb.username,
+        writeTimeoutMs: config.storage.falkordb.writeTimeoutMs,
+        passwordConfigured: config.storage.falkordb.password.length > 0,
+      },
+      local: {
+        tenantSlug: config.storage.local.tenantSlug,
+        userDisplayName: config.storage.local.userDisplayName,
+        projectSlug: config.storage.local.projectSlug,
+        idleExpiryMs: config.storage.local.idleExpiryMs,
+        absoluteExpiryMs: config.storage.local.absoluteExpiryMs,
+      },
+    },
   };
 }
 

@@ -44,3 +44,7 @@ Changes include the SSE decoder/readiness consumers, backend stream admission/ro
 The existing index still contains previously staged `plans/*` entries while the working files live under `archive/plans`; historical `notes/*` were also relocated before this pass. At the actual branch/commit step, deliberately stage the chosen relocations/removals and new paths together, review the index and preserve unrelated changes. A bare commit of the old index would not capture this verified working tree. No reset, forced checkout, blanket staging or destructive cleanup was used to hide that discrepancy.
 
 M00 is process-local and development-only. Nothing here proves persistence, replay, safe repository execution, subscription integration or cross-session memory. Continue to M01 only under the checklist's integration/merge procedure; the pending Git step is not silently marked complete.
+
+## Subsequent Git integration
+
+The user subsequently pushed/merged PR #1 with review resolutions. The local checkout inspected for M01 prompt preparation is `main` at merge commit `ed18168`, containing `13b17a2`. This closes the formerly pending M00J04 Git integration step. The execution evidence above describes the earlier independent verification snapshot; review resolutions changed lifecycle/health/frame-error behavior, so the M01 agents must rerun the current baseline before claiming it passes. No M01 implementation or additional product test was performed while preparing these prompts.

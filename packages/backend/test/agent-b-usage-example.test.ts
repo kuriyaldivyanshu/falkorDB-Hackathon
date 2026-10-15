@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  isDevelopmentEchoResult,
   isHealthReport,
   isThreadlineEvent,
   newCommandId,
@@ -72,8 +73,12 @@ test('a client can branch on a command response without casting', () => {
     },
   };
 
-  if (success.ok) {
+  // Additive guards let a client narrow the result union without a cast.
+  assert.equal(success.ok, true);
+  if (success.ok && isDevelopmentEchoResult(success.result)) {
     assert.equal(success.result.durability, 'development-only');
+  } else {
+    assert.fail('the sample success response must narrow to development.echo');
   }
 
   const failure: CommandResponse = {

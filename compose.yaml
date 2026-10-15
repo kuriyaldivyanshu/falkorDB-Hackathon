@@ -1,0 +1,80 @@
+# Threadline local development data services (M01).
+#
+# PostgreSQL holds identity, sessions, capture journals and the command inbox.
+# FalkorDB holds task authority, memory links, claims and graph events. Both are
+# real stores: if either is unavailable the backend must refuse durable
+# admission, not fall back to in-memory memory.
+#
+# Credentials are NOT committed. Copy `.env.example` to `.env` and set a local
+# password before the first `docker compose up`. The backend reads database
+# credentials; the terminal client never does.
+#
+#   cp .env.example .env
+#   docker compose up -d
+#
+# These services bind loopback only. There is no gateway, no remote exposure and
+# no deployment platform here.
+
+name: threadline-local
+
+services:
+  postgres:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${THREADLINE_PG_DATABASE:?set THREADLINE_PG_DATABASE in .env}
+      POSTGRES_USER: ${THREADLINE_PG_MIGRATION_USER:?set THREADLINE_PG_MIGRATION_USER in .env}
+      POSTGRES_PASSWORD: ${THREADLINE_PG_MIGRATION_PASSWORD:?set THREADLINE_PG_MIGRATION_PASSWORD in .env}
+      # Observed in postgres:18-alpine: PGDATA is version-scoped and the image
+      # declares the volume at /var/lib/postgresql, not /var/lib/postgresql/data.
+      PGDATA: /var/lib/postgresql/18/docker
+    ports:
+      # Bound to loopback and offset from the 5432 default so an unrelated local
+      # PostgreSQL is not clobbered.
+      - "127.0.0.1:${THREADLINE_PG_PORT:-55432}:5432"
+    volumes:
+      - pg-data:/var/lib/postgresql
+    healthcheck:
+      # Process liveness only. It says nothing about whether Agent A's schema
+      # migration has run; readiness of the application schema is reported by
+      # the backend, not by this check.
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  falkordb:
+    image: falkordb/falkordb:6.0.2
+    restart: unless-stopped
+    environment:
+      # Observed in falkordb/falkordb:6.0.2: the image already sets
+      # FALKORDB_ARGS to module defaults. Overriding it replaces those, so the
+      # defaults are repeated here before the persistence flags are added.
+      FALKORDB_ARGS: >-
+        MAX_QUEUED_QUERIES 25 TIMEOUT 1000 RESULTSET_SIZE 10000
+        --appendonly ${THREADLINE_FALKORDB_APPENDONLY:-yes}
+        --appendfsync ${THREADLINE_FALKORDB_APPENDFSYNC:-always}
+    ports:
+      # 6379 is exposed by the image; it is offset so a local Redis/FalkorDB is
+      # not clobbered. Port 3000 (the image's browser UI) is deliberately not
+      # published.
+      - "127.0.0.1:${THREADLINE_FALKORDB_PORT:-56379}:6379"
+    volumes:
+      # Observed: this image declares no VOLUME, FALKORDB_DATA_PATH is
+      # /var/lib/falkordb/data and /data is a symlink to it. The real path is
+      # mounted so the volume holds the actual data directory.
+      - falkordb-data:/var/lib/falkordb/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-p", "6379", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+
+volumes:
+  # Named volumes: `docker compose stop`/`up` and ordinary restarts keep this
+  # data. Only `docker compose down -v` removes it, and nothing in this
+  # repository runs that command.
+  pg-data:
+  falkordb-data:

@@ -11,6 +11,23 @@ export const THREADLINE_ERROR_CODES = [
   'unknown_command',
   'service_unavailable',
   'internal_error',
+  // M01. Authentication and scope are decided server-side; a supplied project
+  // id or user name is a requested target, never proof of authority.
+  'unauthorized',
+  'not_found',
+  // The same request id arrived with a different canonical payload. No mutation
+  // is attempted and the original receipt is not disclosed.
+  'idempotency_mismatch',
+  // A guarded write matched no row: the epoch moved, authority was absent, or a
+  // concurrent writer already committed. The caller must reconcile, not retry.
+  'authority_conflict',
+  // Required authority exists but cannot be resolved (missing or duplicate
+  // current version, epoch mismatch, unavailable source). Fails closed.
+  'authority_unavailable',
+  // A real store was required and could not be used. Never falls back to memory.
+  'storage_unavailable',
+  // The applied schema is not the schema this build expects.
+  'schema_incompatible',
 ] as const;
 
 export type ThreadlineErrorCode = (typeof THREADLINE_ERROR_CODES)[number];
@@ -29,6 +46,13 @@ const DEFAULT_MESSAGE: Record<ThreadlineErrorCode, string> = {
   unknown_command: 'The requested command does not exist.',
   service_unavailable: 'The backend is not accepting this request right now.',
   internal_error: 'The backend failed to complete the request.',
+  unauthorized: 'The caller is not authenticated for this operation.',
+  not_found: 'The requested resource does not exist.',
+  idempotency_mismatch: 'This request id was already used with a different payload.',
+  authority_conflict: 'The guarded authority mutation did not match; reconcile before retrying.',
+  authority_unavailable: 'Current authority cannot be resolved; the operation is blocked.',
+  storage_unavailable: 'A required data store is unavailable; nothing was recorded.',
+  schema_incompatible: 'The applied schema differs from the version this build requires.',
 };
 
 export function errorPayload(

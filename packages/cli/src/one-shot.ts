@@ -1,6 +1,7 @@
 import type { ThreadlineEvent } from '@threadline/shared';
 
 import type { BackendClient } from './transport/backend-client.js';
+import { redactingSink } from './transport/auth.js';
 import { describeCause } from './transport/errors.js';
 import {
   formatDevelopmentEchoResult,
@@ -8,6 +9,7 @@ import {
   formatEvent,
   formatHealth,
 } from './ui/format.js';
+import { describeStoreState, formatStoreReadiness } from './ui/store-readiness.js';
 
 /**
  * Scriptable, non-interactive entry points.
@@ -27,9 +29,24 @@ const EVENT_WAIT_MS = 5_000;
 /** Events held while the command answer is still in flight. */
 const MAX_BUFFERED_EVENTS = 64;
 
-export async function runHealth(client: BackendClient, out: LineSink): Promise<number> {
+export async function runHealth(
+  client: BackendClient,
+  out: LineSink,
+  showStoreReadiness = false,
+  token: string | null = null,
+): Promise<number> {
   try {
-    out(formatHealth(await client.health()));
+    const health = await client.health();
+    out(formatHealth(health));
+    if (showStoreReadiness) {
+      const sink = redactingSink(out, [token]);
+      for (const line of formatStoreReadiness(health)) {
+        sink(line);
+      }
+      sink(`  store state: ${describeStoreState(health)}`);
+    }
+    // Readiness is reported, never reinterpreted: a report that is not ready is
+    // a successful health read, not a failure.
     return EXIT_OK;
   } catch (error) {
     out(`health failed: ${describeCause(error)}`);

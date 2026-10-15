@@ -178,6 +178,8 @@
 | `host_id` | `string` | Registered host |
 | `repository_fingerprint` | `string` | Canonical repository evidence |
 
+**Implemented M01 staging:** accepted goal/task/source/criterion authority is the first subset. Task.run_id is absent until M02. Protected Criterion checker bindings become required with actual M08 checker admission; M01 records no fabricated bundle, launcher or verification receipt. See [the implemented agreement](../../../docs/m01-contract-agreement.md).
+
 ## Task
 
 **Authority / core.** Stable unit of work; indexed current projection
@@ -191,7 +193,7 @@
 | `visibility` | `string` | project / user / session |
 | `visibility_user_id` | `string?` | Required when user-private |
 | `visibility_session_id` | `string?` | Required when session-private |
-| `run_id` | `string` | Owning run |
+| `run_id` | `string?` | Absent for accepted-only M01 tasks; real execution run attaches at M02. Never fabricate a run ID. |
 | `current_revision` | `integer` | Current immutable TaskState revision |
 | `current_status` | `string` | Denormalized state updated atomically |
 | `owner_session_id` | `string?` | Current admitted owner |

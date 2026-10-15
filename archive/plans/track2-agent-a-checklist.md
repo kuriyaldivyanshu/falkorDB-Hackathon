@@ -29,22 +29,30 @@ Coordinate startup/API edits and shared types with one editor per file. Ask for 
 **Before branch readiness:** coordinate with Agent B, then complete this milestone’s joint checks in [master section 5](track2-implementation-checklist.md#5-milestone-sequence). Proposed single combined commit: `feat: scaffold local backend and terminal interface`.
 
 
-**Independent M00 integration verification — 15 October 2026:** all fourteen A/B tasks verified in the combined tree; M00J01–M00J03 passed. Root `npm test` passed 49 backend + 5 CLI tests, including 25 real CLI exchanges and event-subscription cleanup. Real PTY echo/Esc, disconnect, terminal restoration and backend SIGTERM passed. Fragmented SSE, subscription readiness and capacity rejection defects were fixed with regression evidence. M00J04 remains pending the actual branch/commit workflow. [Full evidence and limitations](review/m00-integration-verification.md).
+**Independent M00 integration verification — 15 October 2026:** all fourteen A/B tasks verified in the combined tree; M00J01–M00J03 passed. Root `npm test` passed 49 backend + 5 CLI tests, including 25 real CLI exchanges and event-subscription cleanup. Real PTY echo/Esc, disconnect, terminal restoration and backend SIGTERM passed. Fragmented SSE, subscription readiness and capacity rejection defects were fixed with regression evidence. M00J04 was pending at that verification snapshot; the user subsequently merged PR #1 with resolutions into `main` (`ed18168`), completing the Git integration step. [Full evidence and limitations](review/m00-integration-verification.md).
 
 ### M01 — Real stores, local identity and one accepted task
 
+**Copyable launch instructions:** [M01 Agent A prompt](prompts/track2-m01-agent-a.md). Coordinate with [Agent B’s prompt](prompts/track2-m01-agent-b.md); use archive references selectively when stuck.
+
 **Depends on:** M00. **Combined milestone result:** A human goal becomes durable SQL source/inbox and guarded graph authority, inspectable from the CLI.
 
-- [ ] **M01A01** Implement small `pg` and FalkorDB adapters with explicit connection lifecycle, parameterized operations and trusted project-to-graph routing.
-- [ ] **M01A02** Prepare the 31-table FK-closed core bootstrap from the reference DDL; validate real SQL syntax/constraints. Keep the two native/auth extension tables out of startup requirements.
-- [ ] **M01A03** Create only operations used by this trace: local tenant/user membership, project, human session, project message, command inbox, graph project/task/run and accepted criteria. Unused bootstrap tables need no services or screens.
-- [ ] **M01A04** Implement owner-only local bootstrap, random token hashing, session lookup, idle/absolute expiry and revocation. Do not add registration/login pages or remote enrollment.
-- [ ] **M01A05** Persist original human goal plus complete command envelope in one SQL transaction before graph admission; pending, accepted, rejected and unknown are distinct outcomes.
-- [ ] **M01A06** Implement graph readiness, reviewed unique constraints/indexes, epoch identity, request digest and idempotent state/event/receipt mutation. A query sketch is not a production mutation.
-- [ ] **M01A07** Create stable goal/constraint identities and immutable current versions. Missing/duplicate required current versions block authority resolution.
-- [ ] **M01A08** Guard same-request/same-payload retry versus same-request/different-payload conflict. Return exact committed receipt rather than an optimistic UI success.
+- [x] **M01A01** Implement small `pg` and FalkorDB adapters with explicit connection lifecycle, parameterized operations and trusted project-to-graph routing.
+- [x] **M01A02** Prepare the 31-table FK-closed core bootstrap from the reference DDL; validate real SQL syntax/constraints. Keep the two native/auth extension tables out of startup requirements.
+- [x] **M01A03** Create only operations used by this trace: local tenant/user membership, project, human session, project message, command inbox, graph project/task and accepted criteria (execution Run starts at M02). Unused bootstrap tables need no services or screens.
+- [x] **M01A04** Implement owner-only local bootstrap, random token hashing, session lookup, idle/absolute expiry and revocation. Do not add registration/login pages or remote enrollment.
+- [x] **M01A05** Persist original human goal plus complete command envelope in one SQL transaction before graph admission; pending, accepted, rejected and unknown are distinct outcomes.
+- [x] **M01A06** Implement graph readiness, reviewed unique constraints/indexes, epoch identity, request digest and idempotent state/event/receipt mutation. A query sketch is not a production mutation.
+- [x] **M01A07** Create stable goal/constraint identities and immutable current versions. Missing/duplicate required current versions block authority resolution.
+- [x] **M01A08** Guard same-request/same-payload retry versus same-request/different-payload conflict. Return exact committed receipt rather than an optimistic UI success.
 
 **Before branch readiness:** coordinate with Agent B, then complete this milestone’s joint checks in [master section 5](track2-implementation-checklist.md#5-milestone-sequence). Proposed single combined commit: `feat: persist local identity and accepted task authority`.
+
+### M01 — Combined verification update (15 October 2026)
+
+The initial lane handoff left A04/A05 unverified. Combined integration reproduced and fixed revoked-session authentication, non-sliding idle expiry, incomplete graph topology, non-idempotent settlement and owner lookup after adding a second member. All eight A tasks now have executed real-store evidence, including session expiry/revocation, lost acknowledgement, pre-graph crash recovery, concurrent retries, original-source access and missing/duplicate current-version denial. See [the combined report](review/m01-integration-verification.md) and [implemented transport agreement](../../docs/m01-contract-agreement.md).
+
+The original [Agent A handoff](../../M01-HANDOFF-agent-a.md) remains historical. Its fake `no-run-accepted-goal-only` marker was removed: graph Task.run_id is absent and SQL message.run_id is NULL until M02 creates a real execution Run. No provider credential is required for M01. M01J05 remains pending the actual merge workflow.
 
 ### M02 — One owned provider turn with read-only tools
 
