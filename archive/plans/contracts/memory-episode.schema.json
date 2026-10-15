@@ -1,0 +1,135 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:threadline:memory-episode-v1",
+  "title": "Threadline observed work episode",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "task_id",
+    "session_id",
+    "source_id",
+    "capture_seq",
+    "tool_name",
+    "command_id",
+    "observed_outcome",
+    "exit_code",
+    "failure_signature",
+    "affected_paths",
+    "candidate_digest",
+    "environment_digest",
+    "requirement_revision",
+    "cause_status",
+    "next_action"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "task_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "session_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "source_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "capture_seq": {
+      "type": "string",
+      "pattern": "^[0-9]+$"
+    },
+    "tool_name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "command_id": {
+      "anyOf": [
+        {
+          "type": "string",
+          "minLength": 1
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "observed_outcome": {
+      "enum": [
+        "succeeded",
+        "failed",
+        "denied",
+        "unknown"
+      ]
+    },
+    "exit_code": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "failure_signature": {
+      "anyOf": [
+        {
+          "type": "string",
+          "maxLength": 512
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "affected_paths": {
+      "type": "array",
+      "maxItems": 100,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "candidate_digest": {
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "environment_digest": {
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "requirement_revision": {
+      "type": "string",
+      "pattern": "^[0-9]+$"
+    },
+    "cause_status": {
+      "enum": [
+        "not-inferred",
+        "hypothesis",
+        "reproduced"
+      ]
+    },
+    "next_action": {
+      "type": "string",
+      "maxLength": 1000
+    }
+  }
+}

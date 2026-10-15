@@ -1,0 +1,23 @@
+{
+  "name": "threadline",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Threadline local coding harness \u2014 M00 scaffold (FalkorDB Track 2 MVP)",
+  "license": "UNLICENSED",
+  "engines": {
+    "node": ">=22"
+  },
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "clean": "tsc -b --clean",
+    "test": "npm run build && npm test --workspaces --if-present"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "typescript": "^7.0.2"
+  }
+}

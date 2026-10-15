@@ -1,0 +1,18 @@
+flowchart LR
+  H["Local developer and Ink TUI"] --> C["One TypeScript backend: accepted requirements, claims and budgets"]
+  C --> B["One logical Builder; fresh successor only after retirement"]
+  B --> P["Journaled OpenAI Responses request; user API key"]
+  B --> T["Eleven bounded typed tools"]
+  T --> X["Isolated command container; no network or secrets"]
+  X --> W["Candidate snapshot plus bounded scratch"]
+  T --> E["Durable intent, result, Source and episode"]
+  E --> SQL[("PostgreSQL capture, identities and request journals")]
+  E --> G[("FalkorDB authority, memory links and events")]
+  E --> A[("Immutable logs, checkpoints and packets")]
+  G --> R["Bounded exact authority and compatible sourced advice"]
+  R --> B
+  C --> V["Protected trusted supervisor and assertions"]
+  V --> W
+  V --> Q["Service receipt: candidate, criteria and environment identity"]
+  Q --> C
+  C --> F["Guarded completion or rejection"]

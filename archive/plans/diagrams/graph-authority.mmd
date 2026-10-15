@@ -1,0 +1,187 @@
+erDiagram
+    direction LR
+    %% Graph edges are associations; exact multiplicities are in the graph dictionary.
+    ProjectRoot {
+        string id PK
+        integer schema_version
+        integer created_at_ms
+        string producer_id
+        string visibility
+        string visibility_user_id
+        string visibility_session_id
+        string tenant_id
+        string project_id
+        string graph_epoch
+        integer generation
+        integer next_event_seq
+        integer requirement_revision
+        string status
+    }
+    ActorRef {
+        string id PK
+        integer schema_version
+        integer created_at_ms
+        string producer_id
+        string visibility
+        string visibility_user_id
+        string visibility_session_id
+        string actor_kind
+        string sql_id
+        string display_label
+    }
+    Run {
+        string id PK
+        integer schema_version
+        integer created_at_ms
+        string producer_id
+        string visibility
+        string visibility_user_id
+        string visibility_session_id
+        string policy_digest
+        string status
+        integer max_live_workers
+        integer reserved_slots
+        integer child_launch_count
+        integer max_child_launches
+        integer reserved_tokens
+        integer used_tokens
+        boolean usage_unknown
+        integer max_tokens
+        integer deadline_ms
+    }
+    Goal {
+        string id PK
+        integer schema_version
+        integer created_at_ms
+        string producer_id
+        string visibility
+        string visibility_user_id
+        string visibility_session_id
+        integer current_revision
+        string status
+    }
+    GoalVersion {
+        string id PK
+        integer schema_version
+        integer created_at_ms
+        string producer_id
+        string visibility
+        string visibility_user_id
+        string visibility_session_id
+        integer revision
+        string text
+        string criteria_digest
+        string source_id
+    }
+    Constraint {
+        string id PK
+        integer schema_version
+        integer created_at_ms
+        string producer_id
+        string visibility
+        string visibility_user_id
+        string visibility_session_id
+        integer current_revision
+        string scope_kind
+        string scope_id
+    }
+    ConstraintVersion {
+        string id PK
+        integer schema_version
+        integer created_at_ms
+        string producer_id
+        string visibility
+        string visibility_user_id
+        string visibility_session_id
+        integer revision
+        string text
+        string polarity
+        string accepted_by
+        string source_id
+        integer valid_from_revision
+    }
+    Criterion {
+        string id PK
+        integer schema_version
+        integer created_at_ms
+        string producer_id
+        string visibility
+        string visibility_user_id
+        string visibility_session_id
+        string kind
+        string check_ref
+        string acceptance_bundle_digest
+        string launcher_digest
+        string expected_result
+        boolean required
+        integer timeout_ms
+        string criteria_digest
+    }
+    Task {
+        string id PK
+        integer schema_version
+        integer created_at_ms
+        string producer_id
+        string visibility
+        string visibility_user_id
+        string visibility_session_id
+        string run_id
+        integer current_revision
+        string current_status
+        string owner_session_id
+        integer fence
+        integer requirement_revision
+        integer depth
+    }
+    TaskState {
+        string id PK
+        integer schema_version
+        integer created_at_ms
+        string producer_id
+        string visibility
+        string visibility_user_id
+        string visibility_session_id
+        string task_id
+        integer revision
+        string status
+        string owner_session_id
+        integer fence
+        integer lease_expires_ms
+        integer requirement_revision
+        string checkpoint_text
+        string checkpoint_source_id
+        string checkpoint_session_id
+        integer checkpoint_capture_seq
+        string candidate_digest
+        boolean unresolved_effects
+    }
+    ProjectRoot }o..o{ Run : "HAS_RUN"
+    ProjectRoot }o..o{ Goal : "HAS_GOAL"
+    ProjectRoot }o..o{ Constraint : "HAS_CONSTRAINT"
+    ProjectRoot }o..o{ Procedure : "HAS_PROCEDURE"
+    Goal }o..o{ GoalVersion : "CURRENT_VERSION"
+    Constraint }o..o{ ConstraintVersion : "CURRENT_VERSION"
+    GoalVersion }o..o{ Criterion : "REQUIRES"
+    GoalVersion }o..o{ Source : "SOURCED_FROM"
+    ConstraintVersion }o..o{ Source : "SOURCED_FROM"
+    ConstraintVersion }o..o{ ConstraintVersion : "SUPERSEDES"
+    GoalVersion }o..o{ GoalVersion : "SUPERSEDES"
+    Goal }o..o{ Task : "DECOMPOSES_INTO"
+    Task }o..o{ Constraint : "SUBJECT_TO"
+    Constraint }o..o{ ConstraintVersion : "HAS_VERSION"
+    Goal }o..o{ GoalVersion : "HAS_VERSION"
+    Task }o..o{ ConstraintVersion : "GOVERNED_BY"
+    Task }o..o{ Criterion : "REQUIRES"
+    Run }o..o{ Task : "HAS_TASK"
+    Task }o..o{ Task : "SUBTASK_OF"
+    Task }o..o{ Task : "DEPENDS_ON"
+    Task }o..o{ TaskState : "CURRENT_STATE"
+    TaskState }o..o{ TaskState : "PREVIOUS_STATE"
+    TaskState }o..o{ AgentSession : "OWNED_BY"
+    Task }o..o{ Workspace : "USES_WORKSPACE"
+    Run }o..o{ AgentSession : "HAS_SESSION"
+    TaskState }o..o{ ArtifactVersion : "HAS_ARTIFACT"
+    TaskState }o..o{ Source : "CHECKPOINT_SOURCE"
+    Task }o..o{ ArtifactVersion : "TOUCHES"
+    TaskState }o..o{ VerificationReceipt : "ACCEPTED_RECEIPT"
+    Run }o..o{ BudgetReservation : "RESERVES"

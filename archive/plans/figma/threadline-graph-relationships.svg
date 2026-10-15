@@ -1,0 +1,338 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="3300" height="3400" viewBox="0 0 3300 3400">
+<title>FalkorDB — complete relationship catalog</title>
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#536779"/></marker></defs>
+<rect x="0" y="0" width="3300" height="3400" rx="12" fill="#f4f6f8" stroke="#f4f6f8"/>
+<text x="50" y="56" font-family="Arial, sans-serif" font-size="18" font-weight="700" fill="#1f5d91">THREADLINE  /  TRACK 2</text>
+<text x="50" y="111" font-family="Arial, sans-serif" font-size="38" font-weight="700" fill="#182a3a">FalkorDB — complete relationship catalog</text>
+<text x="50" y="147" font-family="Arial, sans-serif" font-size="18" font-weight="400" fill="#536779">82 typed endpoint relationships | Exact cardinalities below | Scoped authority, memory, execution and evidence</text>
+<polyline points="50,174 3250,174" fill="none" stroke="#b4c2ce" stroke-width="2"/>
+<rect x="50" y="220" width="1040" height="96" rx="12" fill="white" stroke="#b4c2ce"/>
+<text x="67" y="252" font-family="Arial, sans-serif" font-size="20" font-weight="700" fill="#246a58">ProjectRoot  →  Run</text>
+<text x="67" y="282" font-family="Courier New, monospace" font-size="18" font-weight="400" fill="#182a3a">HAS_RUN</text>
+<text x="900" y="284" font-family="Arial, sans-serif" font-size="17" font-weight="700" fill="#6d4c8a">1:N</text>
+<rect x="50" y="330" width="1040" height="96" rx="12" fill="white" stroke="#b4c2ce"/>
+<text x="67" y="362" font-family="Arial, sans-serif" font-size="20" font-weight="700" fill="#246a58">ProjectRoot  →  Goal</text>
+<text x="67" y="392" font-family="Courier New, monospace" font-size="18" font-weight="400" fill="#182a3a">HAS_GOAL</text>
+<text x="900" y="394" font-family="Arial, sans-serif" font-size="17" font-weight="700" fill="#6d4c8a">1:N</text>
+<rect x="50" y="440" width="1040" height="96" rx="12" fill="white" stroke="#b4c2ce"/>
+<text x="67" y="472" font-family="Arial, sans-serif" font-size="20" font-weight="700" fill="#246a58">ProjectRoot  →  Constraint</text>
+<text x="67" y="502" font-family="Courier New, monospace" font-size="18" font-weight="400" fill="#182a3a">HAS_CONSTRAINT</text>
+<text x="900" y="504" font-family="Arial, sans-serif" font-size="17" font-weight="700" fill="#6d4c8a">1:N</text>
+<rect x="50" y="550" width="1040" height="96" rx="12" fill="white" stroke="#b4c2ce"/>
+<text x="67" y="582" font-family="Arial, sans-serif" font-size="20" font-weight="700" fill="#246a58">ProjectRoot  →  Procedure</text>
+<text x="67" y="612" font-family="Courier New, monospace" font-size="18" font-weight="400" fill="#182a3a">HAS_PROCEDURE</text>
+<text x="900" y="614" font-family="Arial, sans-serif" font-size="17" font-weight="700" fill="#6d4c8a">1:N scoped discovery</text>
+<rect x="50" y="660" width="1040" height="96" rx="12" fill="white" stroke="#b4c2ce"/>
+<text x="67" y="692" font-family="Arial, sans-serif" font-size="20" font-weight="700" fill="#246a58">Goal  →  GoalVersion</text>
+<text x="67" y="722" font-family="Courier New, monospace" font-size="18" font-weight="400" fill="#182a3a">CURRENT_VERSION</text>
+<text x="900" y="724" font-family="Arial, sans-serif" font-size="17" font-weight="700" fill="#6d4c8a">1:1</text>
+<rect x="50" y="770" width="1040" height="96" rx="12" fill="white" stroke="#b4c2ce"/>
+<text x="67" y="802" font-family="Arial, sans-serif" font-size="20" font-weight="700" fill="#246a58">Constraint  →  ConstraintVersion</text>
+<text x="67" y="832" font-family="Courier New, monospace" font-size="18" font-weight="400" fill="#182a3a">CURRENT_VERSION</text>
+<text x="900" y="834" font-family="Arial, sans-serif" font-size="17" font-weight="700" fill="#6d4c8a">1:1</text>
+<rect x="50" y="880" width="1040" height="96" rx="12" fill="white" stroke="#b4c2ce"/>
+<text x="67" y="912" font-family="Arial, sans-serif" font-size="20" font-weight="700" fill="#246a58">GoalVersion  →  Criterion</text>
+<text x="67" y="942" font-family="Courier New, monospace" font-size="18" font-weight="400" fill="#182a3a">REQUIRES</text>
+<text x="900" y="944" font-family="Arial, sans-serif" font-size="17" font-weight="700" fill="#6d4c8a">1:N</text>
+<rect x="50" y="990" width="1040" height="96" rx="12" fill="white" stroke="#b4c2ce"/>
+<text x="67" y="1022" font-family="Arial, sans-serif" font-size="20" font-weight="700" fill="#246a58">GoalVersion  →  Source</text>
+<text x="67" y="1052" font-family="Courier New, monospace" font-size="18" font-weight="400" fill="#182a3a">SOURCED_FROM</text>
+<text x="900" y="1054" font-family="Arial, sans-serif" font-size="17" font-weight="700" fill="#6d4c8a">N:1</text>
+<rect x="50" y="1100" width="1040" height="96" rx="12" fill="white" stroke="#b4c2ce"/>
+<text x="67" y="1132" font-family="Arial, sans-serif" font-size="20" font-weight="700" fill="#246a58">ConstraintVersion  →  Source</text>
+<text x="67" y="1162" font-family="Courier New, monospace" font-size="18" font-weight="400" fill="#182a3a">SOURCED_FROM</text>
+<text x="900" y="1164" font-family="Arial, sans-serif" font-size="17" font-weight="700" fill="#6d4c8a">N:1</text>
+<rect x="50" y="1210" width="1040" height="96" rx="12" fill="white" stroke="#b4c2ce"/>
+<text x="67" y="1242" font-family="Arial, sans-serif" font-size="20" font-weight="700" fill="#246a58">ConstraintVersion  →  ConstraintVersion</text>
+<text x="67" y="1272" font-family="Courier New, monospace" font-size="18" font-weight="400" fill="#182a3a">SUPERSEDES</text>
+<text x="900" y="1274" font-family="Arial, sans-serif" font-size="17" font-weight="700" fill="#6d4c8a">0..1 predecessor</text>
+<rect x="50" y="1320" width="1040" height="96" rx="12" fill="white" stroke="#b4c2ce"/>
+<text x="67" y="1352" font-family="Arial, sans-serif" font-size="20" font-weight="700" fill="#246a58">GoalVersion  →  GoalVersion</text>
+<text x="67" y="1382" font-family="Courier New, monospace" font-size="18" font-weight="400" fill="#182a3a">SUPERSEDES</text>
+<text x="900" y="1384" font-family="Arial, sans-serif" font-size="17" font-weight="700" fill="#6d4c8a">0..1 predecessor</text>
+<rect x="50" y="1430" width="1040" height="96" rx="12" fill="white" stroke="#b4c2ce"/>
+<text x="67" y="1462" font-family="Arial, sans-serif" font-size="20" font-weight="700" fill="#246a58">Goal  →  Task</text>
+<text x="67" y="1492" font-family="Courier New, monospace" font-size="18" font-weight="400" fill="#182a3a">DECOMPOSES_INTO</text>
+<text x="900" y="1494" font-family="Arial, sans-serif" font-size="17" font-weight="700" fill="#6d4c8a">1:N</text>
+<rect x="50" y="1540" width="1040" height="96" rx="12" fill="white" stroke="#b4c2ce"/>
+<text x="67" y="1572" font-family="Arial, sans-serif" font-size="20" font-weight="700" fill="#246a58">Task  →  Constraint</text>
+<text x="67" y="1602" font-family="Courier New, monospace" font-size="18" font-weight="400" fill="#182a3a">SUBJECT_TO</text>
+<text x="900" y="1604" font-family="Arial, sans-serif" font-size="17" font-weight="700" fill="#6d4c8a">N:M stable applicable bindings</text>
+<rect x="50" y="1650" width="1040" height="96" rx="12" fill="white" stroke="#b4c2ce"/>
+<text x="67" y="1682" font-family="Arial, sans-serif" font-size="20" font-weight="700" fill="#246a58">Constraint  →  ConstraintVersion</text>
+<text x="67" y="1712" font-family="Courier New, monospace" font-size="18" font-weight="400" fill="#182a3a">HAS_VERSION</text>
+<text x="900" y="1714" font-family="Arial, sans-serif" font-size="17" font-weight="700" fill="#6d4c8a">1:N immutable history</text>
+<rect x="50" y="1760" width="1040" height="96" rx="12" fill="white" stroke="#b4c2ce"/>
+<text x="67" y="1792" font-family="Arial, sans-serif" font-size="20" font-weight="700" fill="#246a58">Goal  →  GoalVersion</text>
+<text x="67" y="1822" font-family="Courier New, monospace" font-size="18" font-weight="400" fill="#182a3a">HAS_VERSION</text>
+<text x="900" y="1824" font-family="Arial, sans-serif" font-size="17" font-weight="700" fill="#6d4c8a">1:N immutable history</text>
+<rect x="50" y="1870" width="1040" height="96" rx="12" fill="white" stroke="#b4c2ce"/>
+<text x="67" y="1902" font-family="Arial, sans-serif" font-size="20" font-weight="700" fill="#246a58">Task  →  ConstraintVersion</text>
+<text x="67" y="1932" font-family="Courier New, monospace" font-size="18" font-weight="400" fill="#182a3a">GOVERNED_BY</text>
+<text x="900" y="1934" font-family="Arial, sans-serif" font-size="17" font-weight="700" fill="#6d4c8a">N:M historical pinned inputs</text>
+<rect x="50" y="1980" width="1040" height="96" rx="12" fill="white" stroke="#b4c2ce"/>
+<text x="67" y="2012" font-family="Arial, sans-serif" font-size="20" font-weight="700" fill="#246a58">Task  →  Criterion</text>
+<text x="67" y="2042" font-family="Courier New, monospace" font-size="18" font-weight="400" fill="#182a3a">REQUIRES</text>
+<text x="900" y="2044" font-family="Arial, sans-serif" font-size="17" font-weight="700" fill="#6d4c8a">N:M</text>
+<rect x="50" y="2090" width="1040" height="96" rx="12" fill="white" stroke="#b4c2ce"/>
+<text x="67" y="2122" font-family="Arial, sans-serif" font-size="20" font-weight="700" fill="#246a58">Run  →  Task</text>
+<text x="67" y="2152" font-family="Courier New, monospace" font-size="18" font-weight="400" fill="#182a3a">HAS_TASK</text>
+<text x="900" y="2154" font-family="Arial, sans-serif" font-size="17" font-weight="700" fill="#6d4c8a">1:N</text>
+<rect x="50" y="2200" width="1040" height="96" rx="12" fill="white" stroke="#b4c2ce"/>
+<text x="67" y="2232" font-family="Arial, sans-serif" font-size="20" font-weight="700" fill="#246a58">Task  →  Task</text>
+<text x="67" y="2262" font-family="Courier New, monospace" font-size="18" font-weight="400" fill="#182a3a">SUBTASK_OF</text>
+<text x="900" y="2264" font-family="Arial, sans-serif" font-size="17" font-weight="700" fill="#6d4c8a">child:0..1 parent</text>
+<rect x="50" y="2310" width="1040" height="96" rx="12" fill="white" stroke="#b4c2ce"/>
+<text x="67" y="2342" font-family="Arial, sans-serif" font-size="20" font-weight="700" fill="#246a58">Task  →  Task</text>
+<text x="67" y="2372" font-family="Courier New, monospace" font-size="18" font-weight="400" fill="#182a3a">DEPENDS_ON</text>
+<text x="900" y="2374" font-family="Arial, sans-serif" font-size="17" font-weight="700" fill="#6d4c8a">acyclic N:M</text>
+<rect x="50" y="2420" width="1040" height="96" rx="12" fill="white" stroke="#b4c2ce"/>
+<text x="67" y="2452" font-family="Arial, sans-serif" font-size="20" font-weight="700" fill="#246a58">Task  →  TaskState</text>
+<text x="67" y="2482" font-family="Courier New, monospace" font-size="18" font-weight="400" fill="#182a3a">CURRENT_STATE</text>
+<text x="900" y="2484" font-family="Arial, sans-serif" font-size="17" font-weight="700" fill="#6d4c8a">1:1</text>
+<rect x="50" y="2530" width="1040" height="96" rx="12" fill="white" stroke="#b4c2ce"/>
+<text x="67" y="2562" font-family="Arial, sans-serif" font-size="20" font-weight="700" fill="#246a58">TaskState  →  TaskState</text>
+<text x="67" y="2592" font-family="Courier New, monospace" font-size="18" font-weight="400" fill="#182a3a">PREVIOUS_STATE</text>
+<text x="900" y="2594" font-family="Arial, sans-serif" font-size="17" font-weight="700" fill="#6d4c8a">0..1 predecessor</text>
+<rect x="50" y="2640" width="1040" height="96" rx="12" fill="white" stroke="#b4c2ce"/>
+<text x="67" y="2672" font-family="Arial, sans-serif" font-size="20" font-weight="700" fill="#246a58">TaskState  →  AgentSession</text>
+<text x="67" y="2702" font-family="Courier New, monospace" font-size="18" font-weight="400" fill="#182a3a">OWNED_BY</text>
+<text x="900" y="2704" font-family="Arial, sans-serif" font-size="17" font-weight="700" fill="#6d4c8a">0..1 owner</text>
+<rect x="50" y="2750" width="1040" height="96" rx="12" fill="white" stroke="#b4c2ce"/>
+<text x="67" y="2782" font-family="Arial, sans-serif" font-size="20" font-weight="700" fill="#246a58">Task  →  Workspace</text>
+<text x="67" y="2812" font-family="Courier New, monospace" font-size="18" font-weight="400" fill="#182a3a">USES_WORKSPACE</text>
+<text x="900" y="2814" font-family="Arial, sans-serif" font-size="17" font-weight="700" fill="#6d4c8a">N:1</text>
+<rect x="50" y="2860" width="1040" height="96" rx="12" fill="white" stroke="#b4c2ce"/>
+<text x="67" y="2892" font-family="Arial, sans-serif" font-size="20" font-weight="700" fill="#246a58">Run  →  AgentSession</text>
+<text x="67" y="2922" font-family="Courier New, monospace" font-size="18" font-weight="400" fill="#182a3a">HAS_SESSION</text>
+<text x="900" y="2924" font-family="Arial, sans-serif" font-size="17" font-weight="700" fill="#6d4c8a">1:N</text>
+<rect x="50" y="2970" width="1040" height="96" rx="12" fill="white" stroke="#b4c2ce"/>
+<text x="67" y="3002" font-family="Arial, sans-serif" font-size="20" font-weight="700" fill="#246a58">AgentSession  →  Observation</text>
+<text x="67" y="3032" font-family="Courier New, monospace" font-size="18" font-weight="400" fill="#182a3a">PRODUCED</text>
+<text x="900" y="3034" font-family="Arial, sans-serif" font-size="17" font-weight="700" fill="#6d4c8a">1:N</text>
+<rect x="50" y="3080" width="1040" height="96" rx="12" fill="white" stroke="#b4c2ce"/>
+<text x="67" y="3112" font-family="Arial, sans-serif" font-size="20" font-weight="700" fill="#246a58">AgentSession  →  Message</text>
+<text x="67" y="3142" font-family="Courier New, monospace" font-size="18" font-weight="400" fill="#182a3a">HAS_MESSAGE</text>
+<text x="900" y="3144" font-family="Arial, sans-serif" font-size="17" font-weight="700" fill="#6d4c8a">1:N</text>
+<rect x="50" y="3190" width="1040" height="96" rx="12" fill="white" stroke="#b4c2ce"/>
+<text x="67" y="3222" font-family="Arial, sans-serif" font-size="20" font-weight="700" fill="#246a58">Message  →  Source</text>
+<text x="67" y="3252" font-family="Courier New, monospace" font-size="18" font-weight="400" fill="#182a3a">SOURCED_FROM</text>
+<text x="900" y="3254" font-family="Arial, sans-serif" font-size="17" font-weight="700" fill="#6d4c8a">N:1</text>
+<rect x="1120" y="220" width="1040" height="96" rx="12" fill="white" stroke="#b4c2ce"/>
+<text x="1137" y="252" font-family="Arial, sans-serif" font-size="20" font-weight="700" fill="#246a58">Observation  →  Source</text>
+<text x="1137" y="282" font-family="Courier New, monospace" font-size="18" font-weight="400" fill="#182a3a">SOURCED_FROM</text>
+<text x="1970" y="284" font-family="Arial, sans-serif" font-size="17" font-weight="700" fill="#6d4c8a">N:1</text>
+<rect x="1120" y="330" width="1040" height="96" rx="12" fill="white" stroke="#b4c2ce"/>
+<text x="1137" y="362" font-family="Arial, sans-serif" font-size="20" font-weight="700" fill="#246a58">Attempt  →  Task</text>
+<text x="1137" y="392" font-family="Courier New, monospace" font-size="18" font-weight="400" fill="#182a3a">ATTEMPTS</text>
+<text x="1970" y="394" font-family="Arial, sans-serif" font-size="17" font-weight="700" fill="#6d4c8a">N:1</text>
+<rect x="1120" y="440" width="1040" height="96" rx="12" fill="white" stroke="#b4c2ce"/>
+<text x="1137" y="472" font-family="Arial, sans-serif" font-size="20" font-weight="700" fill="#246a58">Attempt  →  Observation</text>
+<text x="1137" y="502" font-family="Courier New, monospace" font-size="18" font-weight="400" fill="#182a3a">EVIDENCED_BY</text>
+<text x="1970" y="504" font-family="Arial, sans-serif" font-size="17" font-weight="700" fill="#6d4c8a">1:N</text>
+<rect x="1120" y="550" width="1040" height="96" rx="12" fill="white" stroke="#b4c2ce"/>
+<text x="1137" y="582" font-family="Arial, sans-serif" font-size="20" font-weight="700" fill="#246a58">Attempt  →  ArtifactVersion</text>
+<text x="1137" y="612" font-family="Courier New, monospace" font-size="18" font-weight="400" fill="#182a3a">PRODUCES</text>
+<text x="1970" y="614" font-family="Arial, sans-serif" font-size="17" font-weight="700" fill="#6d4c8a">N:M</text>
+<rect x="1120" y="660" width="1040" height="96" rx="12" fill="white" stroke="#b4c2ce"/>
+<text x="1137" y="692" font-family="Arial, sans-serif" font-size="20" font-weight="700" fill="#246a58">TaskState  →  ArtifactVersion</text>
+<text x="1137" y="722" font-family="Courier New, monospace" font-size="18" font-weight="400" fill="#182a3a">HAS_ARTIFACT</text>
+<text x="1970" y="724" font-family="Arial, sans-serif" font-size="17" font-weight="700" fill="#6d4c8a">N:M</text>
+<rect x="1120" y="770" width="1040" height="96" rx="12" fill="white" stroke="#b4c2ce"/>
+<text x="1137" y="802" font-family="Arial, sans-serif" font-size="20" font-weight="700" fill="#246a58">TaskState  →  Source</text>
+<text x="1137" y="832" font-family="Courier New, monospace" font-size="18" font-weight="400" fill="#182a3a">CHECKPOINT_SOURCE</text>
+<text x="1970" y="834" font-family="Arial, sans-serif" font-size="17" font-weight="700" fill="#6d4c8a">0..1 exact current manifest</text>
+<rect x="1120" y="880" width="1040" height="96" rx="12" fill="white" stroke="#b4c2ce"/>
+<text x="1137" y="912" font-family="Arial, sans-serif" font-size="20" font-weight="700" fill="#246a58">Task  →  ArtifactVersion</text>
+<text x="1137" y="942" font-family="Courier New, monospace" font-size="18" font-weight="400" fill="#182a3a">TOUCHES</text>
+<text x="1970" y="944" font-family="Arial, sans-serif" font-size="17" font-weight="700" fill="#6d4c8a">N:M</text>
+<rect x="1120" y="990" width="1040" height="96" rx="12" fill="white" stroke="#b4c2ce"/>
+<text x="1137" y="1022" font-family="Arial, sans-serif" font-size="20" font-weight="700" fill="#246a58">Decision  →  Task</text>
+<text x="1137" y="1052" font-family="Courier New, monospace" font-size="18" font-weight="400" fill="#182a3a">APPLIES_TO</text>
+<text x="1970" y="1054" font-family="Arial, sans-serif" font-size="17" font-weight="700" fill="#6d4c8a">N:M</text>
+<rect x="1120" y="1100" width="1040" height="96" rx="12" fill="white" stroke="#b4c2ce"/>
+<text x="1137" y="1132" font-family="Arial, sans-serif" font-size="20" font-weight="700" fill="#246a58">Decision  →  Source</text>
+<text x="1137" y="1162" font-family="Courier New, monospace" font-size="18" font-weight="400" fill="#182a3a">SUPPORTED_BY</text>
+<text x="1970" y="1164" font-family="Arial, sans-serif" font-size="17" font-weight="700" fill="#6d4c8a">N:M</text>
+<rect x="1120" y="1210" width="1040" height="96" rx="12" fill="white" stroke="#b4c2ce"/>
+<text x="1137" y="1242" font-family="Arial, sans-serif" font-size="20" font-weight="700" fill="#246a58">Finding  →  Task</text>
+<text x="1137" y="1272" font-family="Courier New, monospace" font-size="18" font-weight="400" fill="#182a3a">APPLIES_TO</text>
+<text x="1970" y="1274" font-family="Arial, sans-serif" font-size="17" font-weight="700" fill="#6d4c8a">N:M</text>
+<rect x="1120" y="1320" width="1040" height="96" rx="12" fill="white" stroke="#b4c2ce"/>
+<text x="1137" y="1352" font-family="Arial, sans-serif" font-size="20" font-weight="700" fill="#246a58">Finding  →  Source</text>
+<text x="1137" y="1382" font-family="Courier New, monospace" font-size="18" font-weight="400" fill="#182a3a">SUPPORTED_BY</text>
+<text x="1970" y="1384" font-family="Arial, sans-serif" font-size="17" font-weight="700" fill="#6d4c8a">N:M</text>
+<rect x="1120" y="1430" width="1040" height="96" rx="12" fill="white" stroke="#b4c2ce"/>
+<text x="1137" y="1462" font-family="Arial, sans-serif" font-size="20" font-weight="700" fill="#246a58">Finding  →  Finding</text>
+<text x="1137" y="1492" font-family="Courier New, monospace" font-size="18" font-weight="400" fill="#182a3a">CONTRADICTS</text>
+<text x="1970" y="1494" font-family="Arial, sans-serif" font-size="17" font-weight="700" fill="#6d4c8a">N:M</text>
+<rect x="1120" y="1540" width="1040" height="96" rx="12" fill="white" stroke="#b4c2ce"/>
+<text x="1137" y="1572" font-family="Arial, sans-serif" font-size="20" font-weight="700" fill="#246a58">Decision  →  Decision</text>
+<text x="1137" y="1602" font-family="Courier New, monospace" font-size="18" font-weight="400" fill="#182a3a">SUPERSEDES</text>
+<text x="1970" y="1604" font-family="Arial, sans-serif" font-size="17" font-weight="700" fill="#6d4c8a">0..1 predecessor</text>
+<rect x="1120" y="1650" width="1040" height="96" rx="12" fill="white" stroke="#b4c2ce"/>
+<text x="1137" y="1682" font-family="Arial, sans-serif" font-size="20" font-weight="700" fill="#246a58">Finding  →  Finding</text>
+<text x="1137" y="1712" font-family="Courier New, monospace" font-size="18" font-weight="400" fill="#182a3a">SUPERSEDES</text>
+<text x="1970" y="1714" font-family="Arial, sans-serif" font-size="17" font-weight="700" fill="#6d4c8a">0..1 predecessor</text>
+<rect x="1120" y="1760" width="1040" height="96" rx="12" fill="white" stroke="#b4c2ce"/>
+<text x="1137" y="1792" font-family="Arial, sans-serif" font-size="20" font-weight="700" fill="#246a58">Decision  →  ConstraintVersion</text>
+<text x="1137" y="1822" font-family="Courier New, monospace" font-size="18" font-weight="400" fill="#182a3a">DEPENDS_ON</text>
+<text x="1970" y="1824" font-family="Arial, sans-serif" font-size="17" font-weight="700" fill="#6d4c8a">N:M</text>
+<rect x="1120" y="1870" width="1040" height="96" rx="12" fill="white" stroke="#b4c2ce"/>
+<text x="1137" y="1902" font-family="Arial, sans-serif" font-size="20" font-weight="700" fill="#246a58">Finding  →  ArtifactVersion</text>
+<text x="1137" y="1932" font-family="Courier New, monospace" font-size="18" font-weight="400" fill="#182a3a">DEPENDS_ON</text>
+<text x="1970" y="1934" font-family="Arial, sans-serif" font-size="17" font-weight="700" fill="#6d4c8a">N:M</text>
+<rect x="1120" y="1980" width="1040" height="96" rx="12" fill="white" stroke="#b4c2ce"/>
+<text x="1137" y="2012" font-family="Arial, sans-serif" font-size="20" font-weight="700" fill="#246a58">Procedure  →  VerificationReceipt</text>
+<text x="1137" y="2042" font-family="Courier New, monospace" font-size="18" font-weight="400" fill="#182a3a">VALIDATED_BY</text>
+<text x="1970" y="2044" font-family="Arial, sans-serif" font-size="17" font-weight="700" fill="#6d4c8a">1:N after validation</text>
+<rect x="1120" y="2090" width="1040" height="96" rx="12" fill="white" stroke="#b4c2ce"/>
+<text x="1137" y="2122" font-family="Arial, sans-serif" font-size="20" font-weight="700" fill="#246a58">Procedure  →  ConstraintVersion</text>
+<text x="1137" y="2152" font-family="Courier New, monospace" font-size="18" font-weight="400" fill="#182a3a">REQUIRES</text>
+<text x="1970" y="2154" font-family="Arial, sans-serif" font-size="17" font-weight="700" fill="#6d4c8a">N:M</text>
+<rect x="1120" y="2200" width="1040" height="96" rx="12" fill="white" stroke="#b4c2ce"/>
+<text x="1137" y="2232" font-family="Arial, sans-serif" font-size="20" font-weight="700" fill="#246a58">Attempt  →  Procedure</text>
+<text x="1137" y="2262" font-family="Courier New, monospace" font-size="18" font-weight="400" fill="#182a3a">USES_PROCEDURE</text>
+<text x="1970" y="2264" font-family="Arial, sans-serif" font-size="17" font-weight="700" fill="#6d4c8a">N:M</text>
+<rect x="1120" y="2310" width="1040" height="96" rx="12" fill="white" stroke="#b4c2ce"/>
+<text x="1137" y="2342" font-family="Arial, sans-serif" font-size="20" font-weight="700" fill="#246a58">VerificationReceipt  →  ArtifactVersion</text>
+<text x="1137" y="2372" font-family="Courier New, monospace" font-size="18" font-weight="400" fill="#182a3a">VERIFIES</text>
+<text x="1970" y="2374" font-family="Arial, sans-serif" font-size="17" font-weight="700" fill="#6d4c8a">N:M</text>
+<rect x="1120" y="2420" width="1040" height="96" rx="12" fill="white" stroke="#b4c2ce"/>
+<text x="1137" y="2452" font-family="Arial, sans-serif" font-size="20" font-weight="700" fill="#246a58">VerificationReceipt  →  Criterion</text>
+<text x="1137" y="2482" font-family="Courier New, monospace" font-size="18" font-weight="400" fill="#182a3a">SATISFIES</text>
+<text x="1970" y="2484" font-family="Arial, sans-serif" font-size="17" font-weight="700" fill="#6d4c8a">N:M</text>
+<rect x="1120" y="2530" width="1040" height="96" rx="12" fill="white" stroke="#b4c2ce"/>
+<text x="1137" y="2562" font-family="Arial, sans-serif" font-size="20" font-weight="700" fill="#246a58">VerificationReceipt  →  Observation</text>
+<text x="1137" y="2592" font-family="Courier New, monospace" font-size="18" font-weight="400" fill="#182a3a">EVIDENCED_BY</text>
+<text x="1970" y="2594" font-family="Arial, sans-serif" font-size="17" font-weight="700" fill="#6d4c8a">1:N</text>
+<rect x="1120" y="2640" width="1040" height="96" rx="12" fill="white" stroke="#b4c2ce"/>
+<text x="1137" y="2672" font-family="Arial, sans-serif" font-size="20" font-weight="700" fill="#246a58">VerificationReceipt  →  ActorRef</text>
+<text x="1137" y="2702" font-family="Courier New, monospace" font-size="18" font-weight="400" fill="#182a3a">CHECKED_BY</text>
+<text x="1970" y="2704" font-family="Arial, sans-serif" font-size="17" font-weight="700" fill="#6d4c8a">N:1 trusted service</text>
+<rect x="1120" y="2750" width="1040" height="96" rx="12" fill="white" stroke="#b4c2ce"/>
+<text x="1137" y="2782" font-family="Arial, sans-serif" font-size="20" font-weight="700" fill="#246a58">TaskState  →  VerificationReceipt</text>
+<text x="1137" y="2812" font-family="Courier New, monospace" font-size="18" font-weight="400" fill="#182a3a">ACCEPTED_RECEIPT</text>
+<text x="1970" y="2814" font-family="Arial, sans-serif" font-size="17" font-weight="700" fill="#6d4c8a">0:N</text>
+<rect x="1120" y="2860" width="1040" height="96" rx="12" fill="white" stroke="#b4c2ce"/>
+<text x="1137" y="2892" font-family="Arial, sans-serif" font-size="20" font-weight="700" fill="#246a58">Event  →  TaskState</text>
+<text x="1137" y="2922" font-family="Courier New, monospace" font-size="18" font-weight="400" fill="#182a3a">CHANGES</text>
+<text x="1970" y="2924" font-family="Arial, sans-serif" font-size="17" font-weight="700" fill="#6d4c8a">N:M</text>
+<rect x="1120" y="2970" width="1040" height="96" rx="12" fill="white" stroke="#b4c2ce"/>
+<text x="1137" y="3002" font-family="Arial, sans-serif" font-size="20" font-weight="700" fill="#246a58">Event  →  ActorRef</text>
+<text x="1137" y="3032" font-family="Courier New, monospace" font-size="18" font-weight="400" fill="#182a3a">CAUSED_BY</text>
+<text x="1970" y="3034" font-family="Arial, sans-serif" font-size="17" font-weight="700" fill="#6d4c8a">N:1</text>
+<rect x="1120" y="3080" width="1040" height="96" rx="12" fill="white" stroke="#b4c2ce"/>
+<text x="1137" y="3112" font-family="Arial, sans-serif" font-size="20" font-weight="700" fill="#246a58">RequestReceipt  →  Event</text>
+<text x="1137" y="3142" font-family="Courier New, monospace" font-size="18" font-weight="400" fill="#182a3a">COMMITTED_EVENT</text>
+<text x="1970" y="3144" font-family="Arial, sans-serif" font-size="17" font-weight="700" fill="#6d4c8a">1:1</text>
+<rect x="1120" y="3190" width="1040" height="96" rx="12" fill="white" stroke="#b4c2ce"/>
+<text x="1137" y="3222" font-family="Arial, sans-serif" font-size="20" font-weight="700" fill="#246a58">ContextPacket  →  Task</text>
+<text x="1137" y="3252" font-family="Courier New, monospace" font-size="18" font-weight="400" fill="#182a3a">FOR_TASK</text>
+<text x="1970" y="3254" font-family="Arial, sans-serif" font-size="17" font-weight="700" fill="#6d4c8a">N:1</text>
+<rect x="2190" y="220" width="1040" height="96" rx="12" fill="white" stroke="#b4c2ce"/>
+<text x="2207" y="252" font-family="Arial, sans-serif" font-size="20" font-weight="700" fill="#246a58">ContextPacket  →  ConstraintVersion</text>
+<text x="2207" y="282" font-family="Courier New, monospace" font-size="18" font-weight="400" fill="#182a3a">INCLUDES</text>
+<text x="3040" y="284" font-family="Arial, sans-serif" font-size="17" font-weight="700" fill="#6d4c8a">N:M</text>
+<rect x="2190" y="330" width="1040" height="96" rx="12" fill="white" stroke="#b4c2ce"/>
+<text x="2207" y="362" font-family="Arial, sans-serif" font-size="20" font-weight="700" fill="#246a58">ContextPacket  →  Decision</text>
+<text x="2207" y="392" font-family="Courier New, monospace" font-size="18" font-weight="400" fill="#182a3a">INCLUDES</text>
+<text x="3040" y="394" font-family="Arial, sans-serif" font-size="17" font-weight="700" fill="#6d4c8a">N:M</text>
+<rect x="2190" y="440" width="1040" height="96" rx="12" fill="white" stroke="#b4c2ce"/>
+<text x="2207" y="472" font-family="Arial, sans-serif" font-size="20" font-weight="700" fill="#246a58">ContextPacket  →  Finding</text>
+<text x="2207" y="502" font-family="Courier New, monospace" font-size="18" font-weight="400" fill="#182a3a">INCLUDES</text>
+<text x="3040" y="504" font-family="Arial, sans-serif" font-size="17" font-weight="700" fill="#6d4c8a">N:M</text>
+<rect x="2190" y="550" width="1040" height="96" rx="12" fill="white" stroke="#b4c2ce"/>
+<text x="2207" y="582" font-family="Arial, sans-serif" font-size="20" font-weight="700" fill="#246a58">ContextPacket  →  Attempt</text>
+<text x="2207" y="612" font-family="Courier New, monospace" font-size="18" font-weight="400" fill="#182a3a">INCLUDES</text>
+<text x="3040" y="614" font-family="Arial, sans-serif" font-size="17" font-weight="700" fill="#6d4c8a">N:M</text>
+<rect x="2190" y="660" width="1040" height="96" rx="12" fill="white" stroke="#b4c2ce"/>
+<text x="2207" y="692" font-family="Arial, sans-serif" font-size="20" font-weight="700" fill="#246a58">ContextPacket  →  Procedure</text>
+<text x="2207" y="722" font-family="Courier New, monospace" font-size="18" font-weight="400" fill="#182a3a">INCLUDES</text>
+<text x="3040" y="724" font-family="Arial, sans-serif" font-size="17" font-weight="700" fill="#6d4c8a">N:M</text>
+<rect x="2190" y="770" width="1040" height="96" rx="12" fill="white" stroke="#b4c2ce"/>
+<text x="2207" y="802" font-family="Arial, sans-serif" font-size="20" font-weight="700" fill="#246a58">ContextPacket  →  GoalVersion</text>
+<text x="2207" y="832" font-family="Courier New, monospace" font-size="18" font-weight="400" fill="#182a3a">INCLUDES</text>
+<text x="3040" y="834" font-family="Arial, sans-serif" font-size="17" font-weight="700" fill="#6d4c8a">N:M</text>
+<rect x="2190" y="880" width="1040" height="96" rx="12" fill="white" stroke="#b4c2ce"/>
+<text x="2207" y="912" font-family="Arial, sans-serif" font-size="20" font-weight="700" fill="#246a58">ContextPacket  →  Criterion</text>
+<text x="2207" y="942" font-family="Courier New, monospace" font-size="18" font-weight="400" fill="#182a3a">INCLUDES</text>
+<text x="3040" y="944" font-family="Arial, sans-serif" font-size="17" font-weight="700" fill="#6d4c8a">N:M</text>
+<rect x="2190" y="990" width="1040" height="96" rx="12" fill="white" stroke="#b4c2ce"/>
+<text x="2207" y="1022" font-family="Arial, sans-serif" font-size="20" font-weight="700" fill="#246a58">ContextPacket  →  TaskState</text>
+<text x="2207" y="1052" font-family="Courier New, monospace" font-size="18" font-weight="400" fill="#182a3a">INCLUDES</text>
+<text x="3040" y="1054" font-family="Arial, sans-serif" font-size="17" font-weight="700" fill="#6d4c8a">N:M</text>
+<rect x="2190" y="1100" width="1040" height="96" rx="12" fill="white" stroke="#b4c2ce"/>
+<text x="2207" y="1132" font-family="Arial, sans-serif" font-size="20" font-weight="700" fill="#246a58">ContextPacket  →  ArtifactVersion</text>
+<text x="2207" y="1162" font-family="Courier New, monospace" font-size="18" font-weight="400" fill="#182a3a">INCLUDES</text>
+<text x="3040" y="1164" font-family="Arial, sans-serif" font-size="17" font-weight="700" fill="#6d4c8a">N:M</text>
+<rect x="2190" y="1210" width="1040" height="96" rx="12" fill="white" stroke="#b4c2ce"/>
+<text x="2207" y="1242" font-family="Arial, sans-serif" font-size="20" font-weight="700" fill="#246a58">ContextPacket  →  VerificationReceipt</text>
+<text x="2207" y="1272" font-family="Courier New, monospace" font-size="18" font-weight="400" fill="#182a3a">INCLUDES</text>
+<text x="3040" y="1274" font-family="Arial, sans-serif" font-size="17" font-weight="700" fill="#6d4c8a">N:M</text>
+<rect x="2190" y="1320" width="1040" height="96" rx="12" fill="white" stroke="#b4c2ce"/>
+<text x="2207" y="1352" font-family="Arial, sans-serif" font-size="20" font-weight="700" fill="#246a58">ContextPacket  →  Source</text>
+<text x="2207" y="1382" font-family="Courier New, monospace" font-size="18" font-weight="400" fill="#182a3a">INCLUDES</text>
+<text x="3040" y="1384" font-family="Arial, sans-serif" font-size="17" font-weight="700" fill="#6d4c8a">N:M</text>
+<rect x="2190" y="1430" width="1040" height="96" rx="12" fill="white" stroke="#b4c2ce"/>
+<text x="2207" y="1462" font-family="Arial, sans-serif" font-size="20" font-weight="700" fill="#246a58">AgentSession  →  ContextPacket</text>
+<text x="2207" y="1492" font-family="Courier New, monospace" font-size="18" font-weight="400" fill="#182a3a">LOADED</text>
+<text x="3040" y="1494" font-family="Arial, sans-serif" font-size="17" font-weight="700" fill="#6d4c8a">N:M via ContextLoad</text>
+<rect x="2190" y="1540" width="1040" height="96" rx="12" fill="white" stroke="#b4c2ce"/>
+<text x="2207" y="1572" font-family="Arial, sans-serif" font-size="20" font-weight="700" fill="#246a58">ContextLoad  →  ContextPacket</text>
+<text x="2207" y="1602" font-family="Courier New, monospace" font-size="18" font-weight="400" fill="#182a3a">ACKS</text>
+<text x="3040" y="1604" font-family="Arial, sans-serif" font-size="17" font-weight="700" fill="#6d4c8a">N:1</text>
+<rect x="2190" y="1650" width="1040" height="96" rx="12" fill="white" stroke="#b4c2ce"/>
+<text x="2207" y="1682" font-family="Arial, sans-serif" font-size="20" font-weight="700" fill="#246a58">ContextLoad  →  AgentSession</text>
+<text x="2207" y="1712" font-family="Courier New, monospace" font-size="18" font-weight="400" fill="#182a3a">BY_SESSION</text>
+<text x="3040" y="1714" font-family="Arial, sans-serif" font-size="17" font-weight="700" fill="#6d4c8a">N:1</text>
+<rect x="2190" y="1760" width="1040" height="96" rx="12" fill="white" stroke="#b4c2ce"/>
+<text x="2207" y="1792" font-family="Arial, sans-serif" font-size="20" font-weight="700" fill="#246a58">DeliveryCursor  →  AgentSession</text>
+<text x="2207" y="1822" font-family="Courier New, monospace" font-size="18" font-weight="400" fill="#182a3a">FOR_SESSION</text>
+<text x="3040" y="1824" font-family="Arial, sans-serif" font-size="17" font-weight="700" fill="#6d4c8a">1:1 per consumer</text>
+<rect x="2190" y="1870" width="1040" height="96" rx="12" fill="white" stroke="#b4c2ce"/>
+<text x="2207" y="1902" font-family="Arial, sans-serif" font-size="20" font-weight="700" fill="#246a58">Handoff  →  Task</text>
+<text x="2207" y="1932" font-family="Courier New, monospace" font-size="18" font-weight="400" fill="#182a3a">TRANSFERS</text>
+<text x="3040" y="1934" font-family="Arial, sans-serif" font-size="17" font-weight="700" fill="#6d4c8a">N:1</text>
+<rect x="2190" y="1980" width="1040" height="96" rx="12" fill="white" stroke="#b4c2ce"/>
+<text x="2207" y="2012" font-family="Arial, sans-serif" font-size="20" font-weight="700" fill="#246a58">Handoff  →  AgentSession</text>
+<text x="2207" y="2042" font-family="Courier New, monospace" font-size="18" font-weight="400" fill="#182a3a">FROM_SESSION</text>
+<text x="3040" y="2044" font-family="Arial, sans-serif" font-size="17" font-weight="700" fill="#6d4c8a">N:1</text>
+<rect x="2190" y="2090" width="1040" height="96" rx="12" fill="white" stroke="#b4c2ce"/>
+<text x="2207" y="2122" font-family="Arial, sans-serif" font-size="20" font-weight="700" fill="#246a58">Handoff  →  AgentSession</text>
+<text x="2207" y="2152" font-family="Courier New, monospace" font-size="18" font-weight="400" fill="#182a3a">TO_SESSION</text>
+<text x="3040" y="2154" font-family="Arial, sans-serif" font-size="17" font-weight="700" fill="#6d4c8a">N:0..1</text>
+<rect x="2190" y="2200" width="1040" height="96" rx="12" fill="white" stroke="#b4c2ce"/>
+<text x="2207" y="2232" font-family="Arial, sans-serif" font-size="20" font-weight="700" fill="#246a58">Run  →  BudgetReservation</text>
+<text x="2207" y="2262" font-family="Courier New, monospace" font-size="18" font-weight="400" fill="#182a3a">RESERVES</text>
+<text x="3040" y="2264" font-family="Arial, sans-serif" font-size="17" font-weight="700" fill="#6d4c8a">1:N</text>
+<rect x="2190" y="2310" width="1040" height="96" rx="12" fill="white" stroke="#b4c2ce"/>
+<text x="2207" y="2342" font-family="Arial, sans-serif" font-size="20" font-weight="700" fill="#246a58">LaunchIntent  →  BudgetReservation</text>
+<text x="2207" y="2372" font-family="Courier New, monospace" font-size="18" font-weight="400" fill="#182a3a">CONSUMES</text>
+<text x="3040" y="2374" font-family="Arial, sans-serif" font-size="17" font-weight="700" fill="#6d4c8a">N:1</text>
+<rect x="2190" y="2420" width="1040" height="96" rx="12" fill="white" stroke="#b4c2ce"/>
+<text x="2207" y="2452" font-family="Arial, sans-serif" font-size="20" font-weight="700" fill="#246a58">LaunchIntent  →  AgentSession</text>
+<text x="2207" y="2482" font-family="Courier New, monospace" font-size="18" font-weight="400" fill="#182a3a">STARTS</text>
+<text x="3040" y="2484" font-family="Arial, sans-serif" font-size="17" font-weight="700" fill="#6d4c8a">1:1</text>
+<rect x="2190" y="2530" width="1040" height="96" rx="12" fill="white" stroke="#b4c2ce"/>
+<text x="2207" y="2562" font-family="Arial, sans-serif" font-size="20" font-weight="700" fill="#246a58">LaunchIntent  →  Task</text>
+<text x="2207" y="2592" font-family="Courier New, monospace" font-size="18" font-weight="400" fill="#182a3a">FOR_TASK</text>
+<text x="3040" y="2594" font-family="Arial, sans-serif" font-size="17" font-weight="700" fill="#6d4c8a">N:1</text>
+<rect x="2190" y="2640" width="1040" height="96" rx="12" fill="white" stroke="#b4c2ce"/>
+<text x="2207" y="2672" font-family="Arial, sans-serif" font-size="20" font-weight="700" fill="#246a58">IntegrationIntent  →  ArtifactVersion</text>
+<text x="2207" y="2702" font-family="Courier New, monospace" font-size="18" font-weight="400" fill="#182a3a">ADOPTS</text>
+<text x="3040" y="2704" font-family="Arial, sans-serif" font-size="17" font-weight="700" fill="#6d4c8a">N:1</text>
+<rect x="2190" y="2750" width="1040" height="96" rx="12" fill="white" stroke="#b4c2ce"/>
+<text x="2207" y="2782" font-family="Arial, sans-serif" font-size="20" font-weight="700" fill="#246a58">Publication  →  Finding</text>
+<text x="2207" y="2812" font-family="Courier New, monospace" font-size="18" font-weight="400" fill="#182a3a">PUBLISHES</text>
+<text x="3040" y="2814" font-family="Arial, sans-serif" font-size="17" font-weight="700" fill="#6d4c8a">N:1</text>
+<rect x="2190" y="2860" width="1040" height="96" rx="12" fill="white" stroke="#b4c2ce"/>
+<text x="2207" y="2892" font-family="Arial, sans-serif" font-size="20" font-weight="700" fill="#246a58">Publication  →  Decision</text>
+<text x="2207" y="2922" font-family="Courier New, monospace" font-size="18" font-weight="400" fill="#182a3a">PUBLISHES</text>
+<text x="3040" y="2924" font-family="Arial, sans-serif" font-size="17" font-weight="700" fill="#6d4c8a">N:1</text>
+<rect x="2190" y="2970" width="1040" height="96" rx="12" fill="white" stroke="#b4c2ce"/>
+<text x="2207" y="3002" font-family="Arial, sans-serif" font-size="20" font-weight="700" fill="#246a58">Publication  →  Source</text>
+<text x="2207" y="3032" font-family="Courier New, monospace" font-size="18" font-weight="400" fill="#182a3a">SOURCED_FROM</text>
+<text x="3040" y="3034" font-family="Arial, sans-serif" font-size="17" font-weight="700" fill="#6d4c8a">N:M</text>
+<text x="50" y="3372" font-family="Arial, sans-serif" font-size="16" font-weight="400" fill="#536779">Proposed architecture | 15 October 2026 | No runtime or database validation claimed</text>
+</svg>

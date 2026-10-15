@@ -1,0 +1,54 @@
+erDiagram
+    direction LR
+    artifacts {
+        uuid tenant_id FK
+        uuid project_id FK
+        uuid id PK
+        char content_digest
+        text storage_key
+        text kind
+        text media_type
+        bigint byte_size
+        text visibility
+        uuid owner_user_id FK
+        uuid owner_session_id FK
+        text status
+        timestamptz created_at
+    }
+    context_packets {
+        uuid tenant_id FK
+        uuid project_id FK
+        uuid id PK
+        uuid task_graph_id
+        uuid graph_epoch
+        bigint task_revision
+        bigint requirement_revision
+        bigint graph_generation
+        uuid content_artifact_id FK
+        char content_digest
+        integer token_count
+        text count_precision
+        timestamptz created_at
+    }
+    context_deliveries {
+        uuid tenant_id FK
+        uuid project_id FK
+        uuid id PK
+        uuid agent_session_id FK
+        uuid context_packet_id FK
+        uuid submission_id
+        text runtime_turn_id
+        text status
+        timestamptz submitted_at
+        timestamptz acknowledged_at
+        uuid graph_ack_id
+        timestamptz created_at
+    }
+    agent_sessions o|--o{ artifacts : "owner_session_id"
+    tenant_memberships o|--o{ artifacts : "owner_user_id"
+    projects ||--o{ artifacts : "project_id"
+    artifacts ||--o{ context_packets : "content_artifact_id"
+    projects ||--o{ context_packets : "project_id"
+    agent_sessions ||--o{ context_deliveries : "agent_session_id"
+    context_packets ||--o{ context_deliveries : "context_packet_id"
+    projects ||--o{ context_deliveries : "project_id"

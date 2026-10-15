@@ -1,0 +1,17 @@
+stateDiagram-v2
+  [*] --> Planned
+  Planned --> Ready: prerequisites accepted
+  Ready --> Running: claim and new fence
+  Running --> Blocked: approval or unknown effect
+  Blocked --> Ready: reconciled and owner released
+  Blocked --> Running: reconciled with valid claim
+  Running --> Verifying: exact candidate snapshot
+  Verifying --> Running: current checks fail
+  Verifying --> Completed: current evidence accepted
+  Completed --> Ready: relevant requirement changes
+  Planned --> Cancelled: authorized cancellation
+  Verifying --> Cancelled: authorized cancellation
+  Running --> Cancelled: authorized cancellation
+  Ready --> Cancelled: authorized cancellation
+  Blocked --> Cancelled: authorized cancellation
+  Cancelled --> [*]

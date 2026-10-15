@@ -1,0 +1,22 @@
+sequenceDiagram
+  participant U as User and browser
+  participant T as Threadline local OAuth module
+  participant O as OpenAI authorization
+  participant K as Protected local secret store
+  participant D as PostgreSQL metadata
+  participant P as Provider broker
+  T->>T: Prepare host ID and one-use state, nonce, PKCE
+  T->>U: Open official sign-in and consent
+  U->>O: Authenticate and choose eligible plan permission
+  O-->>T: Loopback callback with code, state and issued client ID
+  T->>T: Validate callback against pending attempt
+  T->>O: Exchange code with PKCE and issued client ID
+  O-->>T: Tokens and granted scopes
+  T->>T: Verify identity and plan permission
+  T->>K: Atomically store registration credential bundle
+  T->>D: Save nonsecret registration and secret reference
+  P->>K: Resolve selected authorized credential
+  P->>O: Stream supported Responses request
+  O-->>P: Terminal response or explicit quota/auth error
+  Note over T,P: No automatic switch to paid API billing
+  Note over U,P: Post-hackathon route, no OAuth required by core BYOK slice

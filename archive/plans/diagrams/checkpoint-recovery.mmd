@@ -1,0 +1,17 @@
+flowchart TD
+  I["Persist critical tool intent"] --> O["Execute isolated action"]
+  O --> T["Durable terminal result or explicit unknown"]
+  T --> S["Immutable Source and deterministic Observation / Attempt"]
+  S --> K["Checkpoint manifest with per-session covered positions"]
+  K --> G["TaskState pointer plus CHECKPOINT_SOURCE"]
+  crash["Crash before agent checkpoint"] --> reconcile["Reconcile effect and drain graph admission"]
+  G --> reconcile
+  reconcile --> tail["Ordered uncovered tail: batches 100, cap 1000"]
+  tail --> gap{"Critical gap or overflow?"}
+  gap -->|Yes| block["Block inference; reconcile or checkpoint safely"]
+  gap -->|No| retire["Confirm old writer stopped or quarantine"]
+  retire --> stage["Stage local fresh packet"]
+  stage --> claim["Atomic successor claim and new fence"]
+  claim --> render["Rebuild current exact authority under new claim"]
+  render --> submit["Journal and submit first authorized request"]
+  submit --> ack["Actual submission acknowledgement"]

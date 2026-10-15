@@ -1,0 +1,12 @@
+flowchart TD
+  input["Human source plus command_inbox"] --> atom["Atomic current ConstraintVersion, project revision, Event and Receipt"]
+  atom --> historical["Preserve SUPERSEDES and historical GOVERNED_BY"]
+  atom --> barrier["Block tasks whose requirement revision is stale"]
+  barrier --> rebase["Rebase applicable project, goal, task and artifact scopes"]
+  rebase --> stable["Task SUBJECT_TO stable Constraint"]
+  stable --> current["Constraint CURRENT_VERSION ConstraintVersion"]
+  current --> valid{"Exactly one current required version per binding?"}
+  valid -->|No| stop["Fail closed: missing, ambiguous or inaccessible authority"]
+  valid -->|Yes| packet["Current bounded packet; generation rechecked"]
+  packet --> invalidate["Historical receipts remain; stale completion rejected"]
+  invalidate --> verify["New candidate-bound Verifier assignment"]

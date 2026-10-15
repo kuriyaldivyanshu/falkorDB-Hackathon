@@ -1,0 +1,9 @@
+flowchart LR
+  model["One Builder"] --> policy["Schema, role, revision, fence and size guards"]
+  policy --> w["Workspace: read, search, inspect, apply_patch, run"]
+  policy --> m["Memory: retrieve, refresh, checkpoint"]
+  policy --> c["Control: update_plan, ask_user, request_completion"]
+  w --> logs["Synchronous registered commands; captured TUI stream"]
+  m --> source["Search advice or read authorized Source ranges"]
+  c --> checker["Protected deterministic checker gates completion"]
+  later["Deferred target tools: poll, propose_decision, review.submit"]
