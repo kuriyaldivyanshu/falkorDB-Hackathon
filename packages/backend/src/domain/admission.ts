@@ -64,6 +64,15 @@ function pending(inbox: InboxRow): GoalAdmissionResult {
   return {kind:'pending',requestId:inbox.requestId,sourceMessageId:inbox.sourceMessageId ?? '',inboxId:inbox.id,
     outcomeUnknown:true,reason:'The exact graph outcome or SQL settlement is not yet established; retry the same request ID.'};
 }
+function isRetryableGraphFailure(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const code = 'code' in error ? error.code : undefined;
+  return ['ECONNRESET','ECONNREFUSED','ECONNABORTED','EPIPE','ETIMEDOUT','ENETUNREACH','EHOSTUNREACH','EAI_AGAIN','ABORT_ERR'].includes(String(code)) ||
+    ['AbortError','TimeoutError','ConnectionTimeoutError','SocketTimeoutError','SocketClosedUnexpectedlyError',
+      'SocketTimeoutDuringMaintenanceError','CommandTimeoutDuringMaintenanceError',
+      'ClientClosedError','ClientOfflineError','DisconnectsClientError'].some(name => error.name === name || error.constructor.name === name) ||
+    /\b(query (timed out|timeout)|query execution (timed out|timeout)|execution time exceeded)\b/i.test(error.message);
+}
 function parseReceipt(row: ReceiptRow, inbox: InboxRow, project: ProjectScope, replayed: boolean): AdmissionReceipt {
   if (row.request_digest !== inbox.requestDigest || inbox.graphEpoch !== project.graphEpoch || !Number.isSafeInteger(row.event_seq))
     throw new ThreadlineError('authority_conflict','The receipt digest, epoch or sequence does not match the durable intent.');
@@ -84,10 +93,15 @@ async function commitInbox(deps: AdmissionDeps, project: ProjectScope, inbox: In
     if (receipt === null) {
       if (inbox.status === 'committed') throw new ThreadlineError('authority_unavailable','Committed receipt is missing.');
       const prepared = preparedFrom(inbox);
+      let retryableFailure = false;
       try { await graph.query(admissionCypher(prepared.input.requirements.length,prepared.input.criteria.length),{params:prepared.params}); }
-      catch { /* A lost write acknowledgement is resolved by the same immutable request identity. */ }
+      catch (error) { retryableFailure = isRetryableGraphFailure(error); }
+      // Always resolve first: even a failed acknowledgement may hide a commit.
       receipt = await resolve(graph,project,inbox.requestId);
-      if (receipt === null) return pending(inbox);
+      if (receipt === null) {
+        if (retryableFailure) return pending(inbox);
+        throw new ThreadlineError('authority_conflict','The graph rejected this admission or its authority guards did not create a receipt.');
+      }
     }
     const result = parseReceipt(receipt,inbox,project,replayed);
     await settleCommitted(deps.db,{tenantId:project.tenantId,projectId:project.projectId,requestId:inbox.requestId,

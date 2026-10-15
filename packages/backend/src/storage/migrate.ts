@@ -52,7 +52,7 @@ export function coreBootstrapChecksum(): string {
  * Reads migration bookkeeping. Safe to run as the application identity once
  * the schema exists; `schema_migrations` has no row-level security.
  */
-export async function readSchemaStatus(db: SqlDatabase): Promise<SchemaStatus> {
+export async function readSchemaStatus(db: Pick<SqlDatabase, 'query'>): Promise<SchemaStatus> {
   const rows = await db.query<{ version: number; checksum: string; applied_at: Date }>(
     `SELECT version, checksum, applied_at
        FROM threadline.schema_migrations
@@ -88,6 +88,7 @@ export async function ensureCoreSchema(deps: MigrationDeps): Promise<MigrationRe
   // DDL runs on the owner connection. The application identity is deliberately
   // not given CREATE on the schema, so it cannot apply migrations at all.
   await deps.migrationDb.withTransaction(async (client) => {
+    await client.rows('SELECT pg_advisory_xact_lock(73010402)');
     await client.rows('SET LOCAL search_path = threadline, pg_catalog');
     await client.rows(SCHEMA_MIGRATIONS_SQL);
   });
@@ -122,6 +123,14 @@ export async function ensureCoreSchema(deps: MigrationDeps): Promise<MigrationRe
   });
 
   await deps.migrationDb.withTransaction(async (client) => {
+    await client.rows('SELECT pg_advisory_xact_lock(73010402)');
+    const locked = await readSchemaStatus({ query: client.rows });
+    if (locked.state === 'applied') return;
+    if (locked.state === 'incompatible') {
+      throw new ThreadlineError('schema_incompatible','The recorded core schema checksum does not match this build.', {
+        expectedVersion: CORE_BOOTSTRAP_VERSION, expectedChecksum: locked.expected, recordedChecksum: locked.recorded,
+      });
+    }
     await client.rows('SET LOCAL search_path = threadline, pg_catalog');
     await client.rows(CORE_BOOTSTRAP_SQL);
     await client.rows(
@@ -169,6 +178,7 @@ async function grantApplicationPrivileges(deps: MigrationDeps): Promise<void> {
     );
   }
   await deps.migrationDb.withTransaction(async (client) => {
+    await client.rows('SELECT pg_advisory_xact_lock(73010402)');
     await client.rows('SET LOCAL search_path = threadline, pg_catalog');
     await client.rows(`GRANT USAGE ON SCHEMA threadline TO "${role}"`);
     await client.rows(`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA threadline TO "${role}"`);

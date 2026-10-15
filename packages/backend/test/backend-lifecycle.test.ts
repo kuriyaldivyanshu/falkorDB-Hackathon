@@ -173,3 +173,40 @@ test('stop during asynchronous startup never returns the backend to ready',async
  await backend.stop();await rejected;
  assert.equal(backend.state,'stopped');assert.equal(backend.address,null);assert.equal(backend.events.closed,true);
 });
+
+// Inject failures before and after the graph connection opens.
+import { sqlDouble } from './sql-double.js';
+import type { GraphStore } from '../src/storage/graph.js';
+import { silentLogger } from '../src/log.js';
+
+for (const stage of ['graph','migration','cleanup'] as const) {
+  test(`startup ${stage} failure closes resources and preserves the original error`, async () => {
+    const failure = new Error(`synthetic ${stage} startup failure`);
+    const db = sqlDouble(() => { throw failure; });
+    let graphClosed = false;
+    const graphStore: GraphStore = {
+      graph: () => { throw new Error('must not serve'); },
+      ensureSchema: async () => { throw new Error('must not migrate graph'); },
+      ping: async () => { if (stage === 'graph') throw failure; },
+      close: async () => { graphClosed = true; if (stage === 'cleanup') throw new Error('close failed'); },
+      get closed() { return graphClosed; },
+    };
+    const messages: string[] = [];
+    const backend = createBackend({
+      config: parseBackendConfig(testConfigSource({ THREADLINE_STORAGE_MODE:'required',
+        THREADLINE_PG_DATABASE:'test',THREADLINE_PG_USER:'test',THREADLINE_PG_PASSWORD:'synthetic-test-password' })),
+      database:db,graphStore,
+      logger:{...silentLogger,log:entry=>{messages.push(entry.message);}},
+    });
+    backend.events.subscribe(()=>{});
+    await assert.rejects(()=>backend.start(),e=>e===failure);
+    assert.equal(backend.state,'stopped');
+    assert.equal(backend.address,null);
+    assert.equal(db.closed,true);
+    assert.equal(graphClosed,true);
+    assert.equal(backend.events.closed,true);
+    assert.equal(backend.events.listenerCount,0);
+    assert.ok(messages.includes('Backend HTTP server closed.'));
+    await backend.stop();
+  });
+}

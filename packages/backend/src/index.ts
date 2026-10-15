@@ -405,7 +405,11 @@ export function createBackend(deps: BackendDeps): Backend {
           await openStorage();
         } catch (error) {
           setState('stopped', 'A required data store could not be opened; refusing to serve.');
-          await closeStorage();
+          const server = http;
+          http = null;
+          startedAt = null;
+          await Promise.allSettled([server?.close(), closeStorage()]);
+          publisher.close();
           throw error;
         }
         if (currentState() === 'starting') setState('starting', 'Opening the local HTTP transport.');

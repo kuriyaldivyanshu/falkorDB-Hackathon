@@ -1,5 +1,5 @@
 import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
-import { lstatSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { linkSync, lstatSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { ThreadlineError, type ProjectMembershipView } from '@threadline/shared';
@@ -69,8 +69,8 @@ interface SessionTokenFile {
 
 /**
  * Creates the local owner, tenant, project and first session, then writes the
- * owner-only credential file. Idempotent: a second call returns the existing
- * identities without minting a new token.
+ * owner-only credential file. Active sessions are reused; expired or revoked
+ * owner credentials are replaced without creating new identities.
  */
 export async function bootstrapLocalOwner(deps: IdentityDeps): Promise<LocalBootstrap> {
   const logger = deps.logger ?? silentLogger;
@@ -90,10 +90,32 @@ export async function bootstrapLocalOwner(deps: IdentityDeps): Promise<LocalBoot
     if (typeof file !== 'object' || file === null || !('token' in file) || typeof file.token !== 'string')
       throw new ThreadlineError('service_unavailable','The owner credential has no token.');
     const token = file.token;
-    const sessions = await deps.db.withTenantTransaction(existing.tenantId, tx => tx.rows<{id:string}>(
-      'SELECT id FROM threadline.user_sessions WHERE user_id=$1 AND token_hash=$2',[existing.userId,sha256Hex(token)]));
-    if (!sessions[0]) throw new ThreadlineError('service_unavailable','The owner credential does not match this database.');
-    return {...existing,sessionId:sessions[0].id};
+    const sessions = await deps.db.withTenantTransaction(existing.tenantId, tx => tx.rows<{
+      id: string; revoked_at: Date | null; expires_at: Date; idle_expires_at: Date;
+    }>(
+      'SELECT id,revoked_at,expires_at,idle_expires_at FROM threadline.user_sessions WHERE user_id=$1 AND token_hash=$2',
+      [existing.userId,sha256Hex(token)]));
+    const session = sessions[0];
+    if (!session) throw new ThreadlineError('service_unavailable','The owner credential does not match this database.');
+    const now = deps.clock();
+    if (session.revoked_at === null && session.expires_at > now && session.idle_expires_at > now)
+      return {...existing,sessionId:session.id};
+
+    const sessionId = randomUUID();
+    const replacement = newSessionToken();
+    await persistSessionTokenFile(deps.dataDirectory, {
+      session_id: sessionId, token: replacement, created_at: now.toISOString(),
+    }, true, () => deps.db.withTenantTransaction(existing.tenantId, async tx => {
+      await tx.rows('UPDATE threadline.user_sessions SET revoked_at=COALESCE(revoked_at,$1) WHERE id=$2',[now,session.id]);
+      await tx.rows(
+        `INSERT INTO threadline.user_sessions
+           (tenant_id,id,user_id,token_hash,auth_method,created_at,last_seen_at,expires_at,idle_expires_at,revoked_at,client_label)
+         VALUES ($1,$2,$3,$4,'local_bootstrap',$5,$5,$6,$7,NULL,'local-terminal')`,
+        [existing.tenantId,sessionId,existing.userId,sha256Hex(replacement),now,
+          new Date(now.getTime()+deps.local.absoluteExpiryMs),new Date(now.getTime()+deps.local.idleExpiryMs)],
+      );
+    }));
+    return {...existing,sessionId};
   }
 
   const now = deps.clock();
@@ -114,7 +136,9 @@ export async function bootstrapLocalOwner(deps: IdentityDeps): Promise<LocalBoot
   // The fence must be established inside the same transaction: FORCE row-level
   // security applies to the owner too, so an unfenced insert into a scoped
   // table is rejected.
-  await deps.db.withTenantTransaction(tenantId, async (client) => {
+  const sessionTokenPath = await persistSessionTokenFile(deps.dataDirectory, {
+    session_id: sessionId, token, created_at: now.toISOString(),
+  }, false, () => deps.db.withTenantTransaction(tenantId, async (client) => {
     await client.rows(
       `INSERT INTO threadline.users (id, display_name, status, created_at)
        VALUES ($1, $2, 'active', $3)`,
@@ -147,13 +171,7 @@ export async function bootstrapLocalOwner(deps: IdentityDeps): Promise<LocalBoot
        VALUES ($1, $2, $3, $4, 'local_bootstrap', $5, $5, $6, $7, NULL, $8)`,
       [tenantId, sessionId, userId, tokenHash, now, absoluteExpiry, idleExpiry, 'local-terminal'],
     );
-  });
-
-  const sessionTokenPath = writeSessionTokenFile(deps.dataDirectory, {
-    session_id: sessionId,
-    token,
-    created_at: now.toISOString(),
-  });
+  }));
 
   logger.log({
     level: 'info',
@@ -478,24 +496,31 @@ function assertOsOwner(dataDirectory: string): void {
   }
 }
 
-function writeSessionTokenFile(dataDirectory: string, payload: SessionTokenFile): string {
+async function persistSessionTokenFile(
+  dataDirectory: string,
+  payload: SessionTokenFile,
+  replace: boolean,
+  commit: () => Promise<void>,
+): Promise<string> {
   const path = join(dataDirectory, SESSION_TOKEN_FILENAME);
+  if (!replace) {
+    let exists = true;
+    try { lstatSync(path); } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      exists = false;
+    }
+    if (exists) throw new ThreadlineError('service_unavailable','An owner credential file already exists; refusing to overwrite it.',{path});
+  }
+  const temporaryPath = join(dataDirectory, `.${SESSION_TOKEN_FILENAME}.${randomUUID()}.tmp`);
   try {
-    // 'wx' fails if the path already exists, which also refuses to follow a
-    // pre-planted symlink.
-    writeFileSync(path, `${JSON.stringify(payload, null, 2)}\n`, {
+    writeFileSync(temporaryPath, `${JSON.stringify(payload, null, 2)}\n`, {
       encoding: 'utf8',
       mode: 0o600,
       flag: 'wx',
     });
   } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    if (code === 'EEXIST') {
-      throw new ThreadlineError(
-        'service_unavailable',
-        'An owner credential file already exists; refusing to overwrite it.',
-        { path },
-      );
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') {
+      cleanupCredentialFile(temporaryPath);
     }
     throw new ThreadlineError(
       'service_unavailable',
@@ -503,5 +528,35 @@ function writeSessionTokenFile(dataDirectory: string, payload: SessionTokenFile)
       { path },
     );
   }
-  return path;
+  let freshPublished = false;
+  try {
+    // Fresh enrollment must publish before SQL writes: a failed exclusive link
+    // must not leave committed identities with no usable credential. Rotation
+    // keeps the old credential available until its replacement rows commit.
+    if (!replace) {
+      linkSync(temporaryPath, path);
+      freshPublished = true;
+    }
+    await commit();
+    if (replace) renameSync(temporaryPath, path);
+    return path;
+  } catch (error) {
+    if (freshPublished) cleanupCredentialFile(path);
+    throw error;
+  } finally {
+    cleanupCredentialFile(temporaryPath);
+  }
+}
+
+/** Cleanup cannot change a successful enrollment or mask the original failure. */
+function cleanupCredentialFile(path: string): void {
+  try {
+    unlinkSync(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+      process.emitWarning('Could not remove an owner credential file during bootstrap cleanup.', {
+        code: 'THREADLINE_CREDENTIAL_CLEANUP',
+      });
+    }
+  }
 }

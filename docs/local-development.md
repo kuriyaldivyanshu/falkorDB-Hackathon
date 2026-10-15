@@ -18,6 +18,7 @@ Run commands from the repository root:
 
 ```sh
 npm install
+npm run build
 cp .env.example .env
 # Edit both app and migration passwords in .env before starting services.
 docker compose up -d --wait
@@ -39,7 +40,7 @@ The integration run aligned this workspace's private `.env` with its existing lo
 
 Schema bootstrap version 1 remains checksummed and immutable. Additive migration 2 hardens session lookup; an incompatible recorded checksum stops startup. App-role grants are reapplied on normal startup, but app writes to migration bookkeeping are revoked.
 
-The owner token file is `.threadline/session.json`, mode 0600, inside a private 0700 directory. Preserve it with the database. Existing missing/mismatched credentials fail closed; there is no automatic reissue or enrollment UI. A revoked/expired session remains rejected after restart.
+The owner token file is `.threadline/session.json`, mode 0600, inside a private 0700 directory. Preserve it with the database. Existing missing/mismatched credentials fail closed. When the protected credential matches a revoked or expired session, startup replaces that credential while preserving the owner and project; the old token remains rejected. There is no enrollment UI.
 
 ## Use the client
 

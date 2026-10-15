@@ -417,7 +417,7 @@ test('live: lost graph ACK and crash before graph commit reconcile the exact dur
   const again=await admitGoal(deps,principal,input);assert.ok(isAdmissionReceipt(again));assert.equal(again.graphReceiptId,result.graphReceiptId);
   const noWrite={...graphs,graph:(key:string)=>{
     const graph=graphs.graph(key);
-    return new Proxy(graph,{get(target,property){if(property==='query')return async()=>{throw new Error('simulated crash before graph mutation');};const value=Reflect.get(target,property);return typeof value==='function'?value.bind(target):value;}});
+    return new Proxy(graph,{get(target,property){if(property==='query')return async()=>{throw Object.assign(new Error('simulated crash before graph mutation'),{code:'ECONNRESET'});};const value=Reflect.get(target,property);return typeof value==='function'?value.bind(target):value;}});
   }};
   const interrupted=admissionInput(b.projectId,randomUUID());
   const pending=await admitGoal({...deps,graphs:noWrite},principal,interrupted);assert.equal(pending.kind,'pending');
