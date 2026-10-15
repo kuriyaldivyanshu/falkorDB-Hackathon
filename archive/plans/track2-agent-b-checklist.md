@@ -50,21 +50,25 @@ Coordinate startup/API edits and shared types with one editor per file. Ask for 
 **Independent integration correction:** backend tests are included by `packages/backend/tsconfig.json` and the suite exits normally in the independent rerun. Client/server routes match. Per user decision, `archive/plans` remains active and is now eligible for Git staging. Node 24 compatibility is still unverified; see the integration evidence below.
 
 
-**Independent M00 integration verification — 15 October 2026:** all fourteen A/B tasks verified in the combined tree; M00J01–M00J03 passed. Root `npm test` passed 49 backend + 5 CLI tests, including 25 real CLI exchanges and event-subscription cleanup. Real PTY echo/Esc, disconnect, terminal restoration and backend SIGTERM passed. Fragmented SSE, subscription readiness and capacity rejection defects were fixed with regression evidence. M00J04 remains pending the actual branch/commit workflow. [Full evidence and limitations](review/m00-integration-verification.md).
+**Independent M00 integration verification — 15 October 2026:** all fourteen A/B tasks verified in the combined tree; M00J01–M00J03 passed. Root `npm test` passed 49 backend + 5 CLI tests, including 25 real CLI exchanges and event-subscription cleanup. Real PTY echo/Esc, disconnect, terminal restoration and backend SIGTERM passed. Fragmented SSE, subscription readiness and capacity rejection defects were fixed with regression evidence. M00J04 was pending at that verification snapshot; the user subsequently merged PR #1 with resolutions into `main` (`ed18168`), completing the Git integration step. [Full evidence and limitations](review/m00-integration-verification.md).
 
 ### M01 — Real stores, local identity and one accepted task
 
+**Copyable launch instructions:** [M01 Agent B prompt](prompts/track2-m01-agent-b.md). Coordinate with [Agent A’s prompt](prompts/track2-m01-agent-a.md); use archive references selectively when stuck.
+
 **Depends on:** M00. **Combined milestone result:** A human goal becomes durable SQL source/inbox and guarded graph authority, inspectable from the CLI.
 
-- [ ] **M01B01** Add minimal Docker Compose PostgreSQL/FalkorDB services with explicit persistent volumes and host-local connectivity; do not begin with a deployment platform.
-- [ ] **M01B02** Select compatible development runtime/client/image versions while using them; record observations. Immutable release digests and a polished doctor are later packaging work.
-- [ ] **M01B03** Wire CLI `init` and task admission to the real backend; show pending versus accepted criteria and source IDs.
-- [ ] **M01B04** Load the existing authored fixture manifest as data; let the user explicitly accept its bounded goal/criteria. Do not translate arbitrary prose into hidden tests.
-- [ ] **M01B05** Keep model API credentials unset for this stage. Model and command containers must not receive database credentials later.
-- [ ] **M01B06** Implement a simple backend connection/start/stop view with real errors, retry action and cancellation of UI connection; closing the TUI does not delete persisted work.
-- [ ] **M01B07** Make configured endpoint versus local Compose behavior explicit; refuse an unreachable/misconfigured store instead of falling back to pretend memory.
+- [x] **M01B01** Add minimal Docker Compose PostgreSQL/FalkorDB services with explicit persistent volumes and host-local connectivity; do not begin with a deployment platform.
+- [x] **M01B02** Select compatible development runtime/client/image versions while using them; record observations. Immutable release digests and a polished doctor are later packaging work.
+- [x] **M01B03** Wire CLI `init` and task admission to the real backend; show pending versus accepted criteria and source IDs.
+- [x] **M01B04** Load the existing authored fixture manifest as data; let the user explicitly accept its bounded goal/criteria. Do not translate arbitrary prose into hidden tests.
+- [x] **M01B05** Keep model API credentials unset for this stage. Model and command containers must not receive database credentials later.
+- [x] **M01B06** Implement a simple backend connection/start/stop view with real errors, retry action and cancellation of UI connection; closing the TUI does not delete persisted work.
+- [x] **M01B07** Make configured endpoint versus local Compose behavior explicit; refuse an unreachable/misconfigured store instead of falling back to pretend memory.
 
-**Before branch readiness:** coordinate with Agent A, then complete this milestone’s joint checks in [master section 5](track2-implementation-checklist.md#5-milestone-sequence). Proposed single combined commit: `feat: persist local identity and accepted task authority`.
+**Combined verification update — 15 October 2026:** the original transport dependency is resolved. `init`, explicit `admit`, `inspect` and the plain current-authority TUI run against actual backend routes. The backend bootstrap credential format is supported; request records preserve identity on retries. Initial admission binds six initial/both criteria (the seventh is changed-only), all eight public rules and the manifest digest. Fresh Compose setup, abrupt store kill/restart, actual CLI acceptance/retry/inspection and a PTY TUI/Esc check passed. See [full combined evidence](review/m01-integration-verification.md), [setup](../../docs/local-development.md) and [answered transport agreement](../../docs/m01-contract-agreement.md).
+
+Earlier lane-only test results used stale M00 dist and are superseded by the combined source build. All seven B tasks are now verified. No model calls were made; provider/checker execution remains later work. M01J05 setup documentation is complete but the actual merge remains pending. Proposed combined commit: `feat: persist local identity and accepted task authority`.
 
 ### M02 — One owned provider turn with read-only tools
 

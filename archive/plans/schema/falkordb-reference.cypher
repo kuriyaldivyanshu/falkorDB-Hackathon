@@ -48,6 +48,10 @@ WHERE e.graph_epoch=$graph_epoch AND e.seq>$after_seq
 RETURN e.id,e.seq,e.kind,e.aggregate_id,e.request_id,e.payload_json,e.payload_digest
 ORDER BY e.seq LIMIT 100;
 
+// M01 integration finding (15 October 2026): new-node relationships must share ONE CREATE clause
+// on the observed FalkorDB 6.0.2 build. Created values used in later CREATE clauses failed.
+// The executable M01 admission template is packages/backend/src/storage/graph-queries.ts.
+// This later checkpoint sketch remains UNEXECUTED; do not treat it as M02 implementation.
 // M1: Minimal guarded checkpoint with state + event + request receipt in ONE query.
 // Caller first resolves an existing receipt (R1); uniqueness handles racing duplicates.
 // Core assumes one backend writer, but guards remain inside the atomic mutation.
@@ -72,6 +76,7 @@ WHERE prior IS NULL AND p.graph_epoch=$graph_epoch AND p.status='ready'
   AND t.requirement_revision=$requirement_revision
 SET p.next_event_seq=p.next_event_seq+1,p.generation=p.generation+1,
     t.current_revision=t.current_revision+1
+DELETE old
 CREATE (next:Entity:TaskState {id:$state_id,schema_version:1,created_at_ms:$now_ms,
   producer_id:$actor_id,visibility:'project',task_id:t.id,revision:t.current_revision,
   status:'running',owner_session_id:$session_id,fence:$fence,
@@ -79,21 +84,20 @@ CREATE (next:Entity:TaskState {id:$state_id,schema_version:1,created_at_ms:$now_
   checkpoint_text:$checkpoint_text,checkpoint_source_id:$checkpoint_source_id,
   checkpoint_session_id:$session_id,checkpoint_capture_seq:$covered_capture_seq,
   candidate_digest:$candidate_digest,
-  unresolved_effects:$unresolved_effects})
-CREATE (next)-[:CHECKPOINT_SOURCE {id:$checkpoint_source_edge_id,created_at_ms:$now_ms,producer_id:$actor_id,schema_version:1}]->(cp)
-CREATE (next)-[:PREVIOUS_STATE {id:$previous_edge_id,created_at_ms:$now_ms,producer_id:$actor_id,schema_version:1}]->(s)
-DELETE old
-CREATE (t)-[:CURRENT_STATE {id:$current_edge_id,created_at_ms:$now_ms,producer_id:$actor_id,schema_version:1}]->(next)
-CREATE (e:Entity:Event {id:$event_id,schema_version:1,created_at_ms:$now_ms,
+  unresolved_effects:$unresolved_effects}),
+(next)-[:CHECKPOINT_SOURCE {id:$checkpoint_source_edge_id,created_at_ms:$now_ms,producer_id:$actor_id,schema_version:1}]->(cp),
+(next)-[:PREVIOUS_STATE {id:$previous_edge_id,created_at_ms:$now_ms,producer_id:$actor_id,schema_version:1}]->(s),
+(t)-[:CURRENT_STATE {id:$current_edge_id,created_at_ms:$now_ms,producer_id:$actor_id,schema_version:1}]->(next),
+(e:Entity:Event {id:$event_id,schema_version:1,created_at_ms:$now_ms,
   producer_id:$actor_id,visibility:'project',graph_epoch:$graph_epoch,seq:p.next_event_seq,
   kind:'task.checkpointed',aggregate_id:t.id,request_id:$request_id,
-  payload_digest:$event_payload_digest,payload_json:$event_payload_json,committed_at_ms:$now_ms})
-CREATE (e)-[:CHANGES {id:$changes_edge_id,created_at_ms:$now_ms,producer_id:$actor_id,schema_version:1}]->(next)
-CREATE (r:Entity:RequestReceipt {id:$receipt_id,schema_version:1,created_at_ms:$now_ms,
+  payload_digest:$event_payload_digest,payload_json:$event_payload_json,committed_at_ms:$now_ms}),
+(e)-[:CHANGES {id:$changes_edge_id,created_at_ms:$now_ms,producer_id:$actor_id,schema_version:1}]->(next),
+(r:Entity:RequestReceipt {id:$receipt_id,schema_version:1,created_at_ms:$now_ms,
   producer_id:$actor_id,visibility:'project',graph_epoch:$graph_epoch,request_id:$request_id,
-  request_digest:$request_digest,operation:'memory.checkpoint',event_seq:e.seq,
-  result_json:$result_json,actor_id:$actor_id})
-CREATE (r)-[:COMMITTED_EVENT {id:$receipt_edge_id,created_at_ms:$now_ms,producer_id:$actor_id,schema_version:1}]->(e)
+  request_digest:$request_digest,operation:'memory.checkpoint',event_seq:p.next_event_seq,
+  result_json:$result_json,actor_id:$actor_id}),
+(r)-[:COMMITTED_EVENT {id:$receipt_edge_id,created_at_ms:$now_ms,producer_id:$actor_id,schema_version:1}]->(e)
 RETURN t.id,next.revision,e.seq,r.id;
 
 // If M1 returns no row: resolve receipt, else typed conflict. Never report success.

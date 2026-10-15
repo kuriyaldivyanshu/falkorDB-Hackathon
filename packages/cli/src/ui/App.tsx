@@ -1,7 +1,7 @@
 import { Box, Text, useApp, useInput } from 'ink';
 import { useCallback, useEffect, useReducer, useRef, useState } from 'react';
 
-import type { HealthReport } from '@threadline/shared';
+import type { AuthorityView, HealthReport } from '@threadline/shared';
 
 import type { BackendClient, EventStreamHandle } from '../transport/backend-client.js';
 import { describeCause } from '../transport/errors.js';
@@ -54,15 +54,21 @@ function nextEntryId(): number {
 export interface AppProps {
   readonly client: BackendClient;
   readonly endpoint: string;
+  /** Whether a local owner session is attached. The token is never shown. */
+  readonly authenticated: boolean;
+  /** When the attached session was issued, or null when there is no session. */
+  readonly sessionIssuedAt: string | null;
 }
 
-export function App({ client, endpoint }: AppProps) {
+export function App({ client, endpoint, authenticated, sessionIssuedAt }: AppProps) {
   const { exit } = useApp();
   const [connection, setConnection] = useState<ConnectionView>({
     status: 'connecting',
     attempt: 0,
     detail: '',
   });
+  const [authority,setAuthority] = useState<AuthorityView | null>(null);
+  const [authorityError,setAuthorityError] = useState<string | null>(null);
   const [health, setHealth] = useState<HealthReport | null>(null);
   const [activity, dispatch] = useReducer(activityReducer, { entries: [], dropped: 0 });
   const [input, setInput] = useState('');
@@ -149,6 +155,18 @@ export function App({ client, endpoint }: AppProps) {
       reconnectAttempts.current = 0;
       setConnection({ status: 'connected', attempt: 0, detail: '' });
       record('info', 'client', 'event stream open');
+      setAuthority(null); setAuthorityError(null);
+      if (client.authenticated) {
+        try {
+          const principal=await client.principal();
+          if(principal.projects.length !== 1) throw new Error('Use CLI inspect --project to select a project.');
+          const project=principal.projects[0];
+          if(project) {
+            const view=await client.authority(project.projectId);
+            if(alive.current && streamRef.current===stream) setAuthority(view);
+          }
+        } catch(error) {if(alive.current && streamRef.current===stream) setAuthorityError(describeCause(error));}
+      }
     })();
   }, [client, endpoint, record]);
 
@@ -242,11 +260,25 @@ export function App({ client, endpoint }: AppProps) {
     <Box flexDirection="column">
       <Text bold>Threadline — terminal interface</Text>
       <Text dimColor>
-        M00 scaffold. Commands are process-local and non-durable; nothing here is stored.
+        M01: accepted task authority is durable. The text box sends development-only echo.
       </Text>
       <Box marginY={1} flexDirection="column">
-        <ConnectionStatus endpoint={endpoint} connection={connection} health={health} />
+        <ConnectionStatus
+          endpoint={endpoint}
+          connection={connection}
+          health={health}
+          authenticated={authenticated}
+          sessionIssuedAt={sessionIssuedAt}
+        />
       </Box>
+      {connection.status === 'connected' && authority !== null && <Box flexDirection="column" marginBottom={1}>
+        <Text bold>Task {authority.taskId} — {authority.taskStatus} / revision {authority.taskRevision}</Text>
+        <Text>{authority.goalText.slice(0,800)}{authority.goalText.length > 800 ? ' … (CLI inspect shows full source)' : ''}</Text>
+        {authority.constraints.map(c=><Text key={c.constraintId}>{c.field} = {c.value} / revision {c.revision}</Text>)}
+        {authority.criteria.map(c=><Text key={c.criterionId}>Required={String(c.required)}: {c.ref}</Text>)}
+        <Text dimColor>Source: {authority.sourceMessageIds.join(', ')}</Text>
+      </Box>}
+      {connection.status === 'connected' && authorityError !== null && <Text color="yellow">Authority unavailable: {authorityError}</Text>}
       <Box flexDirection="column">
         <ActivityLog entries={activity.entries} limit={MAX_ACTIVITY_ENTRIES} dropped={activity.dropped} />
       </Box>
@@ -259,7 +291,7 @@ export function App({ client, endpoint }: AppProps) {
           placeholder="text to echo (development-only)"
         />
       </Box>
-      <Text dimColor>Esc or Ctrl+C to quit.</Text>
+      <Text dimColor>Esc or Ctrl+C to disconnect; backend and data remain. Use CLI admit/inspect for durable actions.</Text>
     </Box>
   );
 }

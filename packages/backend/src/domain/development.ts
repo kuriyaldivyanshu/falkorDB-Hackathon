@@ -5,7 +5,7 @@ import {
   type EchoId,
 } from '@threadline/shared';
 
-import type { CommandContext, CommandRegistry } from './dispatcher.js';
+import type { CommandContext, CommandHandler, CommandRegistry } from './dispatcher.js';
 
 /**
  * The M00 development command.
@@ -23,12 +23,16 @@ export type PublishDevelopmentEchoAccepted = (payload: DevelopmentEchoAcceptedPa
 export interface DevelopmentRegistryDeps {
   readonly publishAccepted: PublishDevelopmentEchoAccepted;
   readonly newEchoId?: () => EchoId;
+  /** Registered here so the command registry stays a single composition point. */
+  readonly acceptGoal: CommandHandler<'task.accept_goal'>;
 }
 
 export function createDevelopmentRegistry(deps: DevelopmentRegistryDeps): CommandRegistry {
   const allocateEchoId = deps.newEchoId ?? newEchoId;
 
   return {
+    'task.accept_goal': deps.acceptGoal,
+
     'development.echo': (input, context: CommandContext) => {
       const echoId = allocateEchoId();
       const acceptedAt = context.receivedAt;

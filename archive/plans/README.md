@@ -1,6 +1,6 @@
 # Threadline architecture plan
 
-**Updated 15 October 2026. All implementation, database and runtime contracts are proposed.** This directory consolidates the Track 2 plan and the user's subsequent request for an owned harness. It supersedes native-wrapper-first scope in the historical notes while retaining local npm/TUI delivery.
+**Updated 15 October 2026. M00 and M01 now have implemented and independently verified code; later milestones remain proposed.** This directory consolidates the Track 2 plan and the user's subsequent request for an owned harness. It supersedes native-wrapper-first scope in the historical notes while retaining local npm/TUI delivery.
 
 **Current MVP: two contributors, one Builder, a fresh successor and a protected deterministic service checker.** Start with [the development blueprint](track2-development-blueprint.md), its fixture/contracts and ordered build gates. Eleven model-visible tools; no summarization API. Native subscription/OAuth adapters and investigator spawning are post-hackathon work.
 
@@ -55,4 +55,15 @@ Evidence has its own inspection date. Source review and diagram validation do no
 
 ## M00 implemented scaffold
 
-[Independent M00 integration verification](review/m00-integration-verification.md) records 49 backend and five CLI tests, a real TUI round trip/shutdown check, review fixes and current limitations. Both lane checklists and master M00 status are reconciled. The branch/commit workflow remains pending; active plans live here in `archive/plans`.
+[Independent M00 integration verification](review/m00-integration-verification.md) records 49 backend and five CLI tests, a real TUI round trip/shutdown check, review fixes and current limitations. Both lane checklists and master M00 status are reconciled. The user subsequently merged PR #1 with resolutions into `main` (`ed18168`); active plans live here in `archive/plans`.
+
+## Start M01 with two agents
+
+- [Agent A launch prompt](prompts/track2-m01-agent-a.md): PostgreSQL/FalkorDB adapters, identity/session bootstrap, durable human command admission and current task authority.
+- [Agent B launch prompt](prompts/track2-m01-agent-b.md): local Compose services, dependency configuration, explicit fixture acceptance and plain authenticated CLI/TUI.
+
+Both prompts cover exact task IDs, file ownership, early contract coordination, targeted archive assistance, real-store verification, honest checklist updates and one combined milestone handoff. They preserve M00 review resolutions and require a new baseline check rather than assuming old test evidence covers merged changes.
+
+## M01 combined integration
+
+[Independent M01 verification](review/m01-integration-verification.md) records the resolved session, graph topology, retry, owner-bootstrap and CLI integration defects; actual PostgreSQL/FalkorDB and CLI/TUI evidence; and remaining limits. All M01 A/B tasks and joint J01–J04 are verified. J05 awaits the actual merge workflow. See [working local setup](../../docs/local-development.md) and [implemented protocol agreement](../../docs/m01-contract-agreement.md). No M02 provider execution is claimed.

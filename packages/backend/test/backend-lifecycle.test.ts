@@ -124,7 +124,7 @@ test('stop is idempotent and start cannot be repeated', async () => {
   await backend.stop();
   assert.equal(backend.state, 'stopped');
 
-  await assert.rejects(() => backend.start(), BackendStateError);
+  assert.throws(() => backend.start(), BackendStateError);
 });
 
 test('start rejects a second call while already running', async (t) => {
@@ -133,7 +133,7 @@ test('start rejects a second call while already running', async (t) => {
     await backend.stop();
   });
 
-  await assert.rejects(() => backend.start(), BackendStateError);
+  assert.throws(() => backend.start(), BackendStateError);
   assert.equal(backend.state, 'ready');
 });
 
@@ -165,4 +165,11 @@ test('stopping a backend that never started is still clean', async () => {
 
   assert.equal(backend.state, 'stopped');
   assert.equal(backend.events.closed, true);
+});
+test('stop during asynchronous startup never returns the backend to ready',async()=>{
+ const backend=createBackend({config:parseBackendConfig(testConfigSource())});
+ const starting=backend.start();
+ const rejected=assert.rejects(starting,BackendStateError);
+ await backend.stop();await rejected;
+ assert.equal(backend.state,'stopped');assert.equal(backend.address,null);assert.equal(backend.events.closed,true);
 });

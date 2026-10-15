@@ -30,12 +30,18 @@ import { parseCommandRequest } from './validate.js';
 export interface CommandContext {
   readonly commandId: CommandId;
   readonly receivedAt: string;
+  /**
+   * Raw `Authorization` header of the request being served, or undefined.
+   * It travels with the context rather than through module state, so two
+   * concurrent requests cannot observe each other's credential.
+   */
+  readonly authorization: string | undefined;
 }
 
 export type CommandHandler<C extends CommandName> = (
   input: CommandInput<C>,
   context: CommandContext,
-) => CommandResult<C>;
+) => CommandResult<C> | Promise<CommandResult<C>>;
 
 export type CommandRegistry = {
   readonly [C in CommandName]: CommandHandler<C>;
@@ -52,12 +58,19 @@ export interface CommandDispatcherDeps {
 }
 
 export interface CommandDispatcher {
-  (body: unknown): Promise<CommandOutcome>;
+  (body: unknown, authorization?: string): Promise<CommandOutcome>;
 }
 
 const STATUS_BY_ERROR_CODE = {
   invalid_request: 400,
   unknown_command: 400,
+  unauthorized: 401,
+  not_found: 404,
+  idempotency_mismatch: 409,
+  authority_conflict: 409,
+  authority_unavailable: 409,
+  schema_incompatible: 500,
+  storage_unavailable: 503,
   service_unavailable: 503,
   internal_error: 500,
 } as const satisfies Record<ThreadlineErrorCode, number>;
@@ -67,7 +80,10 @@ export function createCommandDispatcher(deps: CommandDispatcherDeps): CommandDis
   const allocateCommandId = deps.allocateCommandId ?? newCommandId;
   const logger = deps.logger ?? silentLogger;
 
-  return async function dispatch(body: unknown): Promise<CommandOutcome> {
+  return async function dispatch(
+    body: unknown,
+    authorization?: string,
+  ): Promise<CommandOutcome> {
     const receivedAt = clock().toISOString();
     const commandId = allocateCommandId();
 
@@ -87,22 +103,43 @@ export function createCommandDispatcher(deps: CommandDispatcherDeps): CommandDis
     }
 
     try {
-      const result = deps.registry[parsed.parsed.command](
+      const result = await runCommand(
+        deps.registry,
+        parsed.parsed.command,
         parsed.parsed.input,
-        { commandId, receivedAt },
+        { commandId, receivedAt, authorization },
       );
-      const response: CommandResponse = {
+      const response = {
         ok: true,
         protocolVersion: PROTOCOL_VERSION,
         commandId,
         receivedAt,
         result,
-      };
+      } as CommandResponse;
       return { status: 200, body: response };
     } catch (error) {
       return failure(commandId, receivedAt, toPayload(error, logger));
     }
   };
+}
+
+/**
+ * Calls the handler registered for a validated command.
+ *
+ * `CommandRegistry` is a mapped type, so for an unresolved type parameter
+ * TypeScript cannot prove that the handler at `registry[command]` accepts
+ * `CommandInput<C>`. The registry is built only from `CommandName` keys and
+ * `parseCommandRequest` returns a value discriminated on that same union, so
+ * the widening is sound and is confined to this one function.
+ */
+function runCommand<C extends CommandName>(
+  registry: CommandRegistry,
+  command: C,
+  input: CommandInput<C>,
+  context: CommandContext,
+): CommandResult<C> | Promise<CommandResult<C>> {
+  const handler = registry[command] as CommandHandler<C>;
+  return handler(input, context);
 }
 
 function failure(

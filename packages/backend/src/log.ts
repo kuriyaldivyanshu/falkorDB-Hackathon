@@ -11,12 +11,14 @@ export const LOG_LEVELS = ['debug', 'info', 'warn', 'error'] as const;
 
 export type LogLevel = (typeof LOG_LEVELS)[number];
 
-export type LogFieldValue =
-  | string
-  | number
-  | boolean
-  | null
-  | Readonly<Record<string, string | number | boolean | null>>;
+type LogPrimitive = string | number | boolean | null;
+
+/**
+ * Primitives, or a record of them. Nesting is accepted for the allowlisted
+ * configuration summary; `assertLoggable` bounds the depth at runtime so a
+ * recursive object cannot be smuggled into a log record.
+ */
+export type LogFieldValue = LogPrimitive | { readonly [key: string]: LogFieldValue };
 
 export interface LogRecord {
   readonly level: LogLevel;
@@ -39,9 +41,12 @@ export class RedactedLogFieldError extends Error {
   }
 }
 
+const MAX_LOG_FIELD_DEPTH = 4;
+
 function assertLoggable(
   message: string,
   fields: Readonly<Record<string, LogFieldValue>> | undefined,
+  depth = 0,
 ): void {
   if (message.trim().length === 0) {
     throw new TypeError('Log message must not be empty.');
@@ -49,21 +54,20 @@ function assertLoggable(
   if (fields === undefined) {
     return;
   }
+  if (depth > MAX_LOG_FIELD_DEPTH) {
+    throw new TypeError('Log fields are nested too deeply.');
+  }
   for (const [name, value] of Object.entries(fields)) {
-    if (FORBIDDEN_FIELD_PATTERN.test(name)) {
+    if (FORBIDDEN_FIELD_PATTERN.test(name) && !(name === 'passwordConfigured' && typeof value === 'boolean')) {
       throw new RedactedLogFieldError(name);
     }
-    if (
-      value !== null &&
-      typeof value !== 'string' &&
-      typeof value !== 'number' &&
-      typeof value !== 'boolean' &&
-      !(typeof value === 'object' && !Array.isArray(value))
-    ) {
-      throw new TypeError(
-        `Log field "${name}" must be a string, number, boolean, null or a record of those.`,
-      );
+    if (value === null || typeof value !== 'object') {
+      continue;
     }
+    if (Array.isArray(value)) {
+      throw new TypeError(`Log field "${name}" must not be an array.`);
+    }
+    assertLoggable(`${name}.`, value as { readonly [key: string]: LogFieldValue }, depth + 1);
   }
 }
 

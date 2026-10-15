@@ -2,6 +2,7 @@ import { pathToFileURL } from 'node:url';
 
 import { ConfigurationError } from '@threadline/shared';
 
+import { loadLocalEnvironment } from './environment.js';
 import { describeConfig, parseBackendConfig } from './config.js';
 import { createBackend, type Backend } from './index.js';
 import { createJsonLogger } from './log.js';
@@ -21,7 +22,7 @@ export async function main(): Promise<Backend> {
 
   let config;
   try {
-    config = parseBackendConfig({ env: process.env, cwd: process.cwd() });
+    config = parseBackendConfig(loadLocalEnvironment());
   } catch (error) {
     if (error instanceof ConfigurationError) {
       process.stderr.write(`Threadline backend configuration is not usable:\n${error.format()}\n`);

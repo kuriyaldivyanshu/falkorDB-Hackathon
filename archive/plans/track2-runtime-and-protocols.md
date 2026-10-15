@@ -4,6 +4,8 @@
 
 **Proposed contracts, revised 14 October 2026 after adversarial review; not implemented.** Governed by [the owned-harness scope](track2-harness-scope.md) and [final architecture](track2-final-architecture.md). These interfaces describe behavior and failure semantics, not a ready SDK.
 
+**Implemented M01 boundary (15 October 2026):** [the transport agreement](../../docs/m01-contract-agreement.md) gives the actual unprefixed `/commands`, `/events`, local session and project authority/admission routes. The execution kernel below remains a later target; M01 accepts a goal/task without a provider Run.
+
 ## 1. The execution kernel
 
 One `RuntimeSession` executes one role against one task and immutable provider/tool profile. It has an input queue, normalized conversation, cancellation controller, role-specific authorization, context watermark and admitted budget. The durable session store is recoverable truth for visible history; the in-memory conversation is a working projection.
@@ -167,6 +169,8 @@ Notifications and SSE are wakeup mechanisms. Disconnection reconnects using an e
 Outbox retry: transactionally lease a bounded batch with timeout, publish using stable graph operation IDs, acknowledge committed receipts. Failed worker leases expire; a replacement uses the same IDs. Poison/schema-conflicting events enter quarantine with an inspectable reason, and dependent claims stay blocked. No infinite retry of an invalid payload.
 
 ## 10. Local API surface
+
+**Future target, not the current route registry.** M01 actually uses `/healthz`, `/commands`, `/events`, `/auth/session`, `/auth/status`, `/auth/session/revoke` and `/projects/:projectId/{authority,admissions/:requestId}`. There is no anonymous HTTP bootstrap or `/v1` prefix in M01. Use [the tested contract](../../docs/m01-contract-agreement.md); the versioned paths below remain later design proposals.
 
 | Method/path, proposed | Caller | Meaning |
 |---|---|---|

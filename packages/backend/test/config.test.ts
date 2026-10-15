@@ -144,6 +144,7 @@ test('describeConfig exposes an allowlist that cannot grow into a credential lea
     'host',
     'limits',
     'port',
+    'storage',
   ]);
   assert.deepEqual(Object.keys(summary.limits).sort(), [
     'maxCommandTextLength',
@@ -151,9 +152,39 @@ test('describeConfig exposes an allowlist that cannot grow into a credential lea
     'maxEventListeners',
     'maxRequestBodyBytes',
   ]);
-  for (const key of [...Object.keys(summary), ...Object.keys(summary.limits)]) {
+  const everyKey = [
+    ...Object.keys(summary),
+    ...Object.keys(summary.limits),
+    ...Object.keys(summary.storage),
+    ...Object.keys(summary.storage.postgres),
+    ...Object.keys(summary.storage.falkordb),
+    ...Object.keys(summary.storage.local),
+  ];
+  for (const key of everyKey) {
+    // `passwordConfigured` is a boolean about a credential, not a credential.
+    if (key.endsWith('Configured')) {
+      assert.equal(typeof (summary.storage.postgres as Record<string, unknown>)[key], 'boolean');
+      continue;
+    }
     assert.doesNotMatch(key, /(secret|token|password|authorization|credential|key)/i);
   }
+
+  // A configured password is reported as a boolean, never as a value.
+  const withSecret = describeConfig(
+    parseBackendConfig({
+      env: {
+        THREADLINE_STORAGE_MODE: 'required',
+        THREADLINE_PG_DATABASE: 'threadline',
+        THREADLINE_PG_USER: 'threadline',
+        THREADLINE_PG_PASSWORD: 'super-secret-local-value',
+        THREADLINE_FALKORDB_PASSWORD: 'graph-secret',
+      },
+    }),
+  );
+  assert.equal(withSecret.storage.postgres.passwordConfigured, true);
+  assert.equal(withSecret.storage.falkordb.passwordConfigured, true);
+  assert.ok(!JSON.stringify(withSecret).includes('super-secret-local-value'));
+  assert.ok(!JSON.stringify(withSecret).includes('graph-secret'));
 });
 
 function catchConfigurationError(env: Record<string, string>): ConfigurationError {

@@ -150,12 +150,14 @@ The first checkpoint is intentionally a working service/TUI, not a checker/lockf
 - [x] **M00J01** Run the backend and terminal view from the documented commands and observe the actual round trip; no paid model or database required.
 - [x] **M00J02** Check the TypeScript build/import boundaries and shutdown once; do not require a custom linter, checker framework, CI pipeline or coverage target for this increment.
 - [x] **M00J03** Inspect changed files for generated data/secrets and unrelated modifications; preserve the pre-existing dirty documentation work.
-- [ ] **M00J04** Review shared types together, resolve compile mismatches, then use the single-branch procedure in section 4.
+- [x] **M00J04** Review shared types together, resolve compile mismatches, then use the single-branch procedure in section 4.
 
 
-**Independent M00 integration verification — 15 October 2026:** all fourteen A/B tasks verified in the combined tree; M00J01–M00J03 passed. Root `npm test` passed 49 backend + 5 CLI tests, including 25 real CLI exchanges and event-subscription cleanup. Real PTY echo/Esc, disconnect, terminal restoration and backend SIGTERM passed. Fragmented SSE, subscription readiness and capacity rejection defects were fixed with regression evidence. M00J04 remains pending the actual branch/commit workflow. [Full evidence and limitations](review/m00-integration-verification.md).
+**Independent M00 integration verification — 15 October 2026:** all fourteen A/B tasks verified in the combined tree; M00J01–M00J03 passed. Root `npm test` passed 49 backend + 5 CLI tests, including 25 real CLI exchanges and event-subscription cleanup. Real PTY echo/Esc, disconnect, terminal restoration and backend SIGTERM passed. Fragmented SSE, subscription readiness and capacity rejection defects were fixed with regression evidence. M00J04 was pending at that verification snapshot; the user subsequently merged PR #1 with resolutions into `main` (`ed18168`), completing the Git integration step. [Full evidence and limitations](review/m00-integration-verification.md).
 
 ### M01 — Real stores, local identity and one accepted task
+
+**Launch prompts:** [Agent A — persistence/authority](prompts/track2-m01-agent-a.md) and [Agent B — services/CLI](prompts/track2-m01-agent-b.md). Both start from the same merged base and implement M01 only; preserve the merged review resolutions and verify the actual new baseline.
 
 **Depends on:** M00. **Combined result:** A human goal becomes durable SQL source/inbox and guarded graph authority, inspectable from the CLI.
 
@@ -163,32 +165,34 @@ The first checkpoint is intentionally a working service/TUI, not a checker/lockf
 
 #### Variant A — Memory/Coordinator
 
-- [ ] **M01A01** Implement small `pg` and FalkorDB adapters with explicit connection lifecycle, parameterized operations and trusted project-to-graph routing.
-- [ ] **M01A02** Prepare the 31-table FK-closed core bootstrap from the reference DDL; validate real SQL syntax/constraints. Keep the two native/auth extension tables out of startup requirements.
-- [ ] **M01A03** Create only operations used by this trace: local tenant/user membership, project, human session, project message, command inbox, graph project/task/run and accepted criteria. Unused bootstrap tables need no services or screens.
-- [ ] **M01A04** Implement owner-only local bootstrap, random token hashing, session lookup, idle/absolute expiry and revocation. Do not add registration/login pages or remote enrollment.
-- [ ] **M01A05** Persist original human goal plus complete command envelope in one SQL transaction before graph admission; pending, accepted, rejected and unknown are distinct outcomes.
-- [ ] **M01A06** Implement graph readiness, reviewed unique constraints/indexes, epoch identity, request digest and idempotent state/event/receipt mutation. A query sketch is not a production mutation.
-- [ ] **M01A07** Create stable goal/constraint identities and immutable current versions. Missing/duplicate required current versions block authority resolution.
-- [ ] **M01A08** Guard same-request/same-payload retry versus same-request/different-payload conflict. Return exact committed receipt rather than an optimistic UI success.
+- [x] **M01A01** Implement small `pg` and FalkorDB adapters with explicit connection lifecycle, parameterized operations and trusted project-to-graph routing.
+- [x] **M01A02** Prepare the 31-table FK-closed core bootstrap from the reference DDL; validate real SQL syntax/constraints. Keep the two native/auth extension tables out of startup requirements.
+- [x] **M01A03** Create only operations used by this trace: local tenant/user membership, project, human session, project message, command inbox, graph project/task and accepted criteria (execution Run starts at M02). Unused bootstrap tables need no services or screens.
+- [x] **M01A04** Implement owner-only local bootstrap, random token hashing, session lookup, idle/absolute expiry and revocation. Do not add registration/login pages or remote enrollment.
+- [x] **M01A05** Persist original human goal plus complete command envelope in one SQL transaction before graph admission; pending, accepted, rejected and unknown are distinct outcomes.
+- [x] **M01A06** Implement graph readiness, reviewed unique constraints/indexes, epoch identity, request digest and idempotent state/event/receipt mutation. A query sketch is not a production mutation.
+- [x] **M01A07** Create stable goal/constraint identities and immutable current versions. Missing/duplicate required current versions block authority resolution.
+- [x] **M01A08** Guard same-request/same-payload retry versus same-request/different-payload conflict. Return exact committed receipt rather than an optimistic UI success.
 
 #### Variant B — Harness/Frontend
 
-- [ ] **M01B01** Add minimal Docker Compose PostgreSQL/FalkorDB services with explicit persistent volumes and host-local connectivity; do not begin with a deployment platform.
-- [ ] **M01B02** Select compatible development runtime/client/image versions while using them; record observations. Immutable release digests and a polished doctor are later packaging work.
-- [ ] **M01B03** Wire CLI `init` and task admission to the real backend; show pending versus accepted criteria and source IDs.
-- [ ] **M01B04** Load the existing authored fixture manifest as data; let the user explicitly accept its bounded goal/criteria. Do not translate arbitrary prose into hidden tests.
-- [ ] **M01B05** Keep model API credentials unset for this stage. Model and command containers must not receive database credentials later.
-- [ ] **M01B06** Implement a simple backend connection/start/stop view with real errors, retry action and cancellation of UI connection; closing the TUI does not delete persisted work.
-- [ ] **M01B07** Make configured endpoint versus local Compose behavior explicit; refuse an unreachable/misconfigured store instead of falling back to pretend memory.
+- [x] **M01B01** Add minimal Docker Compose PostgreSQL/FalkorDB services with explicit persistent volumes and host-local connectivity; do not begin with a deployment platform.
+- [x] **M01B02** Select compatible development runtime/client/image versions while using them; record observations. Immutable release digests and a polished doctor are later packaging work.
+- [x] **M01B03** Wire CLI `init` and task admission to the real backend; show pending versus accepted criteria and source IDs.
+- [x] **M01B04** Load the existing authored fixture manifest as data; let the user explicitly accept its bounded goal/criteria. Do not translate arbitrary prose into hidden tests.
+- [x] **M01B05** Keep model API credentials unset for this stage. Model and command containers must not receive database credentials later.
+- [x] **M01B06** Implement a simple backend connection/start/stop view with real errors, retry action and cancellation of UI connection; closing the TUI does not delete persisted work.
+- [x] **M01B07** Make configured endpoint versus local Compose behavior explicit; refuse an unreachable/misconfigured store instead of falling back to pretend memory.
 
 #### Joint integration and branch readiness
 
-- [ ] **M01J01** From clean local volumes, admit one fixture goal and inspect its SQL source/inbox, graph current versions and exact receipt.
-- [ ] **M01J02** Restart the backend and confirm the same project/task is read, rather than recreated from frontend state.
-- [ ] **M01J03** Retry admission with the same request ID and then a conflicting payload; observe one mutation and a typed mismatch respectively.
-- [ ] **M01J04** Run one synthetic unauthorized project/source request. Database port binding or an opaque ID alone must not grant access.
+- [x] **M01J01** From clean local volumes, admit one fixture goal and inspect its SQL source/inbox, graph current versions and exact receipt.
+- [x] **M01J02** Restart the backend and confirm the same project/task is read, rather than recreated from frontend state.
+- [x] **M01J03** Retry admission with the same request ID and then a conflicting payload; observe one mutation and a typed mismatch respectively.
+- [x] **M01J04** Run one synthetic unauthorized project/source request. Database port binding or an opaque ID alone must not grant access.
 - [ ] **M01J05** Document the actual setup commands and encountered version limitations; merge only the functioning increment, without requiring future checker/recovery features.
+
+**Combined M01 verification — 15 October 2026:** A01–A08, B01–B07 and J01–J04 verified against real stores and actual CLI/TUI. [Full evidence, resolved defects and limitations](review/m01-integration-verification.md). J05 setup/version documentation is complete; its merge condition remains pending the combined branch/commit/PR workflow. M01 accepts a goal/task without an execution Run or fabricated provider profile; real Run creation starts in M02.
 
 ### M02 — One owned provider turn with read-only tools
 

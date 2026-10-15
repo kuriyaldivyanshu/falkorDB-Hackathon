@@ -97,6 +97,8 @@ test('GET /healthz answers 503 while the backend is not ready', async () => {
     dispatch: stubDispatch,
     publisher,
     health: () => notReady,
+    services: () => null,
+    localBootstrap: () => null,
     logger: silentLogger,
   });
   const address = await server.listen();

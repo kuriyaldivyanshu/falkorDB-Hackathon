@@ -13,6 +13,11 @@ export const BACKEND_ROUTES = {
   health: '/healthz',
   commands: '/commands',
   events: '/events',
+  authSession: '/auth/session',
+  authStatus: '/auth/status',
+  authRevoke: '/auth/session/revoke',
+  authority: '/projects/:projectId/authority',
+  admission: '/projects/:projectId/admissions/:requestId',
 } as const;
 
 export const ACCEPT_EVENT_STREAM = 'text/event-stream';

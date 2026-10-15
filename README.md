@@ -1,8 +1,8 @@
 # FalkorDB Track 2 architecture notes
 
-Snapshot: 15 October 2026. M00 now contains a running local TypeScript backend and terminal client. Persistence, model providers, memory continuity and protected completion remain unimplemented.
+Snapshot: 15 October 2026. M01 now adds real PostgreSQL/FalkorDB storage, local human sessions, durable goal admission and authenticated CLI/TUI inspection. Model/tool execution, memory continuity and protected completion remain unimplemented.
 
-## Run the M00 scaffold
+## Run the local backend and client
 
 ```sh
 npm run build
@@ -15,7 +15,16 @@ node packages/cli/dist/index.js health
 node packages/cli/dist/index.js echo "hello"
 ```
 
-The default endpoint is `http://127.0.0.1:47821`; `--backend <url>` selects another configured local endpoint. Commands/events are development-only and non-durable. See [independent M00 evidence](archive/plans/review/m00-integration-verification.md) and the active [master checklist](archive/plans/track2-implementation-checklist.md). Verification used Node v23.11.0; the planned Node 24 target remains untested.
+The default endpoint is `http://127.0.0.1:47821`; `--backend <url>` selects another configured local endpoint. For durable M01 work, follow [local setup](docs/local-development.md): configure `.env`, start Compose, run `npm run db:setup`, then start the backend. The backend loads root `.env`; the CLI does not.
+
+```sh
+node packages/cli/dist/index.js init
+node packages/cli/dist/index.js fixture
+node packages/cli/dist/index.js admit
+node packages/cli/dist/index.js inspect
+```
+
+`admit` requires explicit consent and retains a durable request record for retries. The TUI shows current accepted task/criteria/source authority. Echo and SSE remain process-local (`replayable=false`). See [M01 integration evidence](archive/plans/review/m01-integration-verification.md), [the implemented contract](docs/m01-contract-agreement.md) and [the master checklist](archive/plans/track2-implementation-checklist.md). Verification used Node v23.11.0; Node 24 remains untested.
 
 ## Hackathon and selected track
 
@@ -51,6 +60,8 @@ The [development blueprint](archive/plans/track2-development-blueprint.md) selec
 The MVP harness owns eleven bounded tools, lifecycle, durable capture, context preparation and coordination. The broader catalog contains fourteen tools, with polling, decision proposal and model-review submission deferred. See the [domain glossary](CONTEXT.md) and [fresh critique/resolutions](archive/plans/review/track2-development-readiness-resolutions.md).
 
 Start implementation with the [code-first master checklist](archive/plans/track2-implementation-checklist.md), split into [Agent A: Memory/Coordinator](archive/plans/track2-agent-a-checklist.md) and [Agent B: Harness/Frontend](archive/plans/track2-agent-b-checklist.md). Write the small runnable backend/TUI first; each milestone combines both lanes into one reviewed branch/commit after integration. Verification, fault evidence and packaging follow the working flow.
+
+M00 was merged with review resolutions. M01 is now combined and independently verified; its merge workflow remains pending. The original launch instructions are the detailed [M01 Agent A prompt](archive/plans/prompts/track2-m01-agent-a.md) and [M01 Agent B prompt](archive/plans/prompts/track2-m01-agent-b.md). Both agents work on M01 from the same merged base and can consult the reference archives when stuck.
 
 **Current recommendation:** TypeScript/Node for the owned harness and local TUI/backend, PostgreSQL for identity and session operations, FalkorDB for connected memory and coordination. Native subscription adapters and investigator spawning are post-hackathon milestones. See [the complete plan](archive/plans/README.md), [harness scope](archive/plans/track2-harness-scope.md).
 

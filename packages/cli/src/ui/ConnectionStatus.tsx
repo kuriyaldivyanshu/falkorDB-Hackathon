@@ -15,6 +15,9 @@ export interface ConnectionStatusProps {
   readonly endpoint: string;
   readonly connection: ConnectionView;
   readonly health: HealthReport | null;
+  /** Whether a local owner session is attached. The token is never rendered. */
+  readonly authenticated: boolean;
+  readonly sessionIssuedAt: string | null;
 }
 
 const STATUS_COLOR = {
@@ -31,7 +34,13 @@ const STATUS_LABEL = {
   disconnected: 'disconnected',
 } as const;
 
-export function ConnectionStatus({ endpoint, connection, health }: ConnectionStatusProps) {
+export function ConnectionStatus({
+  endpoint,
+  connection,
+  health,
+  authenticated,
+  sessionIssuedAt,
+}: ConnectionStatusProps) {
   const attempt =
     connection.attempt > 0 ? ` (attempt ${connection.attempt})` : '';
 
@@ -59,6 +68,17 @@ export function ConnectionStatus({ endpoint, connection, health }: ConnectionSta
           {health.guarantees.note}
         </Text>
       ) : null}
+      {/*
+        Session state is stated, not assumed. An unauthenticated client is still
+        a valid M00 development client, so this is information rather than an
+        error; the token itself never reaches the view.
+      */}
+      <Text dimColor>
+        session {authenticated ? 'credential attached (server validates each durable request)' : 'none (development commands only)'}
+        {authenticated && sessionIssuedAt !== null
+          ? ` · issued ${sessionIssuedAt.slice(0, 19).replace('T', ' ')}Z`
+          : ''}
+      </Text>
     </Box>
   );
 }

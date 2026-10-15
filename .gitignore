@@ -22,3 +22,6 @@ npm-debug.log*
 !.env.example
 *.pem
 *.key
+
+# Agent A live-verification scratch
+.threadline-agentA-test/
