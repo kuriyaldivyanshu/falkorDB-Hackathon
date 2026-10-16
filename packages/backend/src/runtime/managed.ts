@@ -1,3 +1,4 @@
+import { createTacticalTools } from '../tactical/tools.js';
 import { createProviderCapture } from '../capture/provider-capture.js';
 import type { EvidenceReferences } from '@threadline/shared';
 import { randomUUID } from 'node:crypto';
@@ -161,7 +162,21 @@ export function createManagedRuntime(deps: {
                 if (!refs) throw new Error('The durable model identity is unavailable.');
                 return refs;
               } });
-            const loop = createRuntimeLoop({ capture,
+            const checkpoints=deps.services.checkpoints();
+            if (!checkpoints) throw new ThreadlineError('storage_unavailable','Checkpoint service is unavailable.');
+            await checkpoints.evaluateTrigger({tenantId:principal.tenantId,projectId:run.projectId,
+              userId:principal.userId,taskId:run.taskId,runId:run.runId,agentSessionId:run.sessionId},'task_admission');
+            const tactical=createTacticalTools({service:checkpoints,scope:{tenantId:principal.tenantId,
+              projectId:run.projectId,userId:principal.userId,taskId:run.taskId,
+              runId:run.runId,agentSessionId:run.sessionId}});
+            const guarded={...guard,beginTurn:async(...args:Parameters<typeof guard.beginTurn>)=>{
+              await deps.services.flushCapture();
+              const state=await checkpoints.inspect({tenantId:principal.tenantId,projectId:run.projectId,
+                userId:principal.userId,taskId:run.taskId,runId:run.runId,agentSessionId:run.sessionId});
+              if(state.freshness==='blocked'||state.criticalCapturePending)throw new ThreadlineError('authority_conflict','Checkpoint recovery is blocked by a capture gap or overflow.');
+              return guard.beginTurn(...args);
+            }};
+            const loop = createRuntimeLoop({ capture, tactical,
               onJournalled: (prepared, ids) => { evidence.set(prepared.attemptId, ids); },
               onSettled: (prepared, responseArtifactId) => {
                 evidence.set(prepared.attemptId, { ...evidence.get(prepared.attemptId), responseArtifactId });
@@ -170,13 +185,13 @@ export function createManagedRuntime(deps: {
               ? createResponsesDriver({ apiKey: provider.apiKey, baseUrl: provider.baseUrl, sessionId: run.sessionId })
               : provider.providerApi === 'anthropic-messages' ? createAnthropicDriver({ apiKey: provider.apiKey, baseUrl: provider.baseUrl })
               : createChatCompletionsDriver({ apiKey: provider.apiKey, baseUrl: provider.baseUrl, sessionId: run.sessionId })),
-              tools: reader, guard, sink: emit, tools4Provider: MODEL_TOOL_FUNCTIONS,
+              tools: reader, guard:guarded, sink: emit, tools4Provider: MODEL_TOOL_FUNCTIONS,
               ...(sourceRetrieval === undefined ? {} : { sources: sourceRetrieval }) });
             const result = await loop.run({ context, claim, budget: { ...run.budget,
               deadlineMs: Math.max(0, Date.parse(run.budget.deadlineAt) - Date.now()) },
               policy: exec.limits, apiKey: provider.apiKey }, [{ role: 'user', content: JSON.stringify({
                 goal: authority.goalText, constraints: authority.constraints,
-                instruction: 'Inspect the authored candidate using read-only tools. Keep the final report under 300 words, prioritizing concrete defects and source locations. No edits or completion acceptance are available.' }) }], abort.signal);
+                instruction: 'Inspect the authored candidate using read-only tools. Use memory_refresh to inspect current checkpoint state before versioned plan or progress updates. task_update_plan and memory_checkpoint record proposals; a completed plan does not verify or complete the task. Keep the final report under 300 words, prioritizing concrete defects and source locations. No edits or completion acceptance are available.' }) }], abort.signal);
             status = result.stop === 'final_output' ? 'completed' : 'paused';
             emit({ kind: 'run_state', runId: run.runId, state: result.stop, detail: result.reason });
           } catch {

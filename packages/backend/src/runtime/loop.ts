@@ -16,13 +16,16 @@ import type {
   TerminalRecord,
   TerminalSettlement,
   TerminalToolCall,
+  ToolAuthorization,
   ToolIntent,
   ToolResultRecord,
   TurnGuard,
   UsageObservation,
 } from './contracts.js';
 import { WorkspaceError } from '../workspace/read-only.js';
-import { resolveModelTool } from '../capture/tools.js';
+import { isTacticalName, resolveModelTool } from '../capture/tools.js';
+import { TacticalToolError } from '../tactical/tools.js';
+import type { TacticalTools } from '../tactical/tools.js';
 import { SourceRetrievalError } from '../capture/sources.js';
 import type { ReadOnlyToolName } from '../workspace/read-only.js';
 
@@ -81,6 +84,8 @@ export interface RuntimeLoopDeps {
   readonly tools: ReadOnlyToolInvoker;
   /** Optional until M03 Source retrieval is composed; absent means the tool is denied. */
   readonly sources?: SourceToolInvoker;
+  /** Optional until M04 checkpointing is composed; absent means the tool is denied. */
+  readonly tactical?: TacticalTools;
   readonly guard: TurnGuard;
   readonly sink: ActivitySink;
   readonly tools4Provider: readonly FunctionTool[];
@@ -144,7 +149,13 @@ export function createRuntimeLoop(deps: RuntimeLoopDeps): RuntimeLoop {
    * typed result rather than an exception, because the model still needs a tool
    * output to continue and the denial itself is durable evidence.
    */
-  const invokeOne = async (call: TerminalToolCall): Promise<ToolResultRecord> => {
+  /**
+   * `executionId` is the durable identity the guard allocated for this logical
+   * tool call. Tactical submissions carry it as their operation identity, so a
+   * retry of the same invocation reuses it and a different invocation cannot
+   * collide with it.
+   */
+  const invokeOne = async (call: TerminalToolCall, executionId: string): Promise<ToolResultRecord> => {
     const denied = (reason: string): ToolResultRecord => {
       const outputJson = JSON.stringify({ denied: reason });
       return { status: 'denied', outputJson, outputDigest: sha256(outputJson), candidateDigest: null };
@@ -160,6 +171,16 @@ export function createRuntimeLoop(deps: RuntimeLoopDeps): RuntimeLoop {
       return denied('malformed_arguments');
     }
     try {
+      if (isTacticalName(name)) {
+        if (!deps.tactical) return denied('tactical_unavailable');
+        const value = await deps.tactical.invoke(name, parsed, executionId);
+        const outputJson = JSON.stringify(value);
+        if (Buffer.byteLength(JSON.stringify({ ...(value as Record<string, unknown>), evidenceSourceId: '00000000-0000-0000-0000-000000000000' })) > MODEL_TOOL_OUTPUT_MAX_BYTES)
+          return denied('tool_output_limit_exceeded');
+        const publication=(value as Record<string,unknown>)['outcome'];
+        return { status: publication==='rejected'?'denied':publication==='pending'||publication==='ambiguous'?'unknown':'succeeded',
+          outputJson, outputDigest: sha256(outputJson), candidateDigest: null };
+      }
       if (name === 'memory.retrieve') {
         // An absent or unauthorized Source is never a successful empty result.
         if (!deps.sources) return denied('source_retrieval_unavailable');
@@ -175,8 +196,13 @@ export function createRuntimeLoop(deps: RuntimeLoopDeps): RuntimeLoop {
         return denied('tool_output_limit_exceeded');
       return { status: 'succeeded', outputJson, outputDigest: sha256(outputJson), candidateDigest: null };
     } catch (error) {
-      const code = error instanceof WorkspaceError ? error.code : error instanceof SourceRetrievalError ? error.code : 'unavailable';
-      const policy = code === 'path_denied' || code === 'invalid_input' || code === 'unsupported_mode';
+      const code = error instanceof WorkspaceError ? error.code
+        : error instanceof SourceRetrievalError ? error.code
+        : error instanceof TacticalToolError ? error.code
+        : 'unavailable';
+      // A server-owned field and an out-of-shape value are policy denials; a
+      // limit or an unavailable service is not, and stays a failure.
+      const policy = code === 'path_denied' || code === 'invalid_input' || code === 'unsupported_mode' || code === 'server_owned_field';
       const outputJson = JSON.stringify({ error: code });
       return {
         status: policy ? 'denied' : 'failed',
@@ -381,8 +407,11 @@ export function createRuntimeLoop(deps: RuntimeLoopDeps): RuntimeLoop {
               toolName: call.toolName,
               argumentsJson: call.argumentsJson,
             };
+            let authorization: ToolAuthorization;
             try {
-              await guard.authorizeTool(intent);
+              // The returned execution id is the durable anchor for this logical
+              // call; a retry of the same intent resolves the same one.
+              authorization = await guard.authorizeTool(intent);
             } catch (error) {
               sink({ kind: 'tool_state', callId: call.callId, toolName: call.toolName, state: 'denied' });
               return outcome('blocked', `tool_not_authorized: ${describe(error)}`, {
@@ -393,7 +422,7 @@ export function createRuntimeLoop(deps: RuntimeLoopDeps): RuntimeLoop {
             releasedToolCalls += 1;
 
             sink({ kind: 'tool_state', callId: call.callId, toolName: call.toolName, state: 'running' });
-            const result = await invokeOne(call);
+            const result = await invokeOne(call, authorization.toolExecutionId);
             try {
               await guard.recordToolResult(intent, result);
             } catch (error) {
@@ -405,6 +434,7 @@ export function createRuntimeLoop(deps: RuntimeLoopDeps): RuntimeLoop {
             }
             sink({ kind: 'tool_state', callId: call.callId, toolName: call.toolName, state: result.status });
 
+            if(result.status==='unknown')return outcome('blocked','tool_outcome_requires_reconciliation',{blockedOnReconciliation:true});
             history = [
               ...history,
               { type: 'function_call_output', call_id: call.callId, output: result.outputJson },

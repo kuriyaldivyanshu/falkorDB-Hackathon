@@ -1,6 +1,6 @@
 # Threadline code-first implementation checklist
 
-**Updated 16 October 2026. M00–M02 are merged; M03 is locally integrated and verified. M04 onward remain proposed. Two full-time contributors.** This is the execution checklist for the complete `archive/plans/` collection. It changes build order following the user's instruction: **start with working backend/frontend code, then persistence and the model/tool flow, then containment, protected verification, recovery evidence and packaging.** The [development blueprint](track2-development-blueprint.md) still controls product scope and trust contracts; this checklist supersedes its preflight-first sequencing only.
+**Updated 16 October 2026. M00–M03 are merged; M04 is locally integrated and verified. M05 onward remain proposed. Two full-time contributors.** This is the execution checklist for the complete `archive/plans/` collection. It changes build order following the user's instruction: **start with working backend/frontend code, then persistence and the model/tool flow, then containment, protected verification, recovery evidence and packaging.** The [development blueprint](track2-development-blueprint.md) still controls product scope and trust contracts; this checklist supersedes its preflight-first sequencing only.
 
 Implementation boxes start unchecked and are updated only from verified evidence. A plan, stub, diagram or passing documentation check does not finish a runtime task. Use actual code/output/evidence before checking a box. No Git branch, commit, push, merge, package publication or implementation is performed by creating this document.
 
@@ -115,6 +115,8 @@ Before a merge or branch switch later, ensure any remaining unrelated work is pr
 ## 5. Milestone sequence
 
 Milestones M00–M13 form the MVP path. Work inside a milestone is parallel where file ownership and inputs allow. The joint block finishes the batch and triggers the section 4 workflow. Later milestones may be developed behind disabled interfaces, but their acceptance depends on the stated earlier features.
+
+Human commands ship alongside backend capabilities under the [terminal command and UI contract](track2-terminal-command-contract.md); follow its M05.1–M05.3 integration slices. M10 consolidates already-working controls rather than first adding them. New command gates are unchecked additions, not changes to historical M04 acceptance.
 
 The first checkpoint is intentionally a working service/TUI, not a checker/lockfile/preflight project. M02 starts with real read-only model tools. Actual command exposure is M06; protected completion is M08. No calendar estimate is imposed without a deadline.
 
@@ -282,31 +284,33 @@ The first checkpoint is intentionally a working service/TUI, not a checker/lockf
 
 #### Variant A — Memory/Coordinator
 
-- [ ] **M04A01** Implement runtime validation for `memory-checkpoint.schema.json` and `memory-episode.schema.json`; TypeScript declarations alone are insufficient at the boundary.
-- [ ] **M04A02** Build checkpoint manifests from trusted authority, candidate/environment identity, meaningful captured outcomes, unresolved effects and pending questions.
-- [ ] **M04A03** Maintain exact immutable checkpoint Source, TaskState pointer and CHECKPOINT_SOURCE edge atomically with state/event/receipt updates.
-- [ ] **M04A04** Track unique `(session_id, covered_capture_seq)` entries separately from graph-admission cursors; validate covered position never exceeds admitted/available evidence.
-- [ ] **M04A05** Implement automatic checkpoints for admission, accepted changes, mutating/registered-command terminal outcomes, failure, unknown effects and safe handoff; fallback after five meaningful uncheckpointed events.
-- [ ] **M04A06** Exclude checkpoint-publication events from their own checkpoint trigger; coalesce routine read/search activity without dropping its captured records.
-- [ ] **M04A07** Implement versioned plan/checkpoint patch merge that preserves unrelated progress, Sources and unresolved effects, and rejects conflicting stale updates.
-- [ ] **M04A08** Reconstruct structured state deterministically when the model provides no narrative recap. Model prose remains an attributed proposal, never accepted proof.
+- [x] **M04A01** Implement runtime validation for `memory-checkpoint.schema.json` and `memory-episode.schema.json`; TypeScript declarations alone are insufficient at the boundary.
+- [x] **M04A02** Build checkpoint manifests from trusted authority, candidate/environment identity, meaningful captured outcomes, unresolved effects and pending questions.
+- [x] **M04A03** Maintain exact immutable checkpoint Source, TaskState pointer and CHECKPOINT_SOURCE edge atomically with state/event/receipt updates.
+- [x] **M04A04** Track unique `(session_id, covered_capture_seq)` entries separately from graph-admission cursors; validate covered position never exceeds admitted/available evidence.
+- [x] **M04A05** Implement automatic checkpoints for admission, accepted changes, mutating/registered-command terminal outcomes, failure, unknown effects and safe handoff; fallback after five meaningful uncheckpointed events.
+- [x] **M04A06** Exclude checkpoint-publication events from their own checkpoint trigger; coalesce routine read/search activity without dropping its captured records.
+- [x] **M04A07** Implement versioned plan/checkpoint patch merge that preserves unrelated progress, Sources and unresolved effects, and rejects conflicting stale updates.
+- [x] **M04A08** Reconstruct structured state deterministically when the model provides no narrative recap. Model prose remains an attributed proposal, never accepted proof.
 
 #### Variant B — Harness/Frontend
 
-- [ ] **M04B01** Implement `memory.checkpoint` with bounded progress/next-action/plan patches; server-owned coverage/authority fields cannot be overridden by model input.
-- [ ] **M04B02** Implement `task.update_plan`: at most eight steps, one in progress, stable step IDs and allowed transitions; all-completed checklist does not imply verified task completion.
-- [ ] **M04B03** Implement `memory.refresh` to return a current binding/packet status and distinguish ready, stale, blocked and capture-pending.
-- [ ] **M04B04** Add plain TUI current checklist, next action, blocker and checkpoint/source inspection; avoid duplicated frontend task-state mutation logic.
-- [ ] **M04B05** Provide a durable source link for each accepted checklist update and display conflict/retry guidance without hiding stale revisions.
-- [ ] **M04B06** Give Agent A actual tool result fields needed by deterministic episode/checkpoint generation; do not use hand-crafted success strings as observations.
+- [x] **M04B01** Implement `memory.checkpoint` with bounded progress/next-action/plan patches; server-owned coverage/authority fields cannot be overridden by model input.
+- [x] **M04B02** Implement `task.update_plan`: at most eight steps, one in progress, stable step IDs and allowed transitions; all-completed checklist does not imply verified task completion.
+- [x] **M04B03** Implement `memory.refresh` to return a current binding/packet status and distinguish ready, stale, blocked and capture-pending.
+- [x] **M04B04** Add plain TUI current checklist, next action, blocker and checkpoint/source inspection; avoid duplicated frontend task-state mutation logic.
+- [x] **M04B05** Provide a durable source link for each accepted checklist update and display conflict/retry guidance without hiding stale revisions.
+- [x] **M04B06** Give Agent A actual tool result fields needed by deterministic episode/checkpoint generation; do not use hand-crafted success strings as observations.
 
 #### Joint integration and branch readiness
 
-- [ ] **M04J01** Inject a protocol fault immediately after durable failure capture and before a voluntary checkpoint; deterministic recovery preserves the failure and progress. The actual isolated-command/session kill trace follows in M07/M11.
-- [ ] **M04J02** Interleave plan and progress patches under the same revision; no unrelated field is lost and stale writes are rejected.
-- [ ] **M04J03** Check the four-stream bound equals initial session plus three permitted replacements, without comparing sequences from different sessions.
-- [ ] **M04J04** Verify a checkpoint does not trigger infinite checkpoint capture or any extra summarization model request.
-- [ ] **M04J05** Inspect exact manifest bytes and task pointer together, with all listed Sources resolvable and authorized.
+- [x] **M04J01** Inject a protocol fault immediately after durable failure capture and before a voluntary checkpoint; deterministic recovery preserves the failure and progress. The actual isolated-command/session kill trace follows in M07/M11.
+- [x] **M04J02** Interleave plan and progress patches under the same revision; no unrelated field is lost and stale writes are rejected.
+- [x] **M04J03** Check the four-stream bound equals initial session plus three permitted replacements, without comparing sequences from different sessions.
+- [x] **M04J04** Verify a checkpoint does not trigger infinite checkpoint capture or any extra summarization model request.
+- [x] **M04J05** Inspect exact manifest bytes and task pointer together, with all listed Sources resolvable and authorized.
+
+**Integration verified — 16 October 2026:** all 19 M04 A/B/joint checkpoints are closed on executed evidence. See [M04 integration and commands](review/m04-integration-verification.md) for 94 focused cases, 26 real-store/terminal scenarios, exact Source publication, receipt recovery, automatic policy, coverage and scope limits. M06/M07 trigger producers remain deferred; their M04 service seams were exercised synthetically. No paid inference or Git publication occurred.
 
 ### M05 — Bounded graph retrieval and context construction
 
@@ -344,6 +348,20 @@ The first checkpoint is intentionally a working service/TUI, not a checker/lockf
 - [ ] **M05J04** Run repeated refresh/search and observe bounded packet/input usage with no extra summarizer call.
 - [ ] **M05J05** Compare compatible advice versus stale proof on a changed candidate/requirement; only exact current evidence can be accepted later.
 
+
+#### Incremental terminal contract — additional gates
+
+See [command behavior, backend dependencies and Pi reuse](track2-terminal-command-contract.md). These new gates are proposed; prior completion marks do not cover them.
+
+- [ ] **M05A10** Publish versioned authenticated operation-capability metadata and typed client bindings for the M05 command catalog; reuse existing routes and preserve per-call authorization.
+- [ ] **M05A11** Implement authorized model/profile discovery and prospective immutable profile selection; prepare/start binds selected provider/model/billing/limits, denies stale selection and never changes an active run or probes paid inference automatically.
+- [ ] **M05A12** Expose existing checkpoint/plan/recovery plus bounded refresh/context/compact/search through explicit typed human operations; define durable plain-text/follow-up admission, refusal while busy, and initial instruction Sources without silently accepting requirement changes.
+- [ ] **M05B08** Implement the small command registry, typed parser, generated /help and /hotkeys, capability-aware prefix completion and unknown-slash rejection; use Pi catalog/completion patterns with Ink, not its runtime.
+- [ ] **M05B09** Wire all M05 commands in the terminal command contract: setup/model, init/admit/task/status/session, run prepare/start/inspect/cancel, tactical/checkpoint/plan/recover, refresh/context/compact/search/source/history/replay and quit; share typed clients with CLI and preserve existing aliases.
+- [ ] **M05B10** Build reusable Ink selector/forms and compact header/activity/inspector/input layout; model selection is prospective, mutations preserve stable retry IDs/base revisions, and masked credentials never enter history.
+- [ ] **M05B11** Replace normal TUI development echo with durable explicit /send and plain-text instruction semantics; show inference consent/billing, refuse unsupported busy follow-up, retain drafts and never send unknown slash input to a model.
+- [ ] **M05J06** Verify each M05 command through real backend/client/TUI composition, help/completion availability, selected-model start binding, zero inference on read/compact/setup, authorization, exact retries, stale conflicts, bounded context and actual terminal restoration; publish implemented versus planned command inventory.
+
 ### M06 — Guarded patches, snapshots and contained registered commands
 
 **Depends on:** M02–M05; containment proof before effectful tool exposure. **Combined result:** Actual bounded edits and command outcomes, with no credential/network/path escape and honest cancellation.
@@ -380,6 +398,15 @@ The first checkpoint is intentionally a working service/TUI, not a checker/lockf
 - [ ] **M06J04** Hit timeout/log/scratch/snapshot limits and observe bounded stopped/unknown outcomes rather than unbounded buffers.
 - [ ] **M06J05** Expose effectful tools only after these boundaries work on the declared target. Implementing their code is allowed earlier; unsafe exposure is not a completion criterion.
 
+
+#### Incremental terminal contract — additional gates
+
+See [command behavior, backend dependencies and Pi reuse](track2-terminal-command-contract.md). These new gates are proposed; prior completion marks do not cover them.
+
+- [ ] **M06A09** Publish ordered stop/pause and authorized bounded candidate-diff/log operations for /stop, /pause, /diff and /logs; cancellation-requested, confirmed stopped and unknown remain distinct.
+- [ ] **M06B10** Wire /stop, /pause, /diff and /logs as contained execution lands, aligning /run cancel; keep view detach separate from process termination and preserve bounded output/cursors.
+- [ ] **M06J06** Exercise terminal lifecycle commands during actual contained execution: pause boundary, stop/reap, unknown termination, diff authorization and log gaps; closing the UI never claims termination.
+
 ### M07 — Human changes, clarification and fresh successor
 
 **Depends on:** M04–M06; provider/capture/request identities already integrated. **Combined result:** Current human intent survives interruption and a fresh empty-conversation session resumes under new authority.
@@ -415,6 +442,15 @@ The first checkpoint is intentionally a working service/TUI, not a checker/lockf
 - [ ] **M07J04** Answer a stale/duplicated question and test a pending question survives frontend/service restart; no invented human acceptance.
 - [ ] **M07J05** Show changed freshness in the fresh submitted input and historical failure provenance, while excluding the old transcript and unauthorized context.
 
+
+#### Incremental terminal contract — additional gates
+
+See [command behavior, backend dependencies and Pi reuse](track2-terminal-command-contract.md). These new gates are proposed; prior completion marks do not cover them.
+
+- [ ] **M07A09** Publish authorized session listing and explicit reattach/resume/fresh semantics plus change/answer operations; /new creates a guarded successor for the accepted task, /resume never revives retired authority or retries unknown dispatch.
+- [ ] **M07B08** Wire /change, /answer, /new and /resume with normalized acceptance, session picker, fresh-successor confirmation and visible progress; distinguish task creation (/admit), view reattach and inference continuation.
+- [ ] **M07J06** Prove /new uses a new session/fence and bounded context, /resume enforces reconciled current authority, and change/answer retry/restart behavior survives actual TUI disconnect without duplicate inference.
+
 ### M08 — Protected checker and current-evidence completion
 
 **Depends on:** M06–M07; deliberately after working application code. **Combined result:** Only actual protected evidence for the current candidate/criteria/environment can complete the task.
@@ -448,6 +484,15 @@ The first checkpoint is intentionally a working service/TUI, not a checker/lockf
 - [ ] **M08J04** Run completion race with candidate/requirement change during check; matching current bindings are required at acceptance.
 - [ ] **M08J05** Confirm unknown termination/missing source/failed criteria cannot become completed task, even with all checklist steps done or a confident model response.
 
+
+#### Incremental terminal contract — additional gates
+
+See [command behavior, backend dependencies and Pi reuse](track2-terminal-command-contract.md). These new gates are proposed; prior completion marks do not cover them.
+
+- [ ] **M08A09** Expose typed human verification/completion/evidence operations backed by the same protected checker and guarded acceptance used by model tools; preserve candidate/criteria/environment binding.
+- [ ] **M08B08** Wire /verify, /complete and /evidence with real protected receipt Sources and explicit accepted/rejected/blocked/historical states; a checked plan cannot complete the task.
+- [ ] **M08J06** Run terminal verify/complete/evidence against current and stale candidates and requirements; neither UI state nor a model claim can bypass protected acceptance.
+
 ### M09 — Sourced procedural memory and semantic reuse
 
 **Depends on:** M05 and M08. **Combined result:** A procedure is created from real success, tried under explicit policy and validated from a distinct compatible run.
@@ -480,6 +525,13 @@ The first checkpoint is intentionally a working service/TUI, not a checker/lockf
 - [ ] **M09J03** Reject wrong output contract, incompatible environment and inaccessible Source discovery; conditional advice never qualifies as completion proof.
 - [ ] **M09J04** Record a reuse failure and show it changes applicable advice without deleting the original observation.
 
+
+#### Incremental terminal contract — additional gates
+
+See [command behavior, backend dependencies and Pi reuse](track2-terminal-command-contract.md). These new gates are proposed; prior completion marks do not cover them.
+
+- [ ] **M09B07** Extend existing /search, /context and /evidence inspectors with procedure applicability, prerequisites and supporting/trial receipts; avoid adding an unnecessary procedure-management command.
+
 ### M10 — Simple complete TUI and local API behavior
 
 **Depends on:** Incremental frontend work starts M00; final integration after M07–M09. **Combined result:** A complete plain local user journey backed by authoritative persisted data.
@@ -511,6 +563,15 @@ The first checkpoint is intentionally a working service/TUI, not a checker/lockf
 - [ ] **M10J02** Attempt unauthenticated local commands and cross-project Source reads; local address alone is not an access grant.
 - [ ] **M10J03** Use a small terminal and keyboard-only controls, verify pending question/source view and a visible error can be handled without a mouse or color cue.
 - [ ] **M10J04** Check frontend imports contain no SQL/graph clients, API credential handling or task authority implementation.
+
+
+#### Incremental terminal contract — additional gates
+
+See [command behavior, backend dependencies and Pi reuse](track2-terminal-command-contract.md). These new gates are proposed; prior completion marks do not cover them.
+
+- [ ] **M10A07** Audit command capability/transport coverage against the terminal contract and close remaining integration inconsistencies; core M05–M08 operations must already ship in their milestones.
+- [ ] **M10B08** Consolidate the already-delivered command catalog/layout, help, focus, narrow-terminal behavior and errors; do not defer initial /model, /compact, lifecycle or fresh/resume implementation to this milestone.
+- [ ] **M10J05** Walk the complete command-driven journey from setup/model selection through admission, tools, compact/recovery, changed requirements, fresh/resume and protected completion; reconcile actual help/availability with backend capability metadata.
 
 ### M11 — Recovery, scope and resource acceptance suite
 
@@ -607,6 +668,14 @@ The first checkpoint is intentionally a working service/TUI, not a checker/lockf
 - [ ] **M13J02** Verify normal startup requires neither OAuth/native tables nor polling/review/spawn modules; unsupported features remain disabled and described as deferred.
 - [ ] **M13J03** Attach required-case evidence and actual supported versions/platforms. Merge/push preparation follows section 4; package publication is a separate action.
 - [ ] **M13J04** Keep root/plans indexes, reading view, Mermaid and local SVG exports aligned with implemented scope; remote Figma mutation requires the applicable instruction, not this checklist alone.
+
+
+#### Incremental terminal contract — additional gates
+
+See [command behavior, backend dependencies and Pi reuse](track2-terminal-command-contract.md). These new gates are proposed; prior completion marks do not cover them.
+
+- [ ] **M13A07** Expose packaged bounded doctor diagnostics using backend/provider-profile readiness without automatic paid probes.
+- [ ] **M13B09** Wire /doctor to the same packaged diagnostics as CLI doctor; verify clean-install help, capabilities and command inventory without archive runtime dependencies.
 
 ## 6. Final eleven-tool completeness audit
 

@@ -1,6 +1,6 @@
 # Threadline Agent B checklist — Harness and Frontend
 
-**15 October 2026. Proposed implementation work; all tasks initially unexecuted.** This is one lane of the [master code-first checklist](track2-implementation-checklist.md), not a separate product or branch. Read master sections 1–4 before editing. Use the same task IDs in your handoff. Master status is authoritative; reconcile this lane view at each milestone.
+**Updated 16 October 2026. M00–M03 are merged; M04 is locally integrated and verified. M05 onward remain proposed.** This is one lane of the [master code-first checklist](track2-implementation-checklist.md), not a separate product or branch. Read master sections 1–4 before editing. Use the same task IDs in your handoff. Master status is authoritative; reconcile this lane view at each milestone.
 
 Work beside [Agent A](track2-agent-a-checklist.md) from the same recorded base and integration checkout. Do not create branches, commit, push, reset or merge during parallel coding. The integration owner creates one combined branch/commit only after both lanes and joint checks are ready.
 
@@ -104,16 +104,16 @@ Earlier lane-only test results used stale M00 dist and are superseded by the com
 
 ### M04 — Structured checkpoints and tactical state
 
-**Depends on:** M03. **Combined milestone result:** Current progress/checklist is source-backed, with exact per-session coverage and automatic failure-safe persistence.
+**Integrated and verified — 16 October 2026, from `a2fe8a2`.** The earlier partial handoff and missing-composition blockers are resolved.
 
-- [ ] **M04B01** Implement `memory.checkpoint` with bounded progress/next-action/plan patches; server-owned coverage/authority fields cannot be overridden by model input.
-- [ ] **M04B02** Implement `task.update_plan`: at most eight steps, one in progress, stable step IDs and allowed transitions; all-completed checklist does not imply verified task completion.
-- [ ] **M04B03** Implement `memory.refresh` to return a current binding/packet status and distinguish ready, stale, blocked and capture-pending.
-- [ ] **M04B04** Add plain TUI current checklist, next action, blocker and checkpoint/source inspection; avoid duplicated frontend task-state mutation logic.
-- [ ] **M04B05** Provide a durable source link for each accepted checklist update and display conflict/retry guidance without hiding stale revisions.
-- [ ] **M04B06** Give Agent A actual tool result fields needed by deterministic episode/checkpoint generation; do not use hand-crafted success strings as observations.
+- [x] **M04B01** Implement `memory.checkpoint` with bounded progress/next-action/plan patches; server-owned coverage/authority fields cannot be overridden by model input.
+- [x] **M04B02** Implement `task.update_plan`: at most eight steps, one in progress, stable step IDs and allowed transitions; all-completed checklist does not imply verified task completion.
+- [x] **M04B03** Implement `memory.refresh` to return a current binding/packet status and distinguish ready, stale, blocked and capture-pending.
+- [x] **M04B04** Add plain TUI current checklist, next action, blocker and checkpoint/source inspection; avoid duplicated frontend task-state mutation logic.
+- [x] **M04B05** Provide a durable source link for each accepted checklist update and display conflict/retry guidance without hiding stale revisions.
+- [x] **M04B06** Give Agent A actual tool result fields needed by deterministic episode/checkpoint generation; do not use hand-crafted success strings as observations.
 
-**Before branch readiness:** coordinate with Agent A, then complete this milestone’s joint checks in [master section 5](track2-implementation-checklist.md#5-milestone-sequence). Proposed single combined commit: `feat: persist structured checkpoints with capture coverage`.
+[M04 executed evidence and working commands](review/m04-integration-verification.md) record 94 focused cases and 26 real-store/terminal scenarios. This includes production seven-tool dispatch, guarded immutable TaskState/Source publication, receipt reconciliation, concurrent patch refusal/retry, automatic triggers, bounded recovery, unknown-effect preservation, authorization, four streams and actual PTY states. M06/M07 producers remain future work; their trigger seams were exercised with synthetic observations. No paid inference, permanent suites or Git publication.
 
 ### M05 — Bounded graph retrieval and context construction
 
@@ -128,6 +128,16 @@ Earlier lane-only test results used stale M00 dist and are superseded by the com
 - [ ] **M05B07** Test request rendering with many individually small retrieval calls so cumulative growth cannot bypass the next input limit.
 
 **Before branch readiness:** coordinate with Agent A, then complete this milestone’s joint checks in [master section 5](track2-implementation-checklist.md#5-milestone-sequence). Proposed single combined commit: `feat: assemble bounded task context from graph memory`.
+
+
+#### Incremental terminal contract — additional gates
+
+See [command behavior, backend dependencies and Pi reuse](track2-terminal-command-contract.md). These new gates are proposed; prior completion marks do not cover them.
+
+- [ ] **M05B08** Implement the small command registry, typed parser, generated /help and /hotkeys, capability-aware prefix completion and unknown-slash rejection; use Pi catalog/completion patterns with Ink, not its runtime.
+- [ ] **M05B09** Wire all M05 commands in the terminal command contract: setup/model, init/admit/task/status/session, run prepare/start/inspect/cancel, tactical/checkpoint/plan/recover, refresh/context/compact/search/source/history/replay and quit; share typed clients with CLI and preserve existing aliases.
+- [ ] **M05B10** Build reusable Ink selector/forms and compact header/activity/inspector/input layout; model selection is prospective, mutations preserve stable retry IDs/base revisions, and masked credentials never enter history.
+- [ ] **M05B11** Replace normal TUI development echo with durable explicit /send and plain-text instruction semantics; show inference consent/billing, refuse unsupported busy follow-up, retain drafts and never send unknown slash input to a model.
 
 ### M06 — Guarded patches, snapshots and contained registered commands
 
@@ -145,6 +155,13 @@ Earlier lane-only test results used stale M00 dist and are superseded by the com
 
 **Before branch readiness:** coordinate with Agent A, then complete this milestone’s joint checks in [master section 5](track2-implementation-checklist.md#5-milestone-sequence). Proposed single combined commit: `feat: execute guarded patches and isolated registered commands`.
 
+
+#### Incremental terminal contract — additional gates
+
+See [command behavior, backend dependencies and Pi reuse](track2-terminal-command-contract.md). These new gates are proposed; prior completion marks do not cover them.
+
+- [ ] **M06B10** Wire /stop, /pause, /diff and /logs as contained execution lands, aligning /run cancel; keep view detach separate from process termination and preserve bounded output/cursors.
+
 ### M07 — Human changes, clarification and fresh successor
 
 **Depends on:** M04–M06; provider/capture/request identities already integrated. **Combined milestone result:** Current human intent survives interruption and a fresh empty-conversation session resumes under new authority.
@@ -158,6 +175,13 @@ Earlier lane-only test results used stale M00 dist and are superseded by the com
 - [ ] **M07B07** Avoid forcing a new edit after freshness changes if the candidate already handles current parameters; stale proof still requires a new current check.
 
 **Before branch readiness:** coordinate with Agent A, then complete this milestone’s joint checks in [master section 5](track2-implementation-checklist.md#5-milestone-sequence). Proposed single combined commit: `feat: recover fresh sessions under current requirements`.
+
+
+#### Incremental terminal contract — additional gates
+
+See [command behavior, backend dependencies and Pi reuse](track2-terminal-command-contract.md). These new gates are proposed; prior completion marks do not cover them.
+
+- [ ] **M07B08** Wire /change, /answer, /new and /resume with normalized acceptance, session picker, fresh-successor confirmation and visible progress; distinguish task creation (/admit), view reattach and inference continuation.
 
 ### M08 — Protected checker and current-evidence completion
 
@@ -173,6 +197,13 @@ Earlier lane-only test results used stale M00 dist and are superseded by the com
 
 **Before branch readiness:** coordinate with Agent A, then complete this milestone’s joint checks in [master section 5](track2-implementation-checklist.md#5-milestone-sequence). Proposed single combined commit: `feat: accept completion from protected current verification`.
 
+
+#### Incremental terminal contract — additional gates
+
+See [command behavior, backend dependencies and Pi reuse](track2-terminal-command-contract.md). These new gates are proposed; prior completion marks do not cover them.
+
+- [ ] **M08B08** Wire /verify, /complete and /evidence with real protected receipt Sources and explicit accepted/rejected/blocked/historical states; a checked plan cannot complete the task.
+
 ### M09 — Sourced procedural memory and semantic reuse
 
 **Depends on:** M05 and M08. **Combined milestone result:** A procedure is created from real success, tried under explicit policy and validated from a distinct compatible run.
@@ -185,6 +216,13 @@ Earlier lane-only test results used stale M00 dist and are superseded by the com
 - [ ] **M09B06** Disclose that template and fixture family were authored and held-out specification is published, so this is not a statistically independent benchmark.
 
 **Before branch readiness:** coordinate with Agent A, then complete this milestone’s joint checks in [master section 5](track2-implementation-checklist.md#5-milestone-sequence). Proposed single combined commit: `feat: validate sourced procedures through compatible reuse`.
+
+
+#### Incremental terminal contract — additional gates
+
+See [command behavior, backend dependencies and Pi reuse](track2-terminal-command-contract.md). These new gates are proposed; prior completion marks do not cover them.
+
+- [ ] **M09B07** Extend existing /search, /context and /evidence inspectors with procedure applicability, prerequisites and supporting/trial receipts; avoid adding an unnecessary procedure-management command.
 
 ### M10 — Simple complete TUI and local API behavior
 
@@ -199,6 +237,13 @@ Earlier lane-only test results used stale M00 dist and are superseded by the com
 - [ ] **M10B07** Ensure UI memory use stays bounded with long streams, invalid events and repeated reconnection; no need for an elaborate graph visualization.
 
 **Before branch readiness:** coordinate with Agent A, then complete this milestone’s joint checks in [master section 5](track2-implementation-checklist.md#5-milestone-sequence). Proposed single combined commit: `feat: complete terminal task and evidence workflow`.
+
+
+#### Incremental terminal contract — additional gates
+
+See [command behavior, backend dependencies and Pi reuse](track2-terminal-command-contract.md). These new gates are proposed; prior completion marks do not cover them.
+
+- [ ] **M10B08** Consolidate the already-delivered command catalog/layout, help, focus, narrow-terminal behavior and errors; do not defer initial /model, /compact, lifecycle or fresh/resume implementation to this milestone.
 
 ### M11 — Recovery, scope and resource acceptance suite
 
@@ -241,6 +286,13 @@ Earlier lane-only test results used stale M00 dist and are superseded by the com
 - [ ] **M13B08** Recheck current official submission requirements at submission time; include actual repository/setup/video/evidence and assistance disclosure where required, without relying solely on historical notes.
 
 **Before branch readiness:** coordinate with Agent A, then complete this milestone’s joint checks in [master section 5](track2-implementation-checklist.md#5-milestone-sequence). Proposed single combined commit: `feat: package local harness with setup diagnostics`.
+
+
+#### Incremental terminal contract — additional gates
+
+See [command behavior, backend dependencies and Pi reuse](track2-terminal-command-contract.md). These new gates are proposed; prior completion marks do not cover them.
+
+- [ ] **M13B09** Wire /doctor to the same packaged diagnostics as CLI doctor; verify clean-install help, capabilities and command inventory without archive runtime dependencies.
 
 ## Full-plan obligations and final handoff
 

@@ -18,6 +18,9 @@ import {
 import { formatDevelopmentEchoResult, formatErrorPayload, formatEvent, formatHealth } from './format.js';
 import { ActivityLog } from './ActivityLog.js';
 import { CapturePanel } from './CapturePanel.js';
+import { TacticalPanel } from './TacticalPanel.js';
+import { checkpointRoutes, type CheckpointRoutes, type TacticalHttp } from '../transport/checkpoint-http.js';
+import type { TacticalStateView } from '@threadline/shared';
 import { reduceCursorError, reduceReplayPage, type ReplayStatus } from './capture-state.js';
 import { CommandBar } from './CommandBar.js';
 import { ConnectionStatus } from './ConnectionStatus.js';
@@ -72,9 +75,16 @@ export interface AppProps {
    * showing an empty panel that looks like "nothing was captured".
    */
   readonly sourceClient?: SourceClientDeps;
+  /**
+   * Checkpoint transport and its routes. Both are optional: until Agent A
+   * registers the routes nothing is reachable, and the panel says so rather than
+   * showing an empty checkpoint that reads as "nothing recorded".
+   */
+  readonly tacticalClient?: TacticalHttp;
+  readonly tacticalRoutes?: CheckpointRoutes;
 }
 
-export function App({ client, endpoint, authenticated, sessionIssuedAt, providerClient, sourceClient }: AppProps) {
+export function App({ client, endpoint, authenticated, sessionIssuedAt, providerClient, sourceClient, tacticalClient, tacticalRoutes:providedTacticalRoutes }: AppProps) {
   const { exit } = useApp();
   const [connection, setConnection] = useState<ConnectionView>({
     status: 'connecting',
@@ -82,6 +92,7 @@ export function App({ client, endpoint, authenticated, sessionIssuedAt, provider
     detail: '',
   });
   const [authority,setAuthority] = useState<AuthorityView | null>(null);
+  const tacticalRoutes=providedTacticalRoutes??(authority?checkpointRoutes(authority.projectId,authority.taskId):undefined);
   const [authorityError,setAuthorityError] = useState<string | null>(null);
   const [health, setHealth] = useState<HealthReport | null>(null);
   const [activity, dispatch] = useReducer(activityReducer, { entries: [], dropped: 0 });
@@ -92,6 +103,9 @@ export function App({ client, endpoint, authenticated, sessionIssuedAt, provider
   const [replayStatus, setReplayStatus] = useState<ReplayStatus | null>(null);
   const [sourceRange, setSourceRange] = useState<Awaited<ReturnType<typeof readSourceRange>> | null>(null);
   const [captureBusy, setCaptureBusy] = useState(false);
+  const [tacticalView, setTacticalView] = useState<TacticalStateView | null>(null);
+  const [tacticalError, setTacticalError] = useState<string | null>(null);
+  const [tacticalBusy, setTacticalBusy] = useState(false);
 
   const streamRef = useRef<EventStreamHandle | null>(null);
   const historyRef = useRef<{ close(): void } | null>(null);
@@ -287,6 +301,31 @@ export function App({ client, endpoint, authenticated, sessionIssuedAt, provider
       })();
       return;
     }
+    // Checkpoint state is read-only here: the interface reports freshness,
+    // the plan and coverage, and never advances a revision itself.
+    if (text === '/tactical' || text === '/refresh') {
+      if (!tacticalClient || !tacticalRoutes) {
+        record('error', 'client', 'Checkpoint inspection is not available in this client build.');
+        return;
+      }
+      setTacticalBusy(true);
+      void (async () => {
+        try {
+          const view = await tacticalClient.readState(tacticalRoutes);
+          if (!alive.current) return;
+          setTacticalView(view);
+          setTacticalError(null);
+          record(view.freshness === 'ready' ? 'info' : 'warn', 'backend', `checkpoint ${view.freshness} at revision ${view.pointer?.checkpointRevision ?? 'none'}`);
+        } catch (error) {
+          if (!alive.current) return;
+          setTacticalError(describeCause(error));
+          record('error', 'backend', `checkpoint unavailable: ${describeCause(error)}`);
+        } finally {
+          if (alive.current) setTacticalBusy(false);
+        }
+      })();
+      return;
+    }
     if (text.startsWith('/replay ')) {
       const parts = text.slice('/replay '.length).trim().split(/\s+/);
       const [epoch, afterSeq] = parts;
@@ -357,7 +396,7 @@ export function App({ client, endpoint, authenticated, sessionIssuedAt, provider
     <Box flexDirection="column">
       <Text bold>Threadline — terminal interface</Text>
       <Text dimColor>
-        {'Read-only model runs use the CLI. Use /connect for provider setup, /source <id> to inspect captured evidence, /replay <epoch> [after-seq] for durable history; other text sends development echo.'}
+        {'Use /connect for provider setup, /source <id> for captured evidence, /tactical for the checkpoint and plan, /replay <epoch> [after-seq] for durable history; other text sends development echo.'}
       </Text>
       <Box marginY={1} flexDirection="column">
         <ConnectionStatus
@@ -377,6 +416,11 @@ export function App({ client, endpoint, authenticated, sessionIssuedAt, provider
         <Text dimColor>Source: {authority.sourceMessageIds.join(', ')}</Text>
       </Box>}
       {connection.status === 'connected' && authorityError !== null && <Text color="yellow">Authority unavailable: {authorityError}</Text>}
+      {(tacticalView !== null || tacticalError !== null) && <Box flexDirection="column" marginBottom={1}>
+        {/* No submission path yet: the plan is changed through `task.update_plan`
+            or the CLI, both of which need Agent A's routes. */}
+        <TacticalPanel view={tacticalView} busy={tacticalBusy} error={tacticalError} />
+      </Box>}
       {(sourceViews.length > 0 || replayStatus !== null) && <Box flexDirection="column" marginBottom={1}>
         <CapturePanel
           evidence={[]}

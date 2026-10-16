@@ -1,10 +1,14 @@
 # Threadline architecture plan
 
-**Updated 16 October 2026. M00–M02 are merged; M03 capture/source/replay is integrated and locally verified in the working tree. M04 onward remain proposed.** This directory consolidates the Track 2 plan and the user's subsequent request for an owned harness. It supersedes native-wrapper-first scope in the historical notes while retaining local npm/TUI delivery.
+**Updated 16 October 2026. M00–M03 are merged; M04 checkpoints and tactical state are locally integrated and verified. M05 onward remain proposed.** This directory consolidates the Track 2 plan and the user's subsequent request for an owned harness. It supersedes native-wrapper-first scope in the historical notes while retaining local npm/TUI delivery.
 
 **Current MVP: two contributors, one Builder, a fresh successor and a protected deterministic service checker.** Start with [the development blueprint](track2-development-blueprint.md), its fixture/contracts and ordered build gates. Eleven model-visible tools; no summarization API. Native subscription/OAuth adapters and investigator spawning are post-hackathon work.
 
 **Code-first execution:** use the [master implementation checklist](track2-implementation-checklist.md), [Agent A — Memory/Coordinator](track2-agent-a-checklist.md) and [Agent B — Harness/Frontend](track2-agent-b-checklist.md). Fourteen milestones begin with a running small backend and plain TUI. Both lanes feed one combined branch/commit after joint validation; protected checks and release-version freezing follow working code. The checklist controls build order while the blueprint controls product contracts.
+
+## Incremental terminal interface
+
+[Terminal command and UI contract](track2-terminal-command-contract.md) specifies the command catalog, backend dependencies, screen/input behavior and selective Pi reuse. Commands ship with M05–M09 capabilities; M10 consolidates the interface. New gates are unchecked in both lanes and the master checklist.
 
 ## Interactive reading view
 
@@ -94,3 +98,7 @@ Both agents work on M03 in the same checkout. The integration owner verifies the
 ## M03 integrated capture and provenance
 
 [Executed verification](review/m03-integration-verification.md), [working workflow](../../docs/m03-development.md) and [implemented capture flow](diagrams/m03-capture-flow.mmd) cover both lanes and joint acceptance. The existing core SQL tables were reused; no new migration was needed. M04 remains unstarted.
+
+## M04 working checkpoint flow
+
+[Executed checkpoint integration and commands](review/m04-integration-verification.md) cover the real seven-tool runtime, immutable manifest Sources, per-session coverage, automatic checkpoint policy, receipt recovery and CLI/TUI inspection. Retrieval packets and successor lifecycle remain later milestones.

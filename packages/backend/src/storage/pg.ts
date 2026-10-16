@@ -275,6 +275,30 @@ export function projectAdmissionLockKey(tenantId: string, projectId: string): st
   return `threadline:project-admission:${tenantId}:${projectId}`;
 }
 
+/**
+ * Serializes one task's checkpoint read/merge/revision allocation/publication.
+ *
+ * Taken as a transaction-scoped advisory lock keyed on the task, so two
+ * concurrent patches cannot both read the same current revision and each stage
+ * a replacement that overwrites the other. The lock is transaction-scoped, so a
+ * failure releases it and no connection is stranded.
+ */
+export async function withTaskCheckpointLock<TResult>(
+  db: SqlDatabase,
+  tenantId: string,
+  projectId: string,
+  taskId: string,
+  work: (tx: TxClient) => Promise<TResult>,
+): Promise<TResult> {
+  return db.withTenantTransaction(tenantId, async (tx) => {
+    await tx.rows("SET LOCAL lock_timeout = '2s'");
+    await tx.rows('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [
+      `threadline:task-checkpoint:${tenantId}:${projectId}:${taskId}`,
+    ]);
+    return work(tx);
+  });
+}
+
 export async function withProjectAdmissionLock<TResult>(
   db: SqlDatabase,
   tenantId: string,
