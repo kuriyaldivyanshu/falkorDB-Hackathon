@@ -800,6 +800,8 @@ Constraints:
 | `graph_epoch` | `uuid NOT NULL` | Admission incarnation |
 | `requirement_revision` | `bigint NOT NULL CHECK (requirement_revision >= 0)` | Governing revision at request |
 | `reservation_graph_id` | `uuid NOT NULL` | Admitted shared budget reservation |
+| `reserved_tokens` | `bigint CHECK (reserved_tokens >= 0)` | M02 migration 3: durable admitted estimate; NULL for legacy rows |
+| `possible_charge` | `boolean` | M02 migration 3: explicit transport uncertainty; NULL for legacy rows |
 | `provider_request_id` | `text` | Provider correlation if available; not assumed resumable |
 | `status` | `text NOT NULL CHECK (status IN ('prepared','dispatched','streaming','completed','failed','unknown','cancelled'))` | Durable transport lifecycle |
 | `response_artifact_id` | `uuid` | Completed visible normalized response and supported opaque state |

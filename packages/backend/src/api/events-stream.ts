@@ -25,7 +25,7 @@ export interface EventStream {
 }
 
 export interface EventStreamManager {
-  open(raw: ServerResponse): EventStream;
+  open(raw: ServerResponse, authorize?: (event: ThreadlineEvent) => Promise<boolean>): EventStream;
   /** Ends every open stream. Returns how many were still open. */
   closeAll(): number;
   readonly openCount: number;
@@ -42,12 +42,24 @@ export function createEventStreamManager(deps: EventStreamManagerDeps): EventStr
   const streams = new Set<SseStream>();
 
   return {
-    open(raw: ServerResponse): EventStream {
+    open(raw: ServerResponse, authorize?: (event: ThreadlineEvent) => Promise<boolean>): EventStream {
       const stream = new SseStream(
         raw,
         {
           maxBacklogBytes: deps.maxBacklogBytes,
-          subscribe: (deliver) => deps.publisher.subscribe(deliver),
+          subscribe: (deliver) => {
+            let pending = Promise.resolve();
+            let count = 0;
+            return deps.publisher.subscribe((event) => {
+              if (event.name !== 'run.activity') { deliver(event); return; }
+              if (!authorize) return;
+              // Bound pending authorization work as well as socket output.
+              if (++count > 64) { stream.close('backlog-exceeded'); count--; return; }
+              pending = pending.then(async () => {
+                if (!stream.closed && await authorize(event)) deliver(event);
+              }).catch(() => { stream.close('client-disconnected'); }).finally(() => { count--; });
+            });
+          },
         },
         (closed) => {
           streams.delete(closed);

@@ -1,6 +1,7 @@
 import { statSync } from 'node:fs';
 import { isAbsolute, resolve } from 'node:path';
 
+import { PROVIDERS, validateProviderBaseUrl, type ProviderApi, type ProviderId } from './provider/catalog.js';
 import { ConfigurationError, type ConfigurationIssue } from '@threadline/shared';
 
 /**
@@ -39,6 +40,17 @@ export type StorageConfig = {
   readonly falkordb: FalkorDbConfig;
   /** Stable local identifiers created by owner-only bootstrap. */
   readonly local: LocalIdentityConfig;
+  /** Immutable artifact bytes live under this owner-only directory. */
+  readonly artifactsDirectory: string;
+  /**
+   * Provider credential, read only in coordinator configuration and handed to
+   * the driver privately. Never logged, returned, or written to SQL.
+   */
+  readonly providerId: ProviderId;
+  readonly providerApi: ProviderApi;
+  readonly providerApiKey: string;
+  readonly providerModel: string;
+  readonly providerBaseUrl: string;
 };
 
 export type PostgresConfig = {
@@ -122,6 +134,14 @@ const ENV_KEYS = {
   graphPassword: 'THREADLINE_FALKORDB_PASSWORD',
   graphConnectTimeoutMs: 'THREADLINE_FALKORDB_CONNECT_TIMEOUT_MS',
   graphWriteTimeoutMs: 'THREADLINE_FALKORDB_WRITE_TIMEOUT_MS',
+  providerId: 'THREADLINE_PROVIDER',
+  providerApi: 'THREADLINE_PROVIDER_API',
+  providerApiKey: 'THREADLINE_OPENAI_API_KEY',
+  openCodeApiKey: 'MODEL_OPENCODE_API_KEY',
+  customProviderApiKey: 'THREADLINE_PROVIDER_API_KEY',
+  providerModel: 'THREADLINE_PROVIDER_MODEL',
+  providerBaseUrl: 'THREADLINE_PROVIDER_BASE_URL',
+  artifactsDirectory: 'THREADLINE_ARTIFACTS_DIR',
   tenantSlug: 'THREADLINE_TENANT_SLUG',
   userDisplayName: 'THREADLINE_USER_DISPLAY_NAME',
   projectSlug: 'THREADLINE_PROJECT_SLUG',
@@ -306,6 +326,11 @@ function parseStorageConfig(
     }
   }
 
+  const artifactsDirectory = resolve(
+    readString(env[ENV_KEYS.dataDirectory], DEFAULT_DATA_DIRECTORY),
+    readString(env[ENV_KEYS.artifactsDirectory], 'artifacts'),
+  );
+
   const local: LocalIdentityConfig = {
     tenantSlug: readString(env[ENV_KEYS.tenantSlug], 'local'),
     tenantName: 'Local',
@@ -315,7 +340,29 @@ function parseStorageConfig(
     absoluteExpiryMs: 7 * 24 * 60 * 60 * 1000,
   };
 
-  return { mode, postgres, falkordb, local };
+  const providerRaw = readString(env[ENV_KEYS.providerId], 'openai');
+  const providerId = providerRaw in PROVIDERS && Object.hasOwn(PROVIDERS, providerRaw) ? providerRaw as ProviderId : 'openai';
+  if (providerRaw !== providerId) issues.push({ field: ENV_KEYS.providerId, problem: 'Unknown provider.', hint: 'Choose openai, anthropic, openrouter, opencode-go or openai-compatible.' });
+  const definition = PROVIDERS[providerId];
+  const providerApiRaw = readString(env[ENV_KEYS.providerApi], definition.api);
+  const providerApi: ProviderApi = providerApiRaw === 'responses' ? 'responses' : providerApiRaw === 'anthropic-messages' ? 'anthropic-messages' : 'chat-completions';
+  if (!['responses', 'chat-completions', 'anthropic-messages'].includes(providerApiRaw)) issues.push({ field: ENV_KEYS.providerApi, problem: 'Unsupported wire API.', hint: 'Choose responses, chat-completions or anthropic-messages.' });
+  const providerBaseUrl = readString(env[ENV_KEYS.providerBaseUrl], definition.baseUrl);
+  try { validateProviderBaseUrl(providerBaseUrl); }
+  catch { issues.push({ field: ENV_KEYS.providerBaseUrl, problem: 'Invalid provider base URL.', hint: 'Use HTTPS (or loopback HTTP), without credentials, query or fragment.' }); }
+
+  return {
+    mode,
+    postgres,
+    falkordb,
+    local,
+    artifactsDirectory,
+    providerId,
+    providerApi,
+    providerApiKey: readString(env[definition.keyEnv], ''),
+    providerModel: readString(env[ENV_KEYS.providerModel], ''),
+    providerBaseUrl,
+  };
 }
 
 function requireNonEmpty(
@@ -461,6 +508,12 @@ export type StorageConfigSummary = {
     readonly idleExpiryMs: number;
     readonly absoluteExpiryMs: number;
   };
+  readonly artifactsDirectory: string;
+  readonly providerId: ProviderId;
+  readonly providerApi: ProviderApi;
+  readonly providerCredentialConfigured: boolean;
+  readonly providerModel: string;
+  readonly providerBaseUrl: string;
 };
 
 export function describeConfig(config: BackendConfig): BackendConfigSummary {
@@ -496,6 +549,12 @@ export function describeConfig(config: BackendConfig): BackendConfigSummary {
         idleExpiryMs: config.storage.local.idleExpiryMs,
         absoluteExpiryMs: config.storage.local.absoluteExpiryMs,
       },
+      artifactsDirectory: config.storage.artifactsDirectory,
+      providerId: config.storage.providerId,
+      providerApi: config.storage.providerApi,
+      providerCredentialConfigured: config.storage.providerApiKey.length > 0,
+      providerModel: config.storage.providerModel,
+      providerBaseUrl: config.storage.providerBaseUrl,
     },
   };
 }

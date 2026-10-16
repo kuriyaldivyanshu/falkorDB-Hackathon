@@ -190,11 +190,13 @@ The first checkpoint is intentionally a working service/TUI, not a checker/lockf
 - [x] **M01J02** Restart the backend and confirm the same project/task is read, rather than recreated from frontend state.
 - [x] **M01J03** Retry admission with the same request ID and then a conflicting payload; observe one mutation and a typed mismatch respectively.
 - [x] **M01J04** Run one synthetic unauthorized project/source request. Database port binding or an opaque ID alone must not grant access.
-- [ ] **M01J05** Document the actual setup commands and encountered version limitations; merge only the functioning increment, without requiring future checker/recovery features.
+- [x] **M01J05** Document the actual setup commands and encountered version limitations; merge only the functioning increment, without requiring future checker/recovery features.
 
-**Combined M01 verification — 15 October 2026:** A01–A08, B01–B07 and J01–J04 verified against real stores and actual CLI/TUI. [Full evidence, resolved defects and limitations](review/m01-integration-verification.md). J05 setup/version documentation is complete; its merge condition remains pending the combined branch/commit/PR workflow. M01 accepts a goal/task without an execution Run or fabricated provider profile; real Run creation starts in M02.
+**Combined M01 verification — 15 October 2026:** A01–A08, B01–B07 and J01–J04 verified against real stores and actual CLI/TUI. [Full evidence, resolved defects and limitations](review/m01-integration-verification.md). J05 is complete: the user merged PR #2 and local main was fast-forwarded to `067f842`. M01 accepts a goal/task without an execution Run or fabricated provider profile; real Run creation starts in M02.
 
 ### M02 — One owned provider turn with read-only tools
+
+**Implemented workflow:** use [M02 development](../../docs/m02-development.md), [live acceptance evidence](../../docs/m02-live-acceptance.md) and [provider setup](../../docs/provider-setup.md). The original lane launch instructions are superseded.
 
 **Depends on:** M01; shared types from M00. **Combined result:** One real API-backed model/tool round trip, with guarded admission and persisted request/result identity.
 
@@ -202,32 +204,38 @@ The first checkpoint is intentionally a working service/TUI, not a checker/lockf
 
 #### Variant A — Memory/Coordinator
 
-- [ ] **M02A01** Implement Run/AgentSession admission with one active run, one live logical Builder, graph claim/fence, claim lease and budget reservation.
-- [ ] **M02A02** Implement provider-profile owner checks: run initiator, profile owner and account owner must match. Source/project grants are rechecked before release of inference.
-- [ ] **M02A03** Implement SQL model-request journal with logical request versus attempt IDs, prepared/dispatched/streaming/completed/unknown/failed states and observed usage; add the smallest immutable input/response artifact writer now, extending it into general Source/capture handling in M03.
-- [ ] **M02A04** Journal attempt intent and reserve budget before network dispatch. Persist read-tool invocation/results with stable IDs before the next turn; M03 extends them into general sourced capture/admission. Unknown sends retain reservation and possible-charge status; never automatically replay them.
-- [ ] **M02A05** Persist exact supported submitted input and complete visible assistant/tool-request batch. Do not persist hidden reasoning or execute partial streamed tool arguments.
-- [ ] **M02A06** Implement initial human-command versus worker-admission serialization gate and graph revision checks; one coordinator is the active installation authority.
-- [ ] **M02A07** Return typed errors for authorization, storage, context, budget and provider outcomes, with correlation IDs suitable for CLI display.
+- [x] **M02A01** Implement Run/AgentSession admission with one active run, one live logical Builder, graph claim/fence, claim lease and budget reservation.
+- [x] **M02A02** Implement provider-profile owner checks: run initiator, profile owner and account owner must match. Source/project grants are rechecked before release of inference.
+- [x] **M02A03** Implement SQL model-request journal with logical request versus attempt IDs, prepared/dispatched/streaming/completed/unknown/failed states and observed usage; add the smallest immutable input/response artifact writer now, extending it into general Source/capture handling in M03.
+- [x] **M02A04** Journal attempt intent and reserve budget before network dispatch. Persist read-tool invocation/results with stable IDs before the next turn; M03 extends them into general sourced capture/admission. Unknown sends retain reservation and possible-charge status; never automatically replay them.
+- [x] **M02A05** Persist exact supported submitted input and complete visible assistant/tool-request batch. Do not persist hidden reasoning or execute partial streamed tool arguments.
+- [x] **M02A06** Implement initial human-command versus worker-admission serialization gate and graph revision checks; one coordinator is the active installation authority.
+- [x] **M02A07** Return typed errors for authorization, storage, context, budget and provider outcomes, with correlation IDs suitable for CLI display.
 
 #### Variant B — Harness/Frontend
 
-- [ ] **M02B01** Implement one OpenAI Responses driver behind a narrow provider interface, using the actual account-compatible chosen model; do not add a driver factory for every provider.
-- [ ] **M02B02** Implement caller-owned conversation reconstruction, streaming frame/tool-call correlation, terminal response handling, usage reporting and cancellation/unknown behavior.
-- [ ] **M02B03** Read `OPENAI_API_KEY` only in coordinator/provider code; redact it and avoid forwarding its environment to any execution helper.
-- [ ] **M02B04** Implement the bounded sequential model → validated tool → result → next-turn loop, with an abort path and maximum attempts/tools/wall time.
-- [ ] **M02B05** Create the actual small authored imperfect inventory-export candidate workspace from the manifest now, retaining its original seed template outside the mutable candidate and disclosing the UTC defect; protected assertions/receipt infrastructure come in M08. Implement `workspace.read`, `workspace.search` and `workspace.inspect` against those existing files with range/result limits, digests and explicit truncation.
-- [ ] **M02B06** Validate path traversal, symlink escape and unsupported encodings; use argument arrays for any search helper, never an interpolated shell command.
-- [ ] **M02B07** Display streamed visible text/tool activity in the plain TUI while retaining only allowed durable completed records. Mark partial/gapped outcomes honestly.
-- [ ] **M02B08** Expose only the three implemented read-only tools initially; the final eleven-tool registry is added as real implementations become available.
+- [x] **M02B01** Implement narrow owned provider transports and verify the user-selected account/model. User-approved scope: OpenAI Responses implementation plus OpenCode Go Chat Completions; Space Bunny is the live acceptance model. This does not claim live OpenAI account or subscription compatibility.
+- [x] **M02B02** Implement caller-owned conversation reconstruction, streaming frame/tool-call correlation, terminal response handling, usage reporting and cancellation/unknown behavior.
+- [x] **M02B03** Read `THREADLINE_OPENAI_API_KEY` only in coordinator/provider code; redact it and avoid forwarding its environment to any execution helper.
+- [x] **M02B04** Implement the bounded sequential model → validated tool → result → next-turn loop, with an abort path and maximum attempts/tools/wall time.
+- [x] **M02B05** Create the actual small authored imperfect inventory-export candidate workspace from the manifest now, retaining its original seed template outside the mutable candidate and disclosing the UTC defect; protected assertions/receipt infrastructure come in M08. Implement `workspace.read`, `workspace.search` and `workspace.inspect` against those existing files with range/result limits, digests and explicit truncation.
+- [x] **M02B06** Validate path traversal, symlink escape and unsupported encodings; use argument arrays for any search helper, never an interpolated shell command.
+- [x] **M02B07** Display streamed visible text/tool activity in the plain TUI while retaining only allowed durable completed records. Mark partial/gapped outcomes honestly.
+- [x] **M02B08** Expose only the three implemented read-only tools initially; the final eleven-tool registry is added as real implementations become available.
 
 #### Joint integration and branch readiness
 
-- [ ] **M02J01** Run deterministic protocol fixtures/fake provider responses locally for malformed/partial calls and disconnects; no paid calls in ordinary tests.
-- [ ] **M02J02** Explicitly start one real small model/read-tool turn, record selected model/runtime versions and actual terminal outcome/usage; configuration checks incur no silent inference.
-- [ ] **M02J03** Confirm no edit, shell, completion or subscription capability is advertised yet.
-- [ ] **M02J04** Check a mismatched provider owner is denied before dispatch and a cancelled/unknown request does not fabricate successful usage or tool execution.
-- [ ] **M02J05** Confirm paid runs stop when required storage or authority is unavailable. A development fixture adapter must not become a production fallback.
+- [x] **M02J01** Run deterministic protocol fixtures/fake provider responses locally for malformed/partial calls and disconnects; no paid calls in ordinary tests.
+- [x] **M02J02** Explicitly start one real small model/read-tool turn, record selected model/runtime versions and actual terminal outcome/usage; configuration checks incur no silent inference.
+- [x] **M02J03** Confirm no edit, shell, completion or subscription capability is advertised yet.
+- [x] **M02J04** Check a mismatched provider owner is denied before dispatch and a cancelled/unknown request does not fabricate successful usage or tool execution.
+- [x] **M02J05** Confirm paid runs stop when required storage or authority is unavailable. A development fixture adapter must not become a production fallback.
+
+**Independent M02 local integration — 16 October 2026:** A01–A07, B02–B08, J01 and J03–J05 verified through the assembled real-store/runtime/CLI/PTY flow. Ordinary suite: 212 passed, 0 failed; live suite: 33 passed, 0 failed. **Historical local-only snapshot:** B01/J02 were deferred then; the subsequent user-authorized Space Bunny acceptance closes both gates, as recorded below. The transport is implemented and locally tested, with no paid inference or production fixture fallback. No Git integration step was performed. [Full evidence, commands, repaired defects and limitations](review/m02-integration-verification.md).
+
+**Provider extension authorized after local M02 integration:** OpenCode Go and custom compatible API-key providers are now selectable. A single real Space Bunny text test returned HTTP 200; synthetic-provider/store conformance passes 222 ordinary tests and 34 live-store cases. This does not close the full live model/read-tool gate or establish OpenAI model access. [Configuration and evidence](../../docs/provider-configuration.md).
+
+**M02 closed — 16 October 2026:** all A/B/joint checkpoints verified within the user-approved API-key provider scope. Real Space Bunny run `a5272d65-cbf2-4526-a334-35d159cf23a0`: 3 completed model turns, 2 successful tools including exact exporter bytes, 8,045 reported tokens, zero unresolved attempts/reservations, released claim. Final regressions: 224 ordinary tests and 34 isolated real-store tests pass. OpenAI live-account access remains unclaimed. No branch/commit/push performed. [Live acceptance and repaired defects](../../docs/m02-live-acceptance.md).
 
 ### M03 — Durable capture, artifact Sources and graph admission
 

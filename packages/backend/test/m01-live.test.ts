@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import test from 'node:test';
 
@@ -64,14 +65,25 @@ let cachedConfig: BackendConfig | null = null;
  * Built lazily: parsing happens only when a live case actually runs, so a
  * normal `npm test` without stores configured neither throws nor touches them.
  */
+/**
+ * A tenant slug unique to this process.
+ *
+ * Live runs then never inherit a previous run's owner identity or durable rows,
+ * so a run needs no destructive reset of the verification database.
+ */
+const LIVE_TENANT_SLUG = `${process.env['THREADLINE_LIVE_TENANT_SLUG'] ?? 'm01-live'}-${randomUUID().slice(0, 8)}`;
+
 function liveConfig(): BackendConfig {
   cachedConfig ??= parseBackendConfig({
     env: {
       ...readLocalEnv(),
-      THREADLINE_TENANT_SLUG: process.env['THREADLINE_LIVE_TENANT_SLUG'] ?? 'm01-live-review',
+      THREADLINE_PROVIDER: 'openai',
+      THREADLINE_PROVIDER_API: 'responses',
+      THREADLINE_PROVIDER_BASE_URL: 'https://api.openai.com/v1',
+      THREADLINE_TENANT_SLUG: LIVE_TENANT_SLUG,
       THREADLINE_STORAGE_MODE: 'required',
       THREADLINE_PORT: '0',
-      THREADLINE_DATA_DIR: process.env['THREADLINE_LIVE_DATA_DIR'] ?? '.threadline-agentA-test',
+      THREADLINE_DATA_DIR: join(process.env['THREADLINE_LIVE_DATA_DIR'] ?? tmpdir(), LIVE_TENANT_SLUG),
       THREADLINE_PG_HOST: '127.0.0.1',
       THREADLINE_PG_PORT: process.env['THREADLINE_LIVE_PGPORT'] ?? '55433',
       THREADLINE_PG_DATABASE: process.env['THREADLINE_LIVE_PGDATABASE'] ?? 'threadline_agent_a',
@@ -151,7 +163,7 @@ test('live: an unreachable store stops startup instead of serving pretend memory
   const broken = createBackend({
     config: parseBackendConfig({
       env: {
-        THREADLINE_TENANT_SLUG: process.env['THREADLINE_LIVE_TENANT_SLUG'] ?? 'm01-live-review',
+        THREADLINE_TENANT_SLUG: LIVE_TENANT_SLUG,
       THREADLINE_STORAGE_MODE: 'required',
         THREADLINE_PG_DATABASE: 'threadline',
         THREADLINE_PG_USER: 'threadline',
@@ -279,10 +291,10 @@ test('live: a role that can bypass row-level security is refused at startup', op
   const superuserConfig: BackendConfig = parseBackendConfig({
     env: {
       ...readLocalEnv(),
-      THREADLINE_TENANT_SLUG: process.env['THREADLINE_LIVE_TENANT_SLUG'] ?? 'm01-live-review',
+      THREADLINE_TENANT_SLUG: LIVE_TENANT_SLUG,
       THREADLINE_STORAGE_MODE: 'required',
       THREADLINE_PORT: '0',
-      THREADLINE_DATA_DIR: process.env['THREADLINE_LIVE_DATA_DIR'] ?? '.threadline-agentA-test',
+      THREADLINE_DATA_DIR: join(process.env['THREADLINE_LIVE_DATA_DIR'] ?? tmpdir(), LIVE_TENANT_SLUG),
       THREADLINE_PG_HOST: '127.0.0.1',
       THREADLINE_PG_PORT: process.env['THREADLINE_LIVE_PGPORT'] ?? '55433',
       THREADLINE_PG_DATABASE: process.env['THREADLINE_LIVE_PGDATABASE'] ?? 'threadline_agent_a',
@@ -341,6 +353,8 @@ import { createGraphStore } from '../src/storage/graph.js';
 import { admitGoal, readCurrentAuthority } from '../src/domain/admission.js';
 import { authenticateSession } from '../src/storage/identity.js';
 import { hashSessionToken } from '../src/storage/identity.js';
+
+
 
 test('live: session revocation, sliding idle expiry and absolute expiry are enforced',options,async()=>{
  const backend=await startBackend();

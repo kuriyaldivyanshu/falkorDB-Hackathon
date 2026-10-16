@@ -39,12 +39,18 @@ for (const competing of ['none','compatible','incompatible'] as const) {
         versionOneInserts+=1;
         return [];
       }
-      if(text.includes("version=2")) return [];
+      if(text.includes("version=2") || text.includes("version=3")) return [];
+      if(text.startsWith('ALTER TABLE threadline.model_requests')) {
+        assert.equal(locked,true,'attempt-fact DDL must be serialized');
+        assert.match(text,/possible_charge boolean/);
+        assert.match(text,/reserved_tokens bigint/);
+        return [];
+      }
       if(text.startsWith('GRANT') || text.startsWith('REVOKE')) {
         assert.equal(locked,true,'concurrent grants must be serialized');
         return [];
       }
-      if(text.includes('CREATE OR REPLACE FUNCTION') || text.includes("VALUES(gen_random_uuid(),'postgres',2") || text.startsWith('SET LOCAL')) return [];
+      if(text.includes('CREATE OR REPLACE FUNCTION') || text.includes("VALUES(gen_random_uuid(),'postgres',2") || text.includes("VALUES(gen_random_uuid(),'postgres',3") || text.startsWith('SET LOCAL')) return [];
       assert.fail(`Unexpected migration statement: ${text}`);
     });
     const runTransaction=db.withTransaction;

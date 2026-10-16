@@ -1,4 +1,9 @@
-// Threadline graph schema/query sketches. PROPOSED AND UNEXECUTED.
+// Threadline future graph schema/query sketches. PROPOSED AND UNEXECUTED.
+// M01/M02 executable, FalkorDB-6.0.2-tested mutations live in
+// packages/backend/src/storage/graph-queries.ts; use those for implementation.
+// This checkpoint sketch is future M03/M04 guidance, not a runtime migration.
+// FalkorDB 6.0.2 requires newly created endpoints and their relationships in
+// one CREATE clause; avoid later CREATE clauses referencing a CREATE-bound name.
 // Run each statement separately through the official client with bound parameters.
 // Create supporting indexes, then constraints from falkordb-constraints.txt.
 CREATE INDEX FOR (n:Entity) ON (n.id);

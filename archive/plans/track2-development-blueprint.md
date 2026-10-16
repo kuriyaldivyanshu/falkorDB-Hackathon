@@ -12,6 +12,9 @@ Ship TypeScript on Node 24, an npm CLI with Ink TUI, one local backend, PostgreS
 
 Exclude RLM, automatic model summaries, a second model Verifier, investigator spawning, arbitrary MCP ingestion, remote hosting, subscription adapters, custom OAuth and multiple inference providers from this release. Use one user-owned OpenAI Responses API route. Codex/pi remain inspiration for tool ergonomics and lifecycle handling; they are not copied runtimes or evidence that our containment works.
 
+**User-approved provider extension — 16 October 2026:** API-key provider selection now includes OpenAI Responses, OpenCode Go (Space Bunny via Chat Completions), and a custom endpoint using either supported wire format. This supersedes the one-provider restriction for these API-key routes only. No native subscription/OAuth, additional agent runtime, automatic failover, or third wire protocol is added. [Implementation and scoped real-request evidence](../../docs/provider-configuration.md).
+
+
 ## 2. Frozen contracts and unresolved prerequisites
 
 The implementation inputs are [fixture manifest](contracts/fixture-manifest.json), [development policy](contracts/development-profile.json), [checkpoint schema](contracts/memory-checkpoint.schema.json) and [episode schema](contracts/memory-episode.schema.json). These are design artifacts, not implemented validators or passing experiments. Domain names are defined in [CONTEXT.md](../../CONTEXT.md).

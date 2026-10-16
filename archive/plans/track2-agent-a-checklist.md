@@ -52,21 +52,22 @@ Coordinate startup/API edits and shared types with one editor per file. Ask for 
 
 The initial lane handoff left A04/A05 unverified. Combined integration reproduced and fixed revoked-session authentication, non-sliding idle expiry, incomplete graph topology, non-idempotent settlement and owner lookup after adding a second member. All eight A tasks now have executed real-store evidence, including session expiry/revocation, lost acknowledgement, pre-graph crash recovery, concurrent retries, original-source access and missing/duplicate current-version denial. See [the combined report](review/m01-integration-verification.md) and [implemented transport agreement](../../docs/m01-contract-agreement.md).
 
-The original [Agent A handoff](../../M01-HANDOFF-agent-a.md) remains historical. Its fake `no-run-accepted-goal-only` marker was removed: graph Task.run_id is absent and SQL message.run_id is NULL until M02 creates a real execution Run. No provider credential is required for M01. M01J05 remains pending the actual merge workflow.
+The original [Agent A handoff](../../M01-HANDOFF-agent-a.md) remains historical. Its fake `no-run-accepted-goal-only` marker was removed: graph Task.run_id is absent and SQL message.run_id is NULL until M02 creates a real execution Run. No provider credential is required for M01. M01J05 is complete after PR #2 merged into `067f842`.
 
 ### M02 — One owned provider turn with read-only tools
 
-**Depends on:** M01; shared types from M00. **Combined milestone result:** One real API-backed model/tool round trip, with guarded admission and persisted request/result identity.
+**Lane A: Memory/Coordinator.** M02 closed with real Space Bunny model/tool acceptance. [Final evidence and repairs](../../docs/m02-live-acceptance.md).
 
-- [ ] **M02A01** Implement Run/AgentSession admission with one active run, one live logical Builder, graph claim/fence, claim lease and budget reservation.
-- [ ] **M02A02** Implement provider-profile owner checks: run initiator, profile owner and account owner must match. Source/project grants are rechecked before release of inference.
-- [ ] **M02A03** Implement SQL model-request journal with logical request versus attempt IDs, prepared/dispatched/streaming/completed/unknown/failed states and observed usage; add the smallest immutable input/response artifact writer now, extending it into general Source/capture handling in M03.
-- [ ] **M02A04** Journal attempt intent and reserve budget before network dispatch. Persist read-tool invocation/results with stable IDs before the next turn; M03 extends them into general sourced capture/admission. Unknown sends retain reservation and possible-charge status; never automatically replay them.
-- [ ] **M02A05** Persist exact supported submitted input and complete visible assistant/tool-request batch. Do not persist hidden reasoning or execute partial streamed tool arguments.
-- [ ] **M02A06** Implement initial human-command versus worker-admission serialization gate and graph revision checks; one coordinator is the active installation authority.
-- [ ] **M02A07** Return typed errors for authorization, storage, context, budget and provider outcomes, with correlation IDs suitable for CLI display.
+- [x] **M02A01** Implement Run/AgentSession admission with one active run, one live logical Builder, graph claim/fence, claim lease and budget reservation.
+- [x] **M02A02** Implement provider-profile owner checks: run initiator, profile owner and account owner must match. Source/project grants are rechecked before release of inference.
+- [x] **M02A03** Implement SQL model-request journal with logical request versus attempt IDs, prepared/dispatched/streaming/completed/unknown/failed states and observed usage; add the smallest immutable input/response artifact writer now, extending it into general Source/capture handling in M03.
+- [x] **M02A04** Journal attempt intent and reserve budget before network dispatch. Persist read-tool invocation/results with stable IDs before the next turn; M03 extends them into general sourced capture/admission. Unknown sends retain reservation and possible-charge status; never automatically replay them.
+- [x] **M02A05** Persist exact supported submitted input and complete visible assistant/tool-request batch. Do not persist hidden reasoning or execute partial streamed tool arguments.
+- [x] **M02A06** Implement initial human-command versus worker-admission serialization gate and graph revision checks; one coordinator is the active installation authority.
+- [x] **M02A07** Return typed errors for authorization, storage, context, budget and provider outcomes, with correlation IDs suitable for CLI display.
 
-**Before branch readiness:** coordinate with Agent B, then complete this milestone’s joint checks in [master section 5](track2-implementation-checklist.md#5-milestone-sequence). Proposed single combined commit: `feat: run journaled provider turns with read-only tools`.
+**Independent integration — 16 October 2026:** the combined tree supersedes the earlier lane handoff and blocked-state notes. See [full M02 evidence](review/m02-integration-verification.md) and the [current commands](../../docs/m02-development.md). All locally authorized gates in this lane are verified against real PostgreSQL/FalkorDB and the assembled loop. Ordinary tests: 212 passed; live tests: 33 passed, including real CLI/PTY, cancellation, private activity, receipt recovery and store-loss refusal. No paid inference or Git mutation.
+
 
 ### M03 — Durable capture, artifact Sources and graph admission
 

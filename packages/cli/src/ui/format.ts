@@ -45,5 +45,15 @@ function describeEvent(event: ThreadlineEvent): string {
         `commandId=${event.payload.commandId} echoId=${event.payload.echoId} ` +
         `durability=${event.payload.durability}`
       );
+    case 'run.activity':
+      return `run=${event.payload.runId} ${event.payload.kind} ${event.payload.state} ${event.payload.detail}`;
+    case 'run.state':
+    case 'run.attempt':
+      // Best-effort activity deltas. These are not durable records: the
+      // authoritative state is readable from the backend, not from this stream.
+      return (
+        `run=${event.payload.runId} state=${event.payload.state} ` +
+        `session=${event.payload.sessionState} detail="${event.payload.detail}"`
+      );
   }
 }

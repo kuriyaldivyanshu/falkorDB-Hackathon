@@ -1,3 +1,5 @@
+import type { ProviderClient } from '../transport/provider-client.js';
+import { ProviderSetup } from './ProviderSetup.js';
 import { Box, Text, useApp, useInput } from 'ink';
 import { useCallback, useEffect, useReducer, useRef, useState } from 'react';
 
@@ -52,6 +54,7 @@ function nextEntryId(): number {
 }
 
 export interface AppProps {
+  readonly providerClient?: ProviderClient;
   readonly client: BackendClient;
   readonly endpoint: string;
   /** Whether a local owner session is attached. The token is never shown. */
@@ -60,7 +63,7 @@ export interface AppProps {
   readonly sessionIssuedAt: string | null;
 }
 
-export function App({ client, endpoint, authenticated, sessionIssuedAt }: AppProps) {
+export function App({ client, endpoint, authenticated, sessionIssuedAt, providerClient }: AppProps) {
   const { exit } = useApp();
   const [connection, setConnection] = useState<ConnectionView>({
     status: 'connecting',
@@ -72,6 +75,8 @@ export function App({ client, endpoint, authenticated, sessionIssuedAt }: AppPro
   const [health, setHealth] = useState<HealthReport | null>(null);
   const [activity, dispatch] = useReducer(activityReducer, { entries: [], dropped: 0 });
   const [input, setInput] = useState('');
+  const [providerSetup, setProviderSetup] = useState(false);
+  const [runState, setRunState] = useState<string | null>(null);
 
   const streamRef = useRef<EventStreamHandle | null>(null);
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -125,8 +130,20 @@ export function App({ client, endpoint, authenticated, sessionIssuedAt }: AppPro
 
       const stream = client.openEventStream({
         onEvent: (event) => {
-          if (alive.current) {
-            record('info', 'backend', formatEvent(event));
+          if (!alive.current) {
+            return;
+          }
+          record('info', 'backend', formatEvent(event));
+          // Run and attempt deltas also drive the header, so the current run is
+          // visible without opening a separate screen.
+          if (event.name === 'run.activity') {
+            setRunState(`run ${event.payload.runId} ${event.payload.kind} ${event.payload.state}`);
+          }
+          if (event.name === 'run.state' || event.name === 'run.attempt') {
+            setRunState(
+              `run ${event.payload.runId} state=${event.payload.state} ` +
+                `session=${event.payload.sessionState} detail="${event.payload.detail}"`,
+            );
           }
         },
         onFrameError: (error) => {
@@ -220,6 +237,11 @@ export function App({ client, endpoint, authenticated, sessionIssuedAt }: AppPro
       record('warn', 'client', 'ignored an empty command');
       return;
     }
+    if (text === '/connect') {
+      if (providerClient) setProviderSetup(true);
+      else record('error', 'client', 'Provider setup requires a loopback backend.');
+      return;
+    }
     record('info', 'client', `sending development.echo: "${toSingleLine(text, 80)}"`);
     void (async () => {
       try {
@@ -239,9 +261,10 @@ export function App({ client, endpoint, authenticated, sessionIssuedAt }: AppPro
         }
       }
     })();
-  }, [client, input, record]);
+  }, [client, input, record, providerClient]);
 
   useInput((inputKey, key) => {
+    if (providerSetup) return;
     if (key.escape || (key.ctrl && inputKey === 'c')) {
       closeStream();
       exit();
@@ -254,13 +277,15 @@ export function App({ client, endpoint, authenticated, sessionIssuedAt }: AppPro
     }
   });
 
+  if (providerSetup && providerClient) return <ProviderSetup client={providerClient} onClose={() => setProviderSetup(false)} />;
+
   const canSend = connection.status === 'connected';
 
   return (
     <Box flexDirection="column">
       <Text bold>Threadline — terminal interface</Text>
       <Text dimColor>
-        M01: accepted task authority is durable. The text box sends development-only echo.
+        Read-only model runs use the CLI. Use /connect for provider setup; other text sends development echo.
       </Text>
       <Box marginY={1} flexDirection="column">
         <ConnectionStatus
@@ -269,6 +294,7 @@ export function App({ client, endpoint, authenticated, sessionIssuedAt }: AppPro
           health={health}
           authenticated={authenticated}
           sessionIssuedAt={sessionIssuedAt}
+          runLine={runState}
         />
       </Box>
       {connection.status === 'connected' && authority !== null && <Box flexDirection="column" marginBottom={1}>

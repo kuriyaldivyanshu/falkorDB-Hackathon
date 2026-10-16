@@ -9,7 +9,10 @@ import type { ApplicationServices } from '../domain/services.js';
 import type { Logger } from '../log.js';
 import { silentLogger } from '../log.js';
 import { createEventStreamManager, type EventStreamManager } from './events-stream.js';
-import { registerRoutes } from './routes.js';
+import type { ManagedRuntime } from '../runtime/managed.js';
+import { registerProviderRoutes } from './provider-routes.js';
+import type { ProviderSettings } from '../provider/settings.js';
+import { registerRoutes, registerRunRoutes } from './routes.js';
 
 export interface BackendAddress {
   readonly host: string;
@@ -27,6 +30,8 @@ export interface HttpServerHandle {
 }
 
 export interface HttpServerDeps {
+  readonly providerSettings?: () => ProviderSettings | null;
+  readonly runtime?: () => ManagedRuntime | null;
   readonly config: BackendConfig;
   readonly dispatch: CommandDispatcher;
   readonly publisher: EventPublisher;
@@ -61,14 +66,18 @@ export function createHttpServer(deps: HttpServerDeps): HttpServerHandle {
     maxBacklogBytes: deps.config.limits.maxEventBacklogBytes,
   });
 
-  registerRoutes(app, {
+  const routeDeps = {
+    runtime: deps.runtime ?? (() => null),
     config: deps.config,
     dispatch: deps.dispatch,
     streams,
     health: deps.health,
     services: deps.services,
     localBootstrap: deps.localBootstrap,
-  });
+  };
+  registerRoutes(app, routeDeps);
+  registerProviderRoutes(app, { ...routeDeps, providerSettings: deps.providerSettings ?? (() => null) });
+  registerRunRoutes(app, routeDeps);
 
   let listening = false;
   let boundAddress: BackendAddress | null = null;

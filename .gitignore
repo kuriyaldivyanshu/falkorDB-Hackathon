@@ -23,5 +23,5 @@ npm-debug.log*
 *.pem
 *.key
 
-# Agent A live-verification scratch
-.threadline-agentA-test/
+# Credential-bearing live-verification scratch (all lanes and stale copies)
+.threadline-*/

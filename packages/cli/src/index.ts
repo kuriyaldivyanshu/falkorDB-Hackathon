@@ -6,6 +6,14 @@ import { EXIT_FAILURE, EXIT_OK, runEcho, runHealth } from './one-shot.js';
 import { createBackendClient } from './transport/backend-client.js';
 import { readLocalSessionCredential } from './credentials/local-session.js';
 import { describeCause } from './transport/errors.js';
+import { createRunClient } from './transport/run-client.js';
+import {
+  runCancelCommand,
+  runInspectCommand,
+  runStartCommand,
+} from './ui/run-commands.js';
+import { createProviderClient } from './transport/provider-client.js';
+import { startProviderSetup } from './provider-setup.js';
 import { startTui } from './tui.js';
 
 /**
@@ -56,16 +64,37 @@ async function main(argv: readonly string[]): Promise<number> {
     requestTimeoutMs: invocation.requestTimeoutMs,
     token: credential?.token ?? null,
   });
+  const runClient = createRunClient({
+    baseUrl: invocation.backendUrl,
+    requestTimeoutMs: invocation.requestTimeoutMs,
+    token: credential?.token ?? null,
+  });
 
+  const providerClient = () => createProviderClient({ baseUrl: invocation.backendUrl, token: credential?.token ?? null });
   switch (invocation.command) {
+    case 'provider:list': write(JSON.stringify(await providerClient().list(), null, 2)); return EXIT_OK;
+    case 'provider:setup': await startProviderSetup(providerClient()); return EXIT_OK;
     case 'init': case 'admit': case 'inspect':
       return runDurableCommand(client,invocation,write);
+    case 'run:prepare':
+      if (!runClient.authenticated || invocation.projectId === null || invocation.contextWindowTokens === null) {
+        write('A local session, project and declared context window are required.');
+        return EXIT_FAILURE;
+      }
+      write(JSON.stringify(await runClient.prepareRun(invocation.projectId, invocation.contextWindowTokens), null, 2));
+      return EXIT_OK;
+    case 'run:start':
+      return runStartCommand(runClient, invocation, write);
+    case 'run:inspect':
+      return runInspectCommand(runClient, invocation, write);
+    case 'run:cancel':
+      return runCancelCommand(runClient, invocation, write);
     case 'health':
       return runHealth(client, write, invocation.showStoreReadiness, credential?.token ?? null);
     case 'echo':
       return runEcho(client, invocation.echoText ?? '', write);
     case 'tui':
-      await startTui({ client, endpoint: client.baseUrl, credential });
+      await startTui({ client, endpoint: client.baseUrl, credential, providerClient: ['127.0.0.1', 'localhost', '[::1]'].includes(new URL(invocation.backendUrl).hostname) ? providerClient() : undefined });
       return EXIT_OK;
   }
 }

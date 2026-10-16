@@ -3,9 +3,11 @@ import { createElement } from 'react';
 
 import type { LocalSessionCredential } from './credentials/local-session.js';
 import type { BackendClient } from './transport/backend-client.js';
+import type { ProviderClient } from './transport/provider-client.js';
 import { App } from './ui/App.js';
 
 export interface TuiOptions {
+  readonly providerClient?: ProviderClient;
   readonly client: BackendClient;
   readonly endpoint: string;
   /**
@@ -24,8 +26,8 @@ export interface TuiOptions {
  * Ctrl+C or Esc by the component, and unmounted here if the process is
  * interrupted from outside.
  */
-export function startTui({ client, endpoint, credential = null }: TuiOptions): Promise<void> {
-  const instance = render(createElement(App, { client, endpoint, authenticated: client.authenticated, sessionIssuedAt: credential?.issuedAt ?? null }));
+export function startTui({ client, endpoint, credential = null, providerClient }: TuiOptions): Promise<void> {
+  const instance = render(createElement(App, { client, endpoint, providerClient, authenticated: client.authenticated, sessionIssuedAt: credential?.issuedAt ?? null }));
 
   return new Promise<void>((resolve) => {
     const stop = (): void => {

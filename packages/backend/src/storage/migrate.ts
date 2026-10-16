@@ -101,6 +101,7 @@ export async function ensureCoreSchema(deps: MigrationDeps): Promise<MigrationRe
       fields: { version: current.version },
     });
     await hardenSessions(deps);
+    await migrateModelAttemptFacts(deps);
     await grantApplicationPrivileges(deps);
     return { status: current, durationMs: Date.now() - startedAt };
   }
@@ -141,6 +142,7 @@ export async function ensureCoreSchema(deps: MigrationDeps): Promise<MigrationRe
   });
 
   await hardenSessions(deps);
+    await migrateModelAttemptFacts(deps);
   await grantApplicationPrivileges(deps);
 
   const applied = await readSchemaStatus(deps.migrationDb);
@@ -213,4 +215,25 @@ async function hardenSessions(deps: MigrationDeps): Promise<void> {
   await tx.rows(SESSION_HARDENING_SQL);
   await tx.rows("INSERT INTO threadline.schema_migrations(id,store,version,checksum) VALUES(gen_random_uuid(),'postgres',2,$1)",[checksum]);
  });
+}
+
+// Additive M02 facts. Never infer possible charge from a status string or lose
+// an admitted reservation after a restart. Versions 1 and 2 remain byte-identical.
+const MODEL_ATTEMPT_FACTS_SQL = `ALTER TABLE threadline.model_requests
+ ADD COLUMN possible_charge boolean,
+ ADD COLUMN reserved_tokens bigint CHECK (reserved_tokens >= 0);`;
+async function migrateModelAttemptFacts(deps: MigrationDeps): Promise<void> {
+  await deps.migrationDb.withTransaction(async tx => {
+    await tx.rows('SELECT pg_advisory_xact_lock(73010402)');
+    const checksum = sha256Hex(MODEL_ATTEMPT_FACTS_SQL);
+    const rows = await tx.rows<{ checksum: string }>(
+      "SELECT checksum FROM threadline.schema_migrations WHERE store='postgres' AND version=3");
+    if (rows[0]) {
+      if (rows[0].checksum.trim() !== checksum)
+        throw new ThreadlineError('schema_incompatible', 'Model-attempt migration checksum differs.');
+      return;
+    }
+    await tx.rows(MODEL_ATTEMPT_FACTS_SQL);
+    await tx.rows("INSERT INTO threadline.schema_migrations(id,store,version,checksum) VALUES(gen_random_uuid(),'postgres',3,$1)", [checksum]);
+  });
 }

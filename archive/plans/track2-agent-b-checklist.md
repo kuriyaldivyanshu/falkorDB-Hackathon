@@ -68,27 +68,31 @@ Coordinate startup/API edits and shared types with one editor per file. Ask for 
 
 **Combined verification update — 15 October 2026:** the original transport dependency is resolved. `init`, explicit `admit`, `inspect` and the plain current-authority TUI run against actual backend routes. The backend bootstrap credential format is supported; request records preserve identity on retries. Initial admission binds six initial/both criteria (the seventh is changed-only), all eight public rules and the manifest digest. Fresh Compose setup, abrupt store kill/restart, actual CLI acceptance/retry/inspection and a PTY TUI/Esc check passed. See [full combined evidence](review/m01-integration-verification.md), [setup](../../docs/local-development.md) and [answered transport agreement](../../docs/m01-contract-agreement.md).
 
-Earlier lane-only test results used stale M00 dist and are superseded by the combined source build. All seven B tasks are now verified. No model calls were made; provider/checker execution remains later work. M01J05 setup documentation is complete but the actual merge remains pending. Proposed combined commit: `feat: persist local identity and accepted task authority`.
+Earlier lane-only test results used stale M00 dist and are superseded by the combined source build. All seven B tasks are now verified. No model calls were made; provider/checker execution remains later work. M01J05 is complete after PR #2 merged into `067f842`. Proposed combined commit: `feat: persist local identity and accepted task authority`.
 
 ### M02 — One owned provider turn with read-only tools
 
-**Depends on:** M01; shared types from M00. **Combined milestone result:** One real API-backed model/tool round trip, with guarded admission and persisted request/result identity.
+**Lane B: Harness/Frontend.** M02 verified with real Space Bunny inference, tools and terminal usage; OpenAI live-account access remains unclaimed.
 
-- [ ] **M02B01** Implement one OpenAI Responses driver behind a narrow provider interface, using the actual account-compatible chosen model; do not add a driver factory for every provider.
-- [ ] **M02B02** Implement caller-owned conversation reconstruction, streaming frame/tool-call correlation, terminal response handling, usage reporting and cancellation/unknown behavior.
-- [ ] **M02B03** Read `OPENAI_API_KEY` only in coordinator/provider code; redact it and avoid forwarding its environment to any execution helper.
-- [ ] **M02B04** Implement the bounded sequential model → validated tool → result → next-turn loop, with an abort path and maximum attempts/tools/wall time.
-- [ ] **M02B05** Create the actual small authored imperfect inventory-export candidate workspace from the manifest now, retaining its original seed template outside the mutable candidate and disclosing the UTC defect; protected assertions/receipt infrastructure come in M08. Implement `workspace.read`, `workspace.search` and `workspace.inspect` against those existing files with range/result limits, digests and explicit truncation.
-- [ ] **M02B06** Validate path traversal, symlink escape and unsupported encodings; use argument arrays for any search helper, never an interpolated shell command.
-- [ ] **M02B07** Display streamed visible text/tool activity in the plain TUI while retaining only allowed durable completed records. Mark partial/gapped outcomes honestly.
-- [ ] **M02B08** Expose only the three implemented read-only tools initially; the final eleven-tool registry is added as real implementations become available.
+- [x] **M02B01** Implement narrow owned provider transports and verify the user-selected account/model. User-approved scope: OpenAI Responses implementation plus OpenCode Go Chat Completions; Space Bunny is the live acceptance model. This does not claim live OpenAI account or subscription compatibility.
+- [x] **M02B02** Implement caller-owned conversation reconstruction, streaming frame/tool-call correlation, terminal response handling, usage reporting and cancellation/unknown behavior.
+- [x] **M02B03** Read `THREADLINE_OPENAI_API_KEY` only in coordinator/provider code; redact it and avoid forwarding its environment to any execution helper.
+- [x] **M02B04** Implement the bounded sequential model → validated tool → result → next-turn loop, with an abort path and maximum attempts/tools/wall time.
+- [x] **M02B05** Create the actual small authored imperfect inventory-export candidate workspace from the manifest now, retaining its original seed template outside the mutable candidate and disclosing the UTC defect; protected assertions/receipt infrastructure come in M08. Implement `workspace.read`, `workspace.search` and `workspace.inspect` against those existing files with range/result limits, digests and explicit truncation.
+- [x] **M02B06** Validate path traversal, symlink escape and unsupported encodings; use argument arrays for any search helper, never an interpolated shell command.
+- [x] **M02B07** Display streamed visible text/tool activity in the plain TUI while retaining only allowed durable completed records. Mark partial/gapped outcomes honestly.
+- [x] **M02B08** Expose only the three implemented read-only tools initially; the final eleven-tool registry is added as real implementations become available.
 
-**Before branch readiness:** coordinate with Agent A, then complete this milestone’s joint checks in [master section 5](track2-implementation-checklist.md#5-milestone-sequence). Proposed single combined commit: `feat: run journaled provider turns with read-only tools`.
+**Independent integration — 16 October 2026:** the combined tree supersedes the earlier lane handoff and blocked-state notes. See [full M02 evidence](review/m02-integration-verification.md) and the [current commands](../../docs/m02-development.md). All locally authorized gates in this lane are verified against real PostgreSQL/FalkorDB and the assembled loop. Ordinary tests: 212 passed; live tests: 33 passed, including real CLI/PTY, cancellation, private activity, receipt recovery and store-loss refusal. No paid inference or Git mutation.
+
+**B01 closed — 16 October 2026:** the user selected OpenCode Go / Space Bunny for the live gate. The complete model → workspace inspect/read → durable result → next model turn → final report flow passed. 3 completed model turns, 2 successful tools, 8,045 reported tokens, zero unresolved attempts/reservations; claim released. Final ordinary suite: 224 passing; isolated real-store suite: 34 passing. [Live acceptance](../../docs/m02-live-acceptance.md). OpenAI account/subscription access was not tested.
+
 
 ### M03 — Durable capture, artifact Sources and graph admission
 
 **Depends on:** M01; integrate with M02. **Combined milestone result:** Tool/model evidence has available original bytes and idempotent graph provenance.
 
+  **Retracted 16 October 2026:** the module tests pass, but this task requires *assembled* evidence — the real storage-backed `TurnGuard` driving a complete turn. That path is blocked by a defect in `packages/backend/src/domain/execution.ts` (`resolveReleaseFacts`), see the M02 continuation handoff. Unchecked until the assembled live trace runs.
 - [ ] **M03B01** Wire provider and read-tool lifecycle events into the capture service: complete invocation, result and final visible response keep their original correlation IDs.
 - [ ] **M03B02** Implement bounded stdout/message chunk capture plumbing for future commands, with declared ordering, 16 KiB chunks/250 ms flush and partial/gap behavior.
 - [ ] **M03B03** Add backend history/source range transport and CLI inspection that rechecks source permission on every read; raw arbitrary artifact paths are unavailable.

@@ -5,6 +5,8 @@ import { ConfigurationError } from '@threadline/shared';
 import { loadLocalEnvironment } from './environment.js';
 import { describeConfig, parseBackendConfig } from './config.js';
 import { createBackend, type Backend } from './index.js';
+import { defaultProviderDirectory } from './provider/credentials.js';
+import { loadSavedProviderConfig } from './provider/startup.js';
 import { createJsonLogger } from './log.js';
 
 /**
@@ -32,13 +34,16 @@ export async function main(): Promise<Backend> {
     throw error;
   }
 
+  const providerVaultDirectory = defaultProviderDirectory();
+  const savedProvider = loadSavedProviderConfig(config, providerVaultDirectory);
+  config = savedProvider.config;
   logger.log({
     level: 'info',
     message: 'Starting Threadline backend.',
     fields: describeConfig(config),
   });
 
-  const backend = createBackend({ config, logger });
+  const backend = createBackend({ config, logger, providerVaultDirectory, providerCredentialRevision: savedProvider.revision });
   installSignalHandlers(backend, logger);
   await backend.start();
   return backend;

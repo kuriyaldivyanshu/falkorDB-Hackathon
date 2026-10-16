@@ -1,5 +1,7 @@
 # Threadline technology decisions: what we actually need
 
+**16 October provider update:** the user authorized a narrow API-key provider extension after M02 integration. The existing Responses transport and a Chat Completions transport share the same guarded journal/tool loop. OpenCode Go and explicit custom endpoints are selectable; original one-provider statements below describe the earlier scope. See [current provider configuration](../../docs/provider-configuration.md). OAuth/native runtimes remain deferred.
+
 **MVP authority — 15 October 2026:** [Development blueprint](track2-development-blueprint.md) controls release scope: two contributors, one logical Builder and fresh successor, a protected service checker, eleven tools and no automatic model summaries. This document retains broader target/reference contracts; model Verifier, polling, native adapters and fixed four-day schedules are not MVP commitments.
 
 **Updated 14 October 2026. Proposed implementation baseline.** Build an owned harness; [scope](track2-harness-scope.md) and the [first vertical slice](track2-first-vertical-slice.md) govern. The release uses one bounded typed-tool loop and one Builder and service checker. Version compatibility and integrations remain acceptance gates; architecture recommendations are not measurements.
