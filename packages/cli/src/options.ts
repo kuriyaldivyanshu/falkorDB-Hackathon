@@ -43,6 +43,12 @@ const OPTION_SPEC = {
   timeout: { type: 'string' },
   'fixture-manifest': { type: 'string' },
   credential: { type: 'string' },
+  // Source inspection and durable replay (M03).
+  offset: { type: 'string' },
+  'max-bytes': { type: 'string' },
+  epoch: { type: 'string' },
+  'after-seq': { type: 'string' },
+  limit: { type: 'string' },
   'show-store-readiness': { type: 'boolean', default: false },
   help: { type: 'boolean', short: 'h', default: false },
 } satisfies ParseArgsOptionsConfig;
@@ -60,7 +66,10 @@ export type CliCommand =
   | 'run:prepare'
   | 'run:start'
   | 'run:inspect'
-  | 'run:cancel';
+  | 'run:cancel'
+  | 'source:inspect'
+  | 'source:read'
+  | 'history:replay';
 
 /** The full identity needed to start one run. Nothing here is defaulted. */
 export interface StartRunRequest {
@@ -92,7 +101,40 @@ export interface CliInvocation {
   /** Run id for `run:inspect` / `run:cancel`. */
   readonly runId: string | null;
   readonly cancelReason: string | null;
+  /** Source id for `source:inspect` / `source:read`. */
+  readonly sourceId: string | null;
+  /** Byte range for `source:read`; defaults to the start of the Source. */
+  readonly sourceOffset: number | null;
+  readonly sourceMaxBytes: number | null;
+  /** Durable replay cursor for `history:replay`. */
+  readonly replayEpoch: string | null;
+  readonly replayAfterSeq: number | null;
+  readonly replayLimit: number | null;
   readonly help: boolean;
+}
+
+/** `capture_policy.graph_replay_batch_events` and the shared range ceiling. */
+const REPLAY_MAX_PAGE = 100;
+const SOURCE_ROUTE_MAX_BYTES = 32_768;
+
+function readBoundedInteger(flag: string, raw: string | undefined, minimum: number, maximum: number): number {
+  if (raw === undefined || !/^-?\d+$/.test(raw.trim())) {
+    throw new UsageError(`${flag} needs a whole number.`);
+  }
+  const parsed = Number(raw.trim());
+  if (!Number.isSafeInteger(parsed) || parsed < minimum || parsed > maximum) {
+    throw new UsageError(`${flag} must be between ${minimum} and ${maximum}.`);
+  }
+  return parsed;
+}
+
+function readReplaySeq(raw: string | undefined): number {
+  const value = raw === undefined ? 0 : readBoundedInteger('--after-seq', raw, 0, Number.MAX_SAFE_INTEGER);
+  return value;
+}
+
+function readReplayLimit(raw: string | undefined): number | null {
+  return raw === undefined ? null : readBoundedInteger('--limit', raw, 1, REPLAY_MAX_PAGE);
 }
 
 export class UsageError extends Error {
@@ -124,6 +166,15 @@ Commands:
   run:start           Ask the backend to start one Builder run. Requires --project,
                       --task, --profile, --workspace, --request-id and both
                       expected revisions. Nothing is inferred.
+  source:inspect --project <uuid> <source-id>
+                   Read one captured Source's typed state. Absent, pending and
+                   unreadable are reported separately; no physical path is shown.
+  source:read --project <uuid> <source-id> [--offset <n>] [--max-bytes <n>]
+                   Read one bounded byte range, at most 32768 original bytes.
+  history:replay --project <uuid> --epoch <uuid> --after-seq <n> [--limit <n>]
+                   Request one bounded durable replay page. A gap is reported
+                   with refresh guidance rather than skipped.
+
   run:inspect <id>   Read the backend's durable run, claim, budget and attempts.
   run:cancel <id>    Request cancellation. An acknowledgement is not proof that
                       provider compute stopped.
@@ -161,12 +212,20 @@ Durable commands require a private local credential and a storage-ready backend:
 backend or removes persisted data. Manage the backend process in its own terminal.`;
 
 export function parseCliArgs(argv: readonly string[]): CliInvocation {
-  const parsed = parseArgs({
-    args: [...argv],
-    options: OPTION_SPEC,
-    allowPositionals: true,
-    strict: true,
-  });
+  // Wrapped rather than annotated so the literal option keys still infer.
+  // `parseArgs` raises a TypeError for an unknown flag or an ambiguous value
+  // such as `--offset -1`; both are usage problems and exit as one.
+  // Wrapped rather than annotated so the literal option keys still infer.
+  // `parseArgs` raises a TypeError for an unknown flag or an ambiguous value
+  // such as `--offset -1`; both are usage problems and exit as one.
+  const parse = () => parseArgs({ args: [...argv], options: OPTION_SPEC, allowPositionals: true, strict: true });
+  const parsed = (() => {
+    try {
+      return parse();
+    } catch (error) {
+      throw new UsageError(error instanceof Error ? error.message : 'The arguments could not be parsed.');
+    }
+  })();
 
   const { values, positionals } = parsed;
   const common = {
@@ -178,6 +237,12 @@ export function parseCliArgs(argv: readonly string[]): CliInvocation {
     requestTimeoutMs: readTimeout(values.timeout),
     fixtureManifestPath: values['fixture-manifest'] ?? DEFAULT_FIXTURE_MANIFEST_PATH,
     credentialPath: values.credential ?? DEFAULT_CREDENTIAL_PATH,
+    sourceId: null as string | null,
+    sourceOffset: null as number | null,
+    sourceMaxBytes: null as number | null,
+    replayEpoch: null as string | null,
+    replayAfterSeq: null as number | null,
+    replayLimit: null as number | null,
     showStoreReadiness: values['show-store-readiness'],
     contextWindowTokens: values['context-window'] === undefined ? null : readRevision('--context-window', values['context-window']),
     help: values.help,
@@ -217,6 +282,38 @@ export function parseCliArgs(argv: readonly string[]): CliInvocation {
       cancelReason: name === 'run:cancel' ? requireOption('--reason', values.reason) : null,
       ...common,
     };
+  }
+
+  if (name === 'source:inspect' || name === 'source:read' || name === 'history:replay') {
+    const projectId = values.project;
+    if (projectId === undefined || projectId.length === 0) {
+      throw new UsageError(`"${name}" needs --project <uuid>, for example: threadline ${name} --project <uuid> <id>`);
+    }
+    // `name` is narrowed to the three M03 commands by the enclosing condition.
+    const base = { command: name as CliCommand, echoText: null, start: null, runId: null, cancelReason: null, ...common };
+    if (name === 'history:replay') {
+      const epoch = values.epoch;
+      if (epoch === undefined || epoch.length === 0) {
+        throw new UsageError('"history:replay" needs --epoch <uuid> from a previously returned cursor.');
+      }
+      const afterSeq = readReplaySeq(values['after-seq']);
+      const limit = readReplayLimit(values.limit);
+      if (positionals.length > 1) throw new UsageError(`"${name}" takes no positional arguments.`);
+      return { ...base, replayEpoch: epoch, replayAfterSeq: afterSeq, replayLimit: limit };
+    }
+    const sourceId = positionals[1];
+    if (sourceId === undefined || sourceId.length === 0) {
+      throw new UsageError(`"${name}" needs the source id, for example: threadline ${name} --project <uuid> <source-id>`);
+    }
+    if (positionals.length > 2) {
+      throw new UsageError(`"${name}" takes one source id, received ${positionals.length - 2} extra arguments.`);
+    }
+    const offset = values.offset === undefined ? null : readBoundedInteger('--offset', values.offset, 0, Number.MAX_SAFE_INTEGER);
+    const maxBytes = values['max-bytes'] === undefined ? null : readBoundedInteger('--max-bytes', values['max-bytes'], 1, SOURCE_ROUTE_MAX_BYTES);
+    if (name === 'source:inspect' && (offset !== null || maxBytes !== null)) {
+      throw new UsageError('"source:inspect" reports state only; use "source:read" for a byte range.');
+    }
+    return { ...base, sourceId, sourceOffset: offset, sourceMaxBytes: maxBytes };
   }
 
   if (name === 'provider:setup' || name === 'provider:list' || name === 'tui' || name === 'health' || name === 'fixture' || name === 'init' || name === 'admit' || name === 'inspect') {

@@ -24,7 +24,7 @@ Coordinate startup/API edits and shared types with one editor per file. Ask for 
 - [x] **M00A06** Define the first versioned command/result/event TypeScript shapes and give Agent B a compiling import/example. Do not design every future API before coding.
 - [x] **M00A07** Keep API handlers thin and domain operations independent of HTTP. Create only directories needed by working code, rather than empty repositories for every table.
 
-**Agent A M00 verification note (15 October 2026).** M00A01–M00A07 verified in the combined working tree with `npm run build` (TypeScript 7.0.2, `strict` plus `noUncheckedIndexedAccess`) and `npm test -w @threadline/backend` (47 passing). The lane touched only `packages/shared/src` and `packages/backend/src` plus `packages/backend/test`. Fastify is imported only by `api/server.ts` and `api/routes.ts`; `domain/`, `events/` and `config.ts` contain no transport imports, and `packages/shared/src` imports only local modules and `node:crypto`. This lane note records the original handoff; the independent integration status below supersedes its pending-task list. Handoff and remaining requests: [`M00-HANDOFF-agent-a.md`](../../M00-HANDOFF-agent-a.md).
+**Agent A M00 verification note (15 October 2026).** M00A01–M00A07 verified in the combined working tree with `npm run build` (TypeScript 7.0.2, `strict` plus `noUncheckedIndexedAccess`) and `npm test -w @threadline/backend` (47 passing). The lane touched only `packages/shared/src` and `packages/backend/src` plus `packages/backend/test`. Fastify is imported only by `api/server.ts` and `api/routes.ts`; `domain/`, `events/` and `config.ts` contain no transport imports, and `packages/shared/src` imports only local modules and `node:crypto`. This lane note records the original handoff; the independent integration status below supersedes its pending-task list. The redundant lane handoff was subsequently removed; [combined M00 evidence](review/m00-integration-verification.md) remains.
 
 **Before branch readiness:** coordinate with Agent B, then complete this milestone’s joint checks in [master section 5](track2-implementation-checklist.md#5-milestone-sequence). Proposed single combined commit: `feat: scaffold local backend and terminal interface`.
 
@@ -52,7 +52,7 @@ Coordinate startup/API edits and shared types with one editor per file. Ask for 
 
 The initial lane handoff left A04/A05 unverified. Combined integration reproduced and fixed revoked-session authentication, non-sliding idle expiry, incomplete graph topology, non-idempotent settlement and owner lookup after adding a second member. All eight A tasks now have executed real-store evidence, including session expiry/revocation, lost acknowledgement, pre-graph crash recovery, concurrent retries, original-source access and missing/duplicate current-version denial. See [the combined report](review/m01-integration-verification.md) and [implemented transport agreement](../../docs/m01-contract-agreement.md).
 
-The original [Agent A handoff](../../M01-HANDOFF-agent-a.md) remains historical. Its fake `no-run-accepted-goal-only` marker was removed: graph Task.run_id is absent and SQL message.run_id is NULL until M02 creates a real execution Run. No provider credential is required for M01. M01J05 is complete after PR #2 merged into `067f842`.
+The redundant original Agent A handoff was removed after integration. Its fake `no-run-accepted-goal-only` marker was removed: graph Task.run_id is absent and SQL message.run_id is NULL until M02 creates a real execution Run. No provider credential is required for M01. M01J05 is complete after PR #2 merged into `067f842`.
 
 ### M02 — One owned provider turn with read-only tools
 
@@ -71,18 +71,18 @@ The original [Agent A handoff](../../M01-HANDOFF-agent-a.md) remains historical.
 
 ### M03 — Durable capture, artifact Sources and graph admission
 
-**Depends on:** M01; integrate with M02. **Combined milestone result:** Tool/model evidence has available original bytes and idempotent graph provenance.
+**Combined integration complete — 16 October 2026.** Both lanes and joint gates are verified against the assembled application. This final status supersedes intermediate M03 handoff failures and module-only evidence.
 
-- [ ] **M03A01** Implement immutable content-addressed artifact storage with safe project-relative locators, digest/size validation, atomic publication and availability states.
-- [ ] **M03A02** Implement capture append with stable per-session sequence positions and typed event versions; persist critical intent/result boundaries before dependent success.
-- [ ] **M03A03** Write capture/outbox rows transactionally and lease/replay them with the profile's polling, batch, timeout and retry limits.
-- [ ] **M03A04** Admit Source, Message, Observation and task-bound Attempt episodes deterministically; retain invocation/outcome/candidate/environment/revision identity.
-- [ ] **M03A05** Map registered-command failures, diagnostic nonzero exits and unknown effects into useful observed episodes without depending on model checkpoint text or inventing root cause.
-- [ ] **M03A06** Implement SQL-to-graph idempotency and ambiguous graph-write receipt reconciliation. Only known replay-safe operations get automatic retries.
-- [ ] **M03A07** Implement ordered graph Event projection into SQL views with cursor advancement in the same SQL projection transaction; notifications are wakeups, not delivery truth.
-- [ ] **M03A08** Record gaps, missing artifact bytes, ingestion lag and pending admission explicitly. Stop admission on SQL outage; do not promise an offline spool.
+- [x] **M03A01** Implement immutable content-addressed artifact storage with safe project-relative locators, digest/size validation, atomic publication and availability states.
+- [x] **M03A02** Implement capture append with stable per-session sequence positions and typed event versions; persist critical intent/result boundaries before dependent success.
+- [x] **M03A03** Write capture/outbox rows transactionally and lease/replay them with the profile's polling, batch, timeout and retry limits.
+- [x] **M03A04** Admit Source, Message, Observation and task-bound Attempt episodes deterministically; retain invocation/outcome/candidate/environment/revision identity.
+- [x] **M03A05** Map registered-command failures, diagnostic nonzero exits and unknown effects into useful observed episodes without depending on model checkpoint text or inventing root cause.
+- [x] **M03A06** Implement SQL-to-graph idempotency and ambiguous graph-write receipt reconciliation. Only known replay-safe operations get automatic retries.
+- [x] **M03A07** Implement ordered graph Event projection into SQL views with cursor advancement in the same SQL projection transaction; notifications are wakeups, not delivery truth.
+- [x] **M03A08** Record gaps, missing artifact bytes, ingestion lag and pending admission explicitly. Stop admission on SQL outage; do not promise an offline spool.
 
-**Before branch readiness:** coordinate with Agent B, then complete this milestone’s joint checks in [master section 5](track2-implementation-checklist.md#5-milestone-sequence). Proposed single combined commit: `feat: capture sourced runtime evidence and reconcile graph admission`.
+[Executed evidence](review/m03-integration-verification.md) records production provider capture, real artifact Sources, digest-bound graph admission/reconciliation, transactional projection, permission denial, restart recovery, cursor reconnect and actual PTY states. The affected ordinary set passed 155 checks; store/PTY acceptance covered 77 distinct cases across runs, with final focused recovery/cardinality checks. [Current commands and limitations](../../docs/m03-development.md). No M04 task or Git publication is claimed.
 
 ### M04 — Structured checkpoints and tactical state
 

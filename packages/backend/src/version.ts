@@ -5,4 +5,4 @@
  * packaging work (M13). This constant exists only so health responses and
  * startup logs can identify the running code.
  */
-export const THREADLINE_BACKEND_VERSION = '0.0.0-m02';
+export const THREADLINE_BACKEND_VERSION = '0.0.0-m03';

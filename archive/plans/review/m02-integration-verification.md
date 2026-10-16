@@ -1,5 +1,7 @@
 # M02 independent integration verification
 
+**Repository cleanup — 16 October 2026:** permanent package test suites and npm test scripts were later removed at the user's request. Test counts and commands below record earlier verification, not currently available suites.
+
 **Final status — 16 October 2026:** M02 is complete within the user-approved API-key provider scope. All checklist gates are verified; the actual Space Bunny model/read-tool/next-turn/final-response test passed. Final regressions: 224 ordinary tests and 34 real-store cases. [Live evidence, repaired defects and failed-run accounting](../../../docs/m02-live-acceptance.md). The original local-only snapshots below retain their historical results and deferrals. No Git integration step was performed.
 
 Verified locally on 16 October 2026, from merged M01 base `067f842` on `main`. Agent A/B changes and the pre-existing dirty documentation were retained. No branch, stage, commit, push or paid inference was performed during integration.

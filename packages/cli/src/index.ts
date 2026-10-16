@@ -4,6 +4,8 @@ import { runFixturePreview } from './fixture-command.js';
 import { HELP_TEXT, UsageError, parseCliArgs, type CliInvocation } from './options.js';
 import { EXIT_FAILURE, EXIT_OK, runEcho, runHealth } from './one-shot.js';
 import { createBackendClient } from './transport/backend-client.js';
+import { createSourceClient } from './transport/source-client.js';
+import { historyReplayCommand, sourceInspectCommand, sourceReadCommand } from './ui/source-commands.js';
 import { readLocalSessionCredential } from './credentials/local-session.js';
 import { describeCause } from './transport/errors.js';
 import { createRunClient } from './transport/run-client.js';
@@ -64,6 +66,12 @@ async function main(argv: readonly string[]): Promise<number> {
     requestTimeoutMs: invocation.requestTimeoutMs,
     token: credential?.token ?? null,
   });
+  const sourceClient = (): ReturnType<typeof createSourceClient> =>
+    createSourceClient({
+      baseUrl: invocation.backendUrl,
+      timeoutMs: invocation.requestTimeoutMs,
+      token: credential?.token ?? null,
+    });
   const runClient = createRunClient({
     baseUrl: invocation.backendUrl,
     requestTimeoutMs: invocation.requestTimeoutMs,
@@ -89,12 +97,18 @@ async function main(argv: readonly string[]): Promise<number> {
       return runInspectCommand(runClient, invocation, write);
     case 'run:cancel':
       return runCancelCommand(runClient, invocation, write);
+    case 'source:inspect':
+      return sourceInspectCommand(sourceClient(), invocation, write);
+    case 'source:read':
+      return sourceReadCommand(sourceClient(), invocation, write);
+    case 'history:replay':
+      return historyReplayCommand(sourceClient(), invocation, write);
     case 'health':
       return runHealth(client, write, invocation.showStoreReadiness, credential?.token ?? null);
     case 'echo':
       return runEcho(client, invocation.echoText ?? '', write);
     case 'tui':
-      await startTui({ client, endpoint: client.baseUrl, credential, providerClient: ['127.0.0.1', 'localhost', '[::1]'].includes(new URL(invocation.backendUrl).hostname) ? providerClient() : undefined });
+      await startTui({ client, endpoint: client.baseUrl, credential, sourceClient: sourceClient(), providerClient: ['127.0.0.1', 'localhost', '[::1]'].includes(new URL(invocation.backendUrl).hostname) ? providerClient() : undefined });
       return EXIT_OK;
   }
 }

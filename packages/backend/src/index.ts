@@ -292,6 +292,7 @@ export function createBackend(deps: BackendDeps): Backend {
     const reconciled = await services.reconcile(bootstrap.tenantId, bootstrap.projectId);
     if (reconciled.unresolved > 0 || reconciled.quarantined > 0)
       throw new ThreadlineError('authority_unavailable','Pending admissions need reconciliation before startup can complete.');
+    services.startCapture(bootstrap.tenantId);
     logger.log({
       level: 'info',
       message: 'Storage ready.',
@@ -303,6 +304,7 @@ export function createBackend(deps: BackendDeps): Backend {
     await runtime?.close();
     runtime = null;
     providerSettings = null;
+    await services?.stopCapture();
     services = null;
     const stores = [graphStore, database, migrationDatabase];
     graphStore = null;

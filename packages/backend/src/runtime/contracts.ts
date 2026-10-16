@@ -149,7 +149,7 @@ export interface TurnGuard {
    *
    * If this rejects, no request has been sent and no usage can exist.
    */
-  authorizeAndJournal(prepared: PreparedAttempt): Promise<void>;
+  authorizeAndJournal(prepared: PreparedAttempt): Promise<{ modelRequestId: string; inputArtifactId: string } | void>;
 
   /**
    * Records an observed transport fact. Synchronous by contract, matching the
@@ -197,6 +197,7 @@ export interface TerminalRecord {
 }
 
 export interface TerminalSettlement {
+  readonly responseArtifactId?: string | null;
   readonly state: AttemptState;
   readonly usage: UsageObservation;
   /** True when the reservation was retained because usage is unknown. */

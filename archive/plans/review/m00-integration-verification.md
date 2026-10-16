@@ -1,5 +1,7 @@
 # M00 independent integration verification
 
+**Repository cleanup — 16 October 2026:** permanent package test suites and npm test scripts were later removed at the user's request. Test counts and commands below record earlier verification, not currently available suites.
+
 **15 October 2026. Verified against the combined working tree on `main` (reported baseline `91f8af4`).** This is M00 scaffold evidence only. No database, model/API inference, memory continuity, sandboxed coding tool or protected completion claim is established here. No branch, staging, commit, push or merge was performed in this verification pass.
 
 ## Verdict and checkpoint status

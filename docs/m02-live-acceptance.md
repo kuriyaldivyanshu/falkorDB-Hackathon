@@ -1,5 +1,7 @@
 # M02 live model and read-tool acceptance
 
+**Repository cleanup — 16 October 2026:** permanent package test suites and npm test scripts were later removed at the user's request. Test counts and commands below record earlier verification, not currently available suites.
+
 Verified 16 October 2026. The user explicitly requested completing M02 and selected their OpenCode Go account and `space-bunny` model for testing. All M02 A/B/joint checkpoints are now verified within that approved scope. OpenAI Responses remains implemented and fixture-tested; live OpenAI account access and subscription/OAuth support are not claimed. No branch, commit or push was performed.
 
 ## Passing run

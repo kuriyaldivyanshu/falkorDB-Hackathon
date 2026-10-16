@@ -6,8 +6,8 @@
  * through the interface.
  *
  * These paths were read from the backend's own route table
- * (`packages/backend/src/api/routes.ts`); `test/integration.test.mjs` asserts
- * the two lists stay identical.
+ * (`packages/backend/src/api/routes.ts`); keep both registries aligned when
+ * changing transport paths.
  */
 export const BACKEND_ROUTES = {
   health: '/healthz',
@@ -23,6 +23,7 @@ export const BACKEND_ROUTES = {
   runCancel: '/runs/cancel',
   runInspect: '/runs/:runId',
   runHeartbeat: '/runs/:runId/heartbeat',
+
 } as const;
 
 export type BackendRouteName = keyof typeof BACKEND_ROUTES;
@@ -44,3 +45,10 @@ export function routePath(template: string, params: Readonly<Record<string, stri
 }
 
 export const ACCEPT_EVENT_STREAM = 'text/event-stream';
+/** Registered by the backend source-route module rather than its base route table. */
+export const SOURCE_BACKEND_ROUTES = {
+  sourceInspect:'/projects/:projectId/sources/:sourceId',
+  sourceRange:'/projects/:projectId/sources/:sourceId/range',
+  historyReplay:'/projects/:projectId/history/replay',
+  historyEvents:'/projects/:projectId/history/events',
+} as const;

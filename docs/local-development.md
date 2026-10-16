@@ -71,28 +71,16 @@ The TUI displays backend connection/component state and the current goal, freshn
 
 ## Verification
 
+The package test suites were removed at the user's request. Current checks build the workspace and exercise the running backend:
+
 ```sh
-npm test
+npm run build
+node packages/cli/dist/index.js health --show-store-readiness
+node packages/cli/dist/index.js init
+node packages/cli/dist/index.js inspect
 ```
 
-This builds sources before tests, avoiding stale `dist` evidence. Live-store cases are explicitly skipped unless opted in. To run them, provision dedicated PostgreSQL/FalkorDB stores and a restricted app role, then set the following environment variables through your private shell/configuration:
-
-```text
-THREADLINE_LIVE=1
-THREADLINE_LIVE_PGPORT=<isolated-host-port>
-THREADLINE_LIVE_PGDATABASE=<isolated-database>
-THREADLINE_LIVE_PGUSER=<restricted-app-role>
-THREADLINE_LIVE_PGPASSWORD=<private-app-password>
-THREADLINE_LIVE_PGMIGRATIONUSER=<schema-owner>
-THREADLINE_LIVE_PGMIGRATIONPASSWORD=<private-owner-password>
-THREADLINE_LIVE_GRAPHPORT=<isolated-host-port>
-THREADLINE_LIVE_DATA_DIR=<private-persistent-test-directory>
-THREADLINE_LIVE_TENANT_SLUG=<unique-test-tenant>
-```
-
-Then run `npm test`. These tests create real identities/projects/admissions; never point them at a production database. Keep tenant slug and credential directory paired across retries. The CLI live case creates its own isolated tenant/directory and launches child CLIs without database/provider credentials.
-
-M01 evidence includes actual fresh Compose volumes, SIGKILL/restart persistence, authenticated CLI admission, source access denial, current-version corruption denial, same-request concurrency, session expiry/revocation and simulated lost-ACK/pre-graph-crash recovery against real stores. No model request was made.
+Start the backend first using the setup above. `inspect` requires an accepted task. [Earlier verification evidence](../archive/plans/review/m01-integration-verification.md) records checks executed before the test files were removed; those old test commands are historical, not current checkout instructions.
 
 ## Limits and troubleshooting
 

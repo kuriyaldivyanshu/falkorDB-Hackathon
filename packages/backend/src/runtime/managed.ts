@@ -1,3 +1,5 @@
+import { createProviderCapture } from '../capture/provider-capture.js';
+import type { EvidenceReferences } from '@threadline/shared';
 import { randomUUID } from 'node:crypto';
 import { mkdir, realpath } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -12,7 +14,9 @@ import type { ProviderId, ProviderApi } from '../provider/catalog.js';
 import { createResponsesDriver, type ResponsesDriver } from '../provider/responses.js';
 import { prepareCandidateWorkspace } from '../workspace/candidate.js';
 import { createWorkspaceReader } from '../workspace/read-only.js';
-import { READ_ONLY_FUNCTIONS } from '../workspace/tools.js';
+import { MODEL_TOOL_FUNCTIONS } from '../capture/tools.js';
+import { createSourceRetrieval } from '../capture/sources.js';
+import { MODEL_FACING_SOURCE_RANGE_MAX_BYTES } from '@threadline/shared';
 import { createRuntimeLoop } from './loop.js';
 import type { RuntimeActivity, RunContext, ClaimState } from './contracts.js';
 
@@ -125,15 +129,49 @@ export function createManagedRuntime(deps: {
           if (abort.signal.aborted) throw new ThreadlineError('unauthorized', 'The run is cancelled.');
           await deps.services.authority(principal, run.projectId);
         } });
+        // The real Source service backs the fourth tool. It is composed rather
+        // than stubbed, so the model-facing range cap and the membership recheck
+        // on every read are the ones that actually apply.
+        const sourceService = deps.services.sources();
+        const sourceRetrieval = sourceService === null
+          ? undefined
+          : createSourceRetrieval({
+              source: sourceService,
+              reader: {
+                tenantId: principal.tenantId,
+                projectId: run.projectId,
+                userId: principal.userId,
+                userSessionId: principal.sessionId,
+                agentSessionId: run.sessionId,
+              },
+              // The model-facing envelope, not the 32 KiB inspection range.
+              maxBytes: MODEL_FACING_SOURCE_RANGE_MAX_BYTES,
+            });
         const done = (async () => {
           let status: 'completed' | 'paused' = 'paused';
           try {
             const authority = await deps.services.authority(principal, run.projectId);
-            const loop = createRuntimeLoop({ driver: deps.driver ?? (provider.providerApi === 'responses'
+            const evidence = new Map<string, EvidenceReferences>();
+            const capture = createProviderCapture({ capture: deps.services.captureStore(),
+              correlation: { tenantId: principal.tenantId, projectId: run.projectId, runId: run.runId,
+                agentSessionId: run.sessionId, taskId: run.taskId, graphEpoch: run.graphEpoch,
+                acceptedRevision: claim.revision, requirementRevision: claim.requirementRevision },
+              resolveReferences: async prepared => {
+                const refs = evidence.get(prepared.attemptId);
+                if (!refs) throw new Error('The durable model identity is unavailable.');
+                return refs;
+              } });
+            const loop = createRuntimeLoop({ capture,
+              onJournalled: (prepared, ids) => { evidence.set(prepared.attemptId, ids); },
+              onSettled: (prepared, responseArtifactId) => {
+                evidence.set(prepared.attemptId, { ...evidence.get(prepared.attemptId), responseArtifactId });
+              },
+              driver: deps.driver ?? (provider.providerApi === 'responses'
               ? createResponsesDriver({ apiKey: provider.apiKey, baseUrl: provider.baseUrl, sessionId: run.sessionId })
               : provider.providerApi === 'anthropic-messages' ? createAnthropicDriver({ apiKey: provider.apiKey, baseUrl: provider.baseUrl })
               : createChatCompletionsDriver({ apiKey: provider.apiKey, baseUrl: provider.baseUrl, sessionId: run.sessionId })),
-              tools: reader, guard, sink: emit, tools4Provider: READ_ONLY_FUNCTIONS });
+              tools: reader, guard, sink: emit, tools4Provider: MODEL_TOOL_FUNCTIONS,
+              ...(sourceRetrieval === undefined ? {} : { sources: sourceRetrieval }) });
             const result = await loop.run({ context, claim, budget: { ...run.budget,
               deadlineMs: Math.max(0, Date.parse(run.budget.deadlineAt) - Date.now()) },
               policy: exec.limits, apiKey: provider.apiKey }, [{ role: 'user', content: JSON.stringify({

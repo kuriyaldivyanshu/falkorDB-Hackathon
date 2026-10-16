@@ -1,0 +1,37 @@
+# M03 Agent B — runtime capture and source inspection
+
+You own M03B01–M03B07. Read the [shared brief](track2-m03-shared-brief.md) first. Work from merged `main` at `d09f35e` or record any newer base explicitly. Deliver runtime capture consumers, bounded source inspection and reconnecting TUI behavior against A's real service ports.
+
+## Start and agree the contract
+
+Inspect the working tree, `runtime/loop.ts`, `runtime/history.ts`, provider lifecycle/terminal types, the tool registry, CLI transport and SSE/UI reducers. Read A's existing durable journal/capture code to understand where evidence already exists. Preserve other edits.
+
+Review A's five shared-contract decisions and supply a compiling consumer before integrating the loop or API. Agree endpoint paths, wire tool name, range encoding, statuses and replay cursor format. Existing routes are unversioned. Keep contract-dependent features pending until the port exists; do not use stale compiled output or guessed response shapes as verification.
+
+You can implement isolated buffering and UI state reducers while A builds storage. Ask A to apply changes in their owned journal, domain guard and composition files. You own new route modules, existing event-stream behavior and CLI integration; transport modules consume A's services and enforce authenticated typed boundaries.
+
+## Implement in this order
+
+1. **M03B01 — lifecycle capture adapters.** Wire exact permitted model input, complete terminal visible response/tool batch, tool intent and tool result to A's capture service with original request/attempt/call IDs. Extend the existing pipeline rather than creating parallel history. Preserve the intent-before-execution/result-before-next-turn gates and all-or-nothing tool-batch release. Native Anthropic currently buffers a complete response; do not advertise unsupported streaming. Key setup, validation, headers and hidden reasoning never enter capture.
+2. **M03B02 — bounded chunk plumbing.** Implement an injectable buffer for future stdout and visible messages: maximum 16 KiB chunks and a 250 ms flush, with bounded total pending bytes and explicit sequence/partial/gap semantics. Define UTF-8 and timer behavior precisely, including oversized input, slow persistence, interruption and bounded shutdown. Use deterministic clock/scheduler tests, not long sleeps. This creates no executable command/shell tool. Persist assembled evidence at meaningful boundaries rather than one SQL/graph mutation per text token.
+3. **M03B03 — source/history transport.** Add route modules and plain CLI inspection using A's scoped services. Validate source IDs, offsets, ranges and history pagination; recheck Source permissions on every read. Return typed missing/denied/pending/corrupt states without exposing physical paths or leaking foreign Source existence. Match A's lossless byte-range encoding and report digest, total bytes, returned range and truncation. Keep JSON/log output bounded and free of tokens.
+4. **M03B04 — model source retrieval.** Expose only `memory.retrieve(mode=source)` at this milestone, with a maximum 32 KiB range. Server-owned context supplies tenant/project/run/session and authority. Reject unsupported search mode and unknown tool names before storage access. Retain the three existing workspace tools; update exact tool-exposure assertions deliberately for the fourth capability. Route through the normal guarded tool intent/result lifecycle and count its schema/results in the existing budget. Missing or denied content is not a successful empty source.
+5. **M03B05 — durable reconnect.** Build cursor reconnect over A's persisted projections. Preserve the distinction between process-local M02 activity hints and durable replay; do not reuse process-local sequence numbers as durable cursors or promise token replay. Reauthenticate/re-authorize private delivery, including resumed events and revoked sessions. Retain FIFO behavior, bounded coalescing/queues and slow-consumer closure from the merged SSE fixes. Catch-up to live delivery must not silently skip the handoff window; use A's replay service contract. Handle invalid/foreign/stale-epoch cursors and missing history explicitly, with refresh guidance.
+6. **M03B06 — honest UI states.** Display capture pending, available, missing/partial and failed admission separately from tool success, run state and accepted task truth. Show Source IDs/range inspection and reconnect/gap status in the existing plain TUI. Backend remains authoritative; frontend reducers do not invent accepted state or retry inference. Verify terminal cleanup, bounded activity and no key leakage with an actual PTY.
+7. **M03B07 — scope audit.** Verify only these capabilities are advertised. Keep full old transcripts out of model context; no graph renderer, checkpoint tool, search retrieval, summarizer, editing, shell, spawning or OAuth is introduced. Document the working commands and limitations in the existing current development guide when implementation is integrated.
+
+## Assembled verification ownership
+
+Own the M03 assembled real-store test, using an explicitly injected provider and each case's own tenant/data directory. Reuse current test setup conventions; expose documented environment options instead of depending on another person's `.env`, hardcoded container identity or private `/tmp` script. Live-store opt-in skips remain explicit. Providers must make zero external requests during ordinary acceptance.
+
+Exercise a complete model → workspace read → source retrieval → next model → final report. Inspect actual durable bytes, capture IDs/positions, graph provenance, projected history and CLI response. Work with A to run crash-after-SQL and crash-after-graph/no-ACK cases, duplicate/conflicting delivery, synthetic artifact removal, SQL outage and permission revocation. Assert tools are not released after incomplete evidence. Add reconnect cases for ordered catch-up/live handoff, gap/epoch handling, authorization and bounded backlog; demonstrate the plain TUI in a PTY. Module-only success does not close these assembled gates.
+
+Build changed sources before running compiled tests. Run affected tests and broaden only for shared contracts/composition/migration risk. Do not rerun unrelated suites or perform paid/live account validation. Preserve development volumes, owner credentials and the authored fixture defect.
+
+## Checklist and handoff
+
+Mark [your checklist](../track2-agent-b-checklist.md#m03--durable-capture-artifact-sources-and-graph-admission) only after the actual required behavior is observed. Name every unverified subgate and its owner. Integration reconciles the master/joint checks. Confirm the backend was rebuilt from current sources rather than a previous milestone before reporting end-to-end success.
+
+When stuck, inspect `archive/pi-main` for runtime/provider/UI patterns and `archive/codex` for event/tool lifecycle patterns; consult `archive/notes` and `archive/plans` for the relevant decision. Reuse ideas selectively through Threadline's owned ports. Historical RLM/prime-agent designs do not change scope or justify copying unrelated subsystems.
+
+Return in chat: starting SHA; task IDs/evidence; changed paths; public contract usage and A agreements; commands/results/skips; PTY/store observations; excluded features and named remaining gates; and combined integration readiness. Neither commit nor add standalone handoff/testing scripts solely for this report.

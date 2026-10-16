@@ -90,18 +90,17 @@ Earlier lane-only test results used stale M00 dist and are superseded by the com
 
 ### M03 — Durable capture, artifact Sources and graph admission
 
-**Depends on:** M01; integrate with M02. **Combined milestone result:** Tool/model evidence has available original bytes and idempotent graph provenance.
+**Combined integration complete — 16 October 2026.** Both lanes and joint gates are verified against the assembled application. This final status supersedes intermediate M03 handoff failures and module-only evidence.
 
-  **Retracted 16 October 2026:** the module tests pass, but this task requires *assembled* evidence — the real storage-backed `TurnGuard` driving a complete turn. That path is blocked by a defect in `packages/backend/src/domain/execution.ts` (`resolveReleaseFacts`), see the M02 continuation handoff. Unchecked until the assembled live trace runs.
-- [ ] **M03B01** Wire provider and read-tool lifecycle events into the capture service: complete invocation, result and final visible response keep their original correlation IDs.
-- [ ] **M03B02** Implement bounded stdout/message chunk capture plumbing for future commands, with declared ordering, 16 KiB chunks/250 ms flush and partial/gap behavior.
-- [ ] **M03B03** Add backend history/source range transport and CLI inspection that rechecks source permission on every read; raw arbitrary artifact paths are unavailable.
-- [ ] **M03B04** Implement `memory.retrieve(mode=source)` with source ID, byte offset and at most 32 KiB, returning digest/size/range/truncation/status.
-- [ ] **M03B05** Implement SSE cursor reconnect using persisted projections once available; use bounded frontend event buffers and show gaps requiring refresh.
-- [ ] **M03B06** Display capture pending/available/missing status separately from task truth and successful tool status.
-- [ ] **M03B07** Do not add graph rendering, full transcript injection or token-by-token SQL/graph writes to this stage.
+- [x] **M03B01** Wire provider and read-tool lifecycle events into the capture service: complete invocation, result and final visible response keep their original correlation IDs.
+- [x] **M03B02** Implement bounded stdout/message chunk capture plumbing for future commands, with declared ordering, 16 KiB chunks/250 ms flush and partial/gap behavior.
+- [x] **M03B03** Add backend history/source range transport and CLI inspection that rechecks source permission on every read; raw arbitrary artifact paths are unavailable.
+- [x] **M03B04** Implement `memory.retrieve(mode=source)` with source ID, byte offset and at most 32 KiB, returning digest/size/range/truncation/status.
+- [x] **M03B05** Implement SSE cursor reconnect using persisted projections once available; use bounded frontend event buffers and show gaps requiring refresh.
+- [x] **M03B06** Display capture pending/available/missing status separately from task truth and successful tool status.
+- [x] **M03B07** Do not add graph rendering, full transcript injection or token-by-token SQL/graph writes to this stage.
 
-**Before branch readiness:** coordinate with Agent A, then complete this milestone’s joint checks in [master section 5](track2-implementation-checklist.md#5-milestone-sequence). Proposed single combined commit: `feat: capture sourced runtime evidence and reconcile graph admission`.
+[Executed evidence](review/m03-integration-verification.md) records production provider capture, real artifact Sources, digest-bound graph admission/reconciliation, transactional projection, permission denial, restart recovery, cursor reconnect and actual PTY states. The affected ordinary set passed 155 checks; store/PTY acceptance covered 77 distinct cases across runs, with final focused recovery/cardinality checks. [Current commands and limitations](../../docs/m03-development.md). No M04 task or Git publication is claimed.
 
 ### M04 — Structured checkpoints and tactical state
 
