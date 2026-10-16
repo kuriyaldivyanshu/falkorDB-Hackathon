@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Threadline local coding harness \u2014 M02 journaled read-only execution (FalkorDB Track 2 MVP)",
+  "description": "Threadline local coding harness — M02 journaled read-only execution (FalkorDB Track 2 MVP)",
   "license": "UNLICENSED",
   "engines": {
     "node": ">=22"
@@ -14,8 +14,7 @@
   "scripts": {
     "build": "tsc -b",
     "db:setup": "npm run build && node packages/backend/dist/src/setup-local-db.js",
-    "clean": "tsc -b --clean",
-    "test": "npm run build && npm test --workspaces --if-present"
+    "clean": "tsc -b --clean"
   },
   "devDependencies": {
     "@types/node": "^26.6.5",

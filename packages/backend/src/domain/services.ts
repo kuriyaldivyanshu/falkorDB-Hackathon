@@ -1,3 +1,4 @@
+import { createCaptureWorker } from '../capture/worker.js';
 import { ThreadlineError } from '@threadline/shared';
 
 import type { BackendConfig } from '../config.js';
@@ -23,7 +24,13 @@ import {
 } from './execution.js';
 import { createArtifactWriter, type ArtifactWriter } from '../storage/artifacts.js';
 import { createExecutionRegistry, type ExecutionRegistry } from '../storage/execution.js';
+import { createCaptureStore, type CaptureStore } from '../storage/capture.js';
+import { createGraphAdmitter, type GraphAdmitter } from '../storage/graph-admission.js';
+import { createGraphDeliverer, reconcileQuarantined } from '../storage/graph-delivery.js';
+import { createProjectionService, type ProjectionService } from '../storage/projection.js';
 import { ModelRequestJournal } from '../storage/model-requests.js';
+import { createSourceService } from '../storage/sources.js';
+import type { ReplayService, SourceService } from '@threadline/shared';
 import type { ClaimState, RunContext, TurnGuard } from '../runtime/contracts.js';
 import type { CancelRunOutcome, RunInspectView, RunStartOutcome } from '@threadline/shared';
 import type { GraphStore } from '../storage/graph.js';
@@ -86,6 +93,18 @@ export interface ExecutionSurface {
   turnGuard(scope: RunContext, claim: ClaimState): TurnGuard;
 }
 
+/**
+ * SQL-to-graph delivery, admission and projection, as one composed surface.
+ */
+export interface GraphProjectionSurface {
+  readonly admitter: GraphAdmitter;
+  readonly projection: ProjectionService;
+  /** Builds the outbox deliverer that admits captures. */
+  readonly deliverer: ReturnType<typeof createGraphDeliverer>;
+  /** Reconciles a quarantined delivery against its receipt. */
+  reconcile: typeof reconcileQuarantined;
+}
+
 export interface ApplicationServices {
   /** Live readiness, recomputed on each read. */
   readiness(): StorageReadiness;
@@ -116,8 +135,33 @@ export interface ApplicationServices {
    * Created only when storage is ready; absent storage means no run can start.
    */
   execution(): ExecutionSurface | null;
+  /**
+   * The real Source service, or `null` before storage is ready.
+   *
+   * Agent B's routes and the `memory.retrieve` tool consume this. It is the same
+   * object the tests exercise against real stores, not a test double, so the
+   * permission and availability rules that run are the ones that were proven.
+   */
+  sources(): SourceService | null;
+  /**
+   * The typed `ReplayService`, or `null` before storage is ready.
+   *
+   * Explicitly declared so consumers call a real member rather than probing the
+   * services object structurally.
+   */
+  replay(): ReplayService | null;
+  /**
+   * The durable capture boundary Agent B's runtime adapter captures model
+   * evidence through. Typed and explicit, never an ad-hoc write.
+   */
+  captureStore(): CaptureStore;
+  /** SQL-to-graph admission plus the projection that feeds replay. */
+  graph(): GraphProjectionSurface | null;
   /** Builds the execution surface once stores are ready. Idempotent. */
   bootstrapExecution(): void;
+  startCapture(tenantId: string): void;
+  flushCapture(): Promise<void>;
+  stopCapture(): Promise<void>;
   /** Startup reconciliation of inbox rows whose graph outcome is unknown. */
   reconcile(tenantId: string, projectId: string): Promise<{ resolved: number; unresolved: number; quarantined: number }>;
   projectScope(tenantId: string, projectId: string): Promise<ProjectScope>;
@@ -172,7 +216,12 @@ export function createApplicationServices(deps: ServiceDeps): ApplicationService
   let artifacts: ArtifactWriter | null = null;
   let registry: ExecutionRegistry | null = null;
   let journal: ModelRequestJournal | null = null;
+  let capture: CaptureStore | null = null;
+  let sources: SourceService | null = null;
+  let replayService: ReplayService | null = null;
+  let graphSurface: GraphProjectionSurface | null = null;
   let execution: ExecutionSurface | null = null;
+  let worker: ReturnType<typeof createCaptureWorker> | null = null;
 
   const initialiseExecution = (): void => {
     artifacts = createArtifactWriter({
@@ -182,6 +231,45 @@ export function createApplicationServices(deps: ServiceDeps): ApplicationService
       logger,
     });
     registry = createExecutionRegistry({ db: deps.db, clock: deps.clock, logger });
+    capture = createCaptureStore({ db: deps.db, artifacts, clock: deps.clock, logger });
+    sources = createSourceService({
+      db: deps.db,
+      artifacts,
+      logger: (entry) =>
+        logger.log({
+          level: 'warn',
+          message: entry.message,
+          ...(entry.fields === undefined
+            ? {}
+            : { fields: Object.fromEntries(Object.entries(entry.fields).map(([k, v]) => [k, String(v)])) }),
+        }),
+    });
+    const admitter = createGraphAdmitter(deps.graphs);
+    const projection = createProjectionService(deps.db, deps.graphs);
+    replayService = projection.service;
+    graphSurface = {
+      admitter,
+      projection,
+      deliverer: createGraphDeliverer({
+        db: deps.db,
+        admitter,
+        graphKeyFor: async (tenantId, projectId) => {
+          const rows = await deps.db.withTenantTransaction(tenantId, (tx) =>
+            tx.rows<{ graph_key: string }>(
+              `SELECT graph_key FROM threadline.projects WHERE tenant_id = $1 AND id = $2`,
+              [tenantId, projectId],
+            ),
+          );
+          const key = rows[0]?.graph_key;
+          if (key === undefined) {
+            throw new ThreadlineError('not_found', 'No project exists for that id.');
+          }
+          return key;
+        },
+        logger,
+      }),
+      reconcile: reconcileQuarantined,
+    };
     journal = new ModelRequestJournal({
       db: deps.db,
       artifacts,
@@ -194,6 +282,7 @@ export function createApplicationServices(deps: ServiceDeps): ApplicationService
       registry,
       journal,
       artifacts,
+      capture,
       limits: DEVELOPMENT_LIMITS,
       clock: deps.clock,
       logger,
@@ -255,6 +344,14 @@ export function createApplicationServices(deps: ServiceDeps): ApplicationService
       }
     },
 
+    startCapture(tenantId) {
+      if (!graphSurface) throw new ThreadlineError('storage_unavailable', 'Capture graph is unavailable.');
+      worker ??= createCaptureWorker({ db: deps.db, tenantId, graph: graphSurface, clock: deps.clock, logger });
+      worker.start();
+    },
+    async flushCapture() { if (!worker) throw new ThreadlineError('storage_unavailable', 'Capture worker is unavailable.'); await worker.runOnce(); },
+    async stopCapture() { await worker?.stop(); },
+
     async authenticate(header: string | undefined): Promise<AuthenticatedPrincipal> {
       const token = readBearerToken(header);
       return authenticateSession(deps.db, token, deps.clock(), deps.config.storage.local.idleExpiryMs);
@@ -299,6 +396,25 @@ export function createApplicationServices(deps: ServiceDeps): ApplicationService
     async revokeSession(principal, sessionId) {
       await requireReady();
       return revokeSessionRow(deps.db, principal.tenantId, sessionId, deps.clock());
+    },
+
+    sources(): SourceService | null {
+      return sources;
+    },
+
+    replay(): ReplayService | null {
+      return replayService;
+    },
+
+    captureStore(): CaptureStore {
+      if (capture === null) {
+        throw new ThreadlineError('storage_unavailable', 'Capture storage is unavailable.');
+      }
+      return capture;
+    },
+
+    graph(): GraphProjectionSurface | null {
+      return graphSurface;
     },
 
     execution(): ExecutionSurface | null {

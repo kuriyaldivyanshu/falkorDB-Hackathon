@@ -17,12 +17,17 @@ import {
 } from './activity.js';
 import { formatDevelopmentEchoResult, formatErrorPayload, formatEvent, formatHealth } from './format.js';
 import { ActivityLog } from './ActivityLog.js';
+import { CapturePanel } from './CapturePanel.js';
+import { reduceCursorError, reduceReplayPage, type ReplayStatus } from './capture-state.js';
 import { CommandBar } from './CommandBar.js';
 import { ConnectionStatus } from './ConnectionStatus.js';
+import { inspectSourceView, readSourceRange, replayPage, type SourceClientDeps, type SourceInspectionView } from '../transport/source-client.js';
 
 /** Bounded reconnection, then a visible manual retry. */
 const MAX_RECONNECT_ATTEMPTS = 3;
 const RECONNECT_DELAY_MS = 1_000;
+/** Inspected Sources kept on screen. Older entries fall off rather than growing. */
+const MAX_SOURCE_VIEWS = 8;
 
 interface ActivityState {
   readonly entries: readonly ActivityEntry[];
@@ -61,9 +66,15 @@ export interface AppProps {
   readonly authenticated: boolean;
   /** When the attached session was issued, or null when there is no session. */
   readonly sessionIssuedAt: string | null;
+  /**
+   * Source inspection and replay transport. Optional so a build without the
+   * route registered reports that the capability is unavailable instead of
+   * showing an empty panel that looks like "nothing was captured".
+   */
+  readonly sourceClient?: SourceClientDeps;
 }
 
-export function App({ client, endpoint, authenticated, sessionIssuedAt, providerClient }: AppProps) {
+export function App({ client, endpoint, authenticated, sessionIssuedAt, providerClient, sourceClient }: AppProps) {
   const { exit } = useApp();
   const [connection, setConnection] = useState<ConnectionView>({
     status: 'connecting',
@@ -77,8 +88,13 @@ export function App({ client, endpoint, authenticated, sessionIssuedAt, provider
   const [input, setInput] = useState('');
   const [providerSetup, setProviderSetup] = useState(false);
   const [runState, setRunState] = useState<string | null>(null);
+  const [sourceViews, setSourceViews] = useState<readonly { sourceId: string; view: SourceInspectionView }[]>([]);
+  const [replayStatus, setReplayStatus] = useState<ReplayStatus | null>(null);
+  const [sourceRange, setSourceRange] = useState<Awaited<ReturnType<typeof readSourceRange>> | null>(null);
+  const [captureBusy, setCaptureBusy] = useState(false);
 
   const streamRef = useRef<EventStreamHandle | null>(null);
+  const historyRef = useRef<{ close(): void } | null>(null);
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const reconnectAttempts = useRef(0);
   const scheduleReconnectRef = useRef<(reason: string) => void>(() => {});
@@ -222,6 +238,7 @@ export function App({ client, endpoint, authenticated, sessionIssuedAt, provider
     connect();
     return () => {
       alive.current = false;
+      historyRef.current?.close();
       if (reconnectTimer.current !== null) {
         clearTimeout(reconnectTimer.current);
         reconnectTimer.current = null;
@@ -240,6 +257,61 @@ export function App({ client, endpoint, authenticated, sessionIssuedAt, provider
     if (text === '/connect') {
       if (providerClient) setProviderSetup(true);
       else record('error', 'client', 'Provider setup requires a loopback backend.');
+      return;
+    }
+    // Source inspection and durable replay. Both read the backend's answer and
+    // render it as given; neither retries, resumes, or infers state.
+    if (text.startsWith('/source ')) {
+      const [sourceId='', offset, maxBytes] = text.slice('/source '.length).trim().split(/\s+/);
+      if (sourceId.length === 0) { record('warn', 'client', 'usage: /source <source-id>'); return; }
+      const projectId = authority?.projectId;
+      if (!sourceClient) { record('error', 'client', 'Source inspection is not available in this client build.'); return; }
+      if (projectId === undefined) { record('error', 'client', 'A project with accepted authority is required before inspecting a Source.'); return; }
+      setCaptureBusy(true);
+      void (async () => {
+        try {
+          const view = await inspectSourceView(sourceClient, projectId, sourceId);
+          if (offset !== undefined) {
+            const range=await readSourceRange(sourceClient,projectId,sourceId,Number(offset),Number(maxBytes ?? '256'));
+            if (alive.current) setSourceRange(range);
+          } else if (alive.current) setSourceRange(null);
+          if (!alive.current) return;
+          setSourceViews((previous) => [{ sourceId, view }, ...previous].slice(0, MAX_SOURCE_VIEWS));
+          record('info', 'backend', `source ${sourceId} ${view.state}`);
+        } catch (error) {
+          if (!alive.current) return;
+          record('error', 'backend', `source ${sourceId} unavailable: ${describeCause(error)}`);
+        } finally {
+          if (alive.current) setCaptureBusy(false);
+        }
+      })();
+      return;
+    }
+    if (text.startsWith('/replay ')) {
+      const parts = text.slice('/replay '.length).trim().split(/\s+/);
+      const [epoch, afterSeq] = parts;
+      const projectId = authority?.projectId;
+      if (!sourceClient) { record('error', 'client', 'Durable replay is not available in this client build.'); return; }
+      if (epoch === undefined) { record('warn', 'client', 'usage: /replay <graph-epoch-uuid> [after-seq]'); return; }
+      if (projectId === undefined) { record('error', 'client', 'A project with accepted authority is required before replaying history.'); return; }
+      setCaptureBusy(true);
+      historyRef.current?.close();
+      if (sourceClient.follow) {
+        historyRef.current=sourceClient.follow(projectId,{graphEpoch:epoch,afterSeq:Number(afterSeq ?? '0')},{
+          frame(frame) {
+            if (!alive.current) return;
+            record('info','backend',`history seq=${frame.seq} kind=${frame.kind} source=${String(frame.payload['sourceId'] ?? '')}`);
+            setReplayStatus({kind:'catching_up',cursor:{graphEpoch:frame.graphEpoch,afterSeq:frame.seq},hasMore:true});
+          },
+          status(page) { if (alive.current) { setReplayStatus(reduceReplayPage(page)); setCaptureBusy(false); } },
+          error(error) { if (alive.current) { setReplayStatus(reduceCursorError(error)); setCaptureBusy(false); } },
+        });
+      } else {
+        void replayPage(sourceClient,projectId,{graphEpoch:epoch,afterSeq:Number(afterSeq ?? '0')})
+          .then(page => { if (alive.current) setReplayStatus(reduceReplayPage(page)); })
+          .catch(error => { if (alive.current) setReplayStatus(reduceCursorError(error)); })
+          .finally(() => { if (alive.current) setCaptureBusy(false); });
+      }
       return;
     }
     record('info', 'client', `sending development.echo: "${toSingleLine(text, 80)}"`);
@@ -285,7 +357,7 @@ export function App({ client, endpoint, authenticated, sessionIssuedAt, provider
     <Box flexDirection="column">
       <Text bold>Threadline — terminal interface</Text>
       <Text dimColor>
-        Read-only model runs use the CLI. Use /connect for provider setup; other text sends development echo.
+        {'Read-only model runs use the CLI. Use /connect for provider setup, /source <id> to inspect captured evidence, /replay <epoch> [after-seq] for durable history; other text sends development echo.'}
       </Text>
       <Box marginY={1} flexDirection="column">
         <ConnectionStatus
@@ -305,6 +377,15 @@ export function App({ client, endpoint, authenticated, sessionIssuedAt, provider
         <Text dimColor>Source: {authority.sourceMessageIds.join(', ')}</Text>
       </Box>}
       {connection.status === 'connected' && authorityError !== null && <Text color="yellow">Authority unavailable: {authorityError}</Text>}
+      {(sourceViews.length > 0 || replayStatus !== null) && <Box flexDirection="column" marginBottom={1}>
+        <CapturePanel
+          evidence={[]}
+          sources={sourceViews.map(({ sourceId, view }) => ({ sourceId, inspection: view }))}
+          range={sourceRange}
+          replay={replayStatus}
+          busy={captureBusy}
+        />
+      </Box>}
       <Box flexDirection="column">
         <ActivityLog entries={activity.entries} limit={MAX_ACTIVITY_ENTRIES} dropped={activity.dropped} />
       </Box>

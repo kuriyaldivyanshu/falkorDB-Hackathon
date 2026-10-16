@@ -1,0 +1,35 @@
+# M03 Agent A — durable evidence and graph admission
+
+You own M03A01–M03A08. Read and follow the [shared brief](track2-m03-shared-brief.md) first. Work from merged `main` at `d09f35e` or record any newer base explicitly. Deliver working capture services for B, then prove them with real PostgreSQL/FalkorDB; this is implementation work, not another architecture proposal.
+
+## Start and publish the integration seam
+
+Inspect the working tree, current migrations, `storage/artifacts.ts`, `storage/model-requests.ts`, existing `capture_events`/`tool_executions` writes in `domain/execution.ts`, and tested queries in `storage/graph-queries.ts`. Identify what is already durable and extend it. Record any baseline failure without attributing concurrent edits to your lane.
+
+Agree with B on the five contract items in the shared brief. Publish compiling versioned capture/source/replay types and injectable service ports first. Ask B for a compiling consumer and confirm transaction/error semantics before B wires them. You own public shared declarations and backend composition; B owns new route modules and UI. Supply authenticated source/history/projection services so B never invents storage semantics.
+
+## Implement in this order
+
+1. **M03A01 — artifact integrity.** Extend the existing backend-chosen immutable publication path for the needed evidence kinds. Validate size and digest on write/read, owner-only storage and safe locators. Define the distinction between content identity, physical locator and scoped Source identity. Exercise duplicate publication, mismatched existing bytes, missing/tombstoned content, filesystem failure and SQL failure. Ensure a cleanup failure cannot hide the primary failure or misreport a committed publication.
+2. **M03A02 — ordered capture.** Implement runtime validation of typed versioned events and concurrency-safe per-session sequence allocation. Deduplicate on stable identity plus content digest; changed payload under an existing key is a typed conflict. Distinguish canonical normalized-payload digest from raw artifact digest; existing M02 tool-intent code currently uses the artifact digest in `payload_digest`, so assess compatibility and repair explicitly without rewriting history as though it were originally captured differently. Persist critical boundaries before releasing dependent work.
+3. **M03A03 — transactional outbox.** Capture and its outbox entry commit together. Reuse existing schema tables; add a checksum-tracked migration only for a demonstrated missing invariant. Existing migration bodies/checksums remain unchanged. Implement bounded leasing, attempts, expiry, shutdown, retry exhaustion and quarantined/pending visibility. Claim rows safely under concurrent workers; a failed transaction must not publish a success notification.
+4. **M03A04/A05 — deterministic graph admission.** Build Source, visible Message, Observation and appropriate task-bound Attempt records from actual captured fields. Bind them to existing task/run/session, invocation/outcome and observed candidate/environment/revision identities. Keep missing facts explicit. Implement failure/diagnostic/unknown episode mapping against real read-tool errors and synthetic registered-command observations; no command runner is added. Validate applicable episode payloads at the boundary. Use stable IDs so duplicates neither fork episodes nor promote a failure into a proven cause.
+5. **M03A06 — ambiguous graph writes.** Commit graph mutation, monotonic Event and digest-bound receipt together. Reconcile a lost acknowledgement by reading that receipt before any retry; reject changed payload/epoch, and quarantine unreconcilable work. Execute queries on FalkorDB 6.0.2: legacy reference Cypher contains patterns that were invalid in M01/M02. Use tested matched-node/relationship patterns and preserve immutable TaskState/current-state semantics. Do not modify task truth merely to report capture progress.
+6. **M03A07 — projections.** Read ordered graph Events and write SQL projections plus the contiguous consumer offset in one transaction. Respect epoch boundaries; do not advance past a missing event. Bound batches and payloads, and make a duplicated notification harmless. Provide B the durable scoped paging/replay service and a safe catch-up/live synchronization contract.
+7. **M03A08 — failure and availability.** Expose pending/committed/quarantined admission, lag, missing bytes and explicit gaps. Implement per-read user/session/project Source access checks, including after revocation. A metadata row or digest cannot prove availability. SQL loss stops new capture/admission/dependent dispatch. Graph failure leaves durable pending evidence subject to existing authority gates, without implying an offline-spool guarantee.
+
+## Integration responsibilities
+
+You apply capture changes in `domain/execution.ts` and `storage/model-requests.ts`, and composition changes in `runtime/managed.ts`, `index.ts` and HTTP registration files. Coordinate exact lifecycle call sites with B. In particular, avoid recording one tool intent twice or assigning two capture positions to a retry. Journal settlement, result capture and dependent tool/model release must have a documented order and recoverable failure behavior.
+
+Tell B when the contract compiles, when the actual services work and when replay is ready. Help B's assembled test obtain isolated real identities and deterministic crash boundaries. Preserve the merged initiator-only heartbeat/cancel checks, definite-refusal cleanup, active run projection and conservative context/output budgeting.
+
+## Verification and checklist
+
+Own focused storage/ingestion/projection tests. Execute migrations and graph queries on isolated real stores, not just mocked drivers. Prove concurrent sequence allocation, duplicate/conflicting deliveries, lease recovery, lost acknowledgements, offset rollback, artifact disappearance, private-source denial and SQL refusal. Assist B in the complete assembled trace and joint J01–J05; request exact results rather than assuming its tests ran.
+
+Mark only observed completions in [your checklist](../track2-agent-a-checklist.md#m03--durable-capture-artifact-sources-and-graph-admission). If a task has an unexecuted subgate, leave it unchecked and name that gate. Master/joint status belongs to integration. Update affected schema/field/diagram references only for implemented changes, with evidence that the documentation matches actual schema. Use focused tests per the shared brief.
+
+When stuck on a concrete problem, consult `archive/notes`, `archive/plans`, `archive/codex` or `archive/pi-main` selectively. Treat them as design examples; current Threadline contracts, permissions and tested store behavior take precedence. Prime-agent/RLM history does not expand scope.
+
+Return in chat: starting SHA; completed IDs with evidence; changed paths and cross-lane agreements; exact commands/results/skips; unresolved subgates; compatibility/migration notes; and whether assembled M03 is ready. Keep secrets out. Perform no Git mutations and add no standalone handoff/test scripts solely for this report.

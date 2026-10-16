@@ -32,6 +32,7 @@ import { fromChatMessages } from '../provider/chat-completions.js';
 import { MAX_PROVIDER_OUTPUT_TOKENS } from '../provider/lifecycle.js';
 import { estimateRequestTokens } from '../storage/budget.js';
 import type { ArtifactWriter } from '../storage/artifacts.js';
+import type { CaptureStore } from '../storage/capture.js';
 import { canonicalDigest, sha256Hex, type CanonicalValue } from '../storage/digest.js';
 import type { ExecutionRegistry, ProviderProfileView } from '../storage/execution.js';
 import {
@@ -44,7 +45,7 @@ import {
 } from '../storage/graph-queries.js';
 import type { GraphStore } from '../storage/graph.js';
 import type { ModelRequestJournal } from '../storage/model-requests.js';
-import { withProjectAdmissionLock, type SqlDatabase, type TxClient } from '../storage/pg.js';
+import { withProjectAdmissionLock, type SqlDatabase } from '../storage/pg.js';
 import { requireProjectMembership } from '../storage/identity.js';
 import type { AuthenticatedPrincipal, ProjectScope } from './services.js';
 
@@ -85,6 +86,15 @@ export interface ExecutionDeps {
   readonly registry: ExecutionRegistry;
   readonly journal: ModelRequestJournal;
   readonly artifacts: ArtifactWriter;
+  /**
+   * The single capture boundary.
+   *
+   * M02 wrote capture rows inline, which left positions allocated unsafely and
+   * the payload digest holding the artifact digest. Tool capture now goes
+   * through this service so one boundary has one record and produces the M03
+   * outbox entry in the same transaction.
+   */
+  readonly capture: CaptureStore;
   readonly limits?: ExecutionPolicyLimits;
   readonly clock: () => Date;
   readonly logger: Logger;
@@ -623,6 +633,7 @@ export function createExecutionService(deps: ExecutionDeps) {
      */
     turnGuard(scope: RunContext, claim: ClaimState): TurnGuard {
       return createTurnGuard({
+        capture: deps.capture,
         db: deps.db,
         graphs: deps.graphs,
         journal: deps.journal,
@@ -922,6 +933,7 @@ function createTurnGuard(input: {
   readonly graphs: GraphStore;
   readonly journal: ModelRequestJournal;
   readonly artifacts: ArtifactWriter;
+  readonly capture: CaptureStore;
   readonly clock: () => Date;
   readonly logger: Logger;
   readonly activity?: ActivitySink;
@@ -930,7 +942,7 @@ function createTurnGuard(input: {
   readonly limits: ExecutionPolicyLimits;
   readonly policy: RunPolicy;
 }): TurnGuard {
-  const { db, graphs, journal, artifacts, clock, logger, activity, scope, claim, limits } = input;
+  const { db, graphs, journal, artifacts, capture, clock, logger, activity, scope, claim, limits } = input;
   const prepared = new Map<string, { attemptNo: number; reservationId: string; reservedTokens: number }>();
   const releasedTools = new Map<string, ToolIntent>();
   let observationChain: Promise<void> = Promise.resolve();
@@ -1205,7 +1217,7 @@ function createTurnGuard(input: {
         if (rows.length !== 1 || !rows[0]?.output_artifact_id)
           throw new ThreadlineError('authority_conflict', 'A durable tool result is missing or duplicated.');
         const output = await artifacts.read(scope.tenantId, scope.projectId, rows[0].output_artifact_id);
-        items.push({ type: 'function_call_output', call_id: call.callId, output: output.toString('utf8') });
+        items.push({ type: 'function_call_output', call_id: call.callId, output: JSON.stringify({ ...JSON.parse(output.toString('utf8')), evidenceSourceId: rows[0].output_artifact_id }) });
       }
       return items;
     },
@@ -1263,6 +1275,7 @@ function createTurnGuard(input: {
         attemptNo: outcome.attemptNo,
         state: 'prepared',
       });
+      return { modelRequestId: outcome.attemptRowId, inputArtifactId: outcome.inputArtifactId };
     },
 
     observeLifecycle(event) {
@@ -1335,6 +1348,7 @@ function createTurnGuard(input: {
       }
       return {
         state: outcome.state,
+        responseArtifactId: (await journal.find(scope.tenantId, scope.projectId, settled.attemptId))?.responseArtifactId ?? null,
         usage: terminal.usage,
         reservationRetained: outcome.reservationRetained,
         blockedOnReconciliation: outcome.state === 'unknown',
@@ -1367,26 +1381,39 @@ function createTurnGuard(input: {
       });
       const toolExecutionId = randomUUID();
       const now = clock();
+
+      // One capture boundary: the store allocates the position safely, hashes
+      // the canonical payload, and commits the outbox entry with the row.
+      const appended = await capture.append({
+        correlation: {
+          tenantId: scope.tenantId,
+          projectId: scope.projectId,
+          agentSessionId: scope.sessionId,
+          runId: scope.runId,
+          taskId: scope.taskId,
+          graphEpoch: scope.graphEpoch,
+          acceptedRevision: claim.revision,
+          requirementRevision: claim.requirementRevision,
+          callId: intent.callId,
+        },
+        kind: 'tool.intent',
+        origin: 'tool',
+        sourceKey: `tool:${intent.callId}`,
+        observedAt: now,
+        payload: { callId: intent.callId, toolName: intent.toolName },
+        references: { inputArtifactId: artifact.id },
+      });
+      if (appended.kind === 'conflict') {
+        throw new ThreadlineError(
+          'authority_conflict',
+          'This tool call was already captured with different content.',
+          { reason: 'capture_conflict', sourceKey: appended.sourceKey },
+        );
+      }
+      const captureEventId = appended.envelope.id;
+
       await withProjectAdmissionLock(db, scope.tenantId, scope.projectId, async (tx) => {
         await verifyReleaseAuthority();
-        await tx.rows(
-          `INSERT INTO threadline.capture_events
-             (tenant_id, project_id, id, agent_session_id, source_key, capture_seq, kind,
-              payload, payload_digest, raw_artifact_id, observed_at, captured_at)
-           VALUES ($1, $2, $3, $4, $5, $6, 'tool.intent', $7, $8, $9, $10, $10)`,
-          [
-            scope.tenantId,
-            scope.projectId,
-            toolExecutionId,
-            scope.sessionId,
-            `tool:${intent.callId}`,
-            await nextCaptureSeq(tx, scope),
-            JSON.stringify({ callId: intent.callId, toolName: intent.toolName }),
-            artifact.contentDigest,
-            artifact.id,
-            now,
-          ],
-        );
         await tx.rows(
           `INSERT INTO threadline.tool_executions
              (tenant_id, project_id, id, agent_session_id, capture_event_id, runtime_call_id,
@@ -1398,7 +1425,7 @@ function createTurnGuard(input: {
             scope.projectId,
             toolExecutionId,
             scope.sessionId,
-            toolExecutionId,
+            captureEventId,
             intent.callId,
             intent.toolName,
             artifact.contentDigest,
@@ -1438,6 +1465,16 @@ function createTurnGuard(input: {
           ],
         );
       });
+      const captured = await capture.append({
+        correlation: { tenantId: scope.tenantId, projectId: scope.projectId, agentSessionId: scope.sessionId,
+          runId: scope.runId, taskId: scope.taskId, graphEpoch: scope.graphEpoch,
+          acceptedRevision: claim.revision, requirementRevision: claim.requirementRevision, callId: intent.callId },
+        kind: 'tool.result', origin: 'tool', sourceKey: `tool:${intent.callId}:result`, observedAt: clock(),
+        payload: { callId: intent.callId, toolName: intent.toolName, status: result.status,
+          candidateDigest: result.candidateDigest, outputArtifactId: outputArtifact.id },
+        references: { outputArtifactId: outputArtifact.id },
+      });
+      if (captured.kind === 'conflict') throw new ThreadlineError('authority_conflict', 'Tool result capture conflicts.');
     },
 
     async heartbeat(): Promise<ClaimState> {
@@ -1523,19 +1560,6 @@ function lifecycleAttemptId(event: ProviderLifecycle): string {
 
 async function countToolCallsFor(db: SqlDatabase, scope: RunContext): Promise<number> {
   return countToolCalls(db, scope);
-}
-
-async function nextCaptureSeq(
-  tx: TxClient,
-  scope: RunContext,
-): Promise<number> {
-  const rows = await tx.rows<{ max_seq: string | null }>(
-    `SELECT max(capture_seq) AS max_seq FROM threadline.capture_events
-      WHERE tenant_id = $1 AND project_id = $2 AND agent_session_id = $3`,
-    [scope.tenantId, scope.projectId, scope.sessionId],
-  );
-  const current = Number(rows[0]?.max_seq ?? '0');
-  return (Number.isSafeInteger(current) ? current : 0) + 1;
 }
 
 async function currentGraphKey(db: SqlDatabase, scope: RunContext): Promise<string> {

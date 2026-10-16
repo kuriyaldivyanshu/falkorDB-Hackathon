@@ -1,0 +1,27 @@
+flowchart LR
+    Runtime["Owned provider and read-tool loop"]
+    Journal["Existing request and tool journal"]
+    Artifacts["Immutable original-byte artifacts"]
+    Capture["Capture append: typed version and session sequence"]
+    SQL[("PostgreSQL: capture_events + capture_outbox")]
+    Worker["Scoped leased delivery worker"]
+    Graph[("FalkorDB: Source / Message / Observation / Attempt")]
+    Receipt["Atomic Event + digest-bound receipt"]
+    Projection[("SQL projection + contiguous offset: one transaction")]
+    History["Authorized durable history SSE / pages"]
+    Source["Authorized bounded Source range"]
+    TUI["CLI / TUI: cursor reconnect, pending, available, missing, gap"]
+    Runtime --> Journal
+    Journal --> Artifacts
+    Journal --> Capture
+    Capture --> SQL
+    SQL --> Worker
+    Worker --> Graph
+    Graph --- Receipt
+    Receipt -->|"lost ACK: reconcile before replay"| Worker
+    Graph --> Projection
+    Projection --> History
+    Artifacts --> Source
+    Source -->|"source-only memory.retrieve"| Runtime
+    History --> TUI
+    Source --> TUI

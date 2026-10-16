@@ -1,17 +1,20 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import {
   closeSync,
+  constants,
+  fstatSync,
+  fsyncSync,
   mkdirSync,
   openSync,
   readFileSync,
   renameSync,
-  statSync,
   unlinkSync,
   writeSync,
 } from 'node:fs';
-import { dirname, join, resolve, sep } from 'node:path';
+import { dirname, resolve, sep } from 'node:path';
 
 import { ThreadlineError } from '@threadline/shared';
+import type { ArtifactKind, ArtifactVisibility, SourceRange } from '@threadline/shared';
 
 import type { Logger } from '../log.js';
 import { silentLogger } from '../log.js';
@@ -31,21 +34,22 @@ import type { SqlDatabase } from './pg.js';
  *   extend this module rather than replacing it.
  */
 
-export type ArtifactKind = 'model_input' | 'model_response' | 'tool_input' | 'tool_output';
-export type ArtifactVisibility = 'project' | 'user' | 'session';
+export { ARTIFACT_KINDS } from '@threadline/shared';
+export type { ArtifactKind, ArtifactVisibility } from '@threadline/shared';
 
-export const ARTIFACT_KINDS: readonly ArtifactKind[] = [
-  'model_input',
-  'model_response',
-  'tool_input',
-  'tool_output',
-];
-export const ARTIFACT_MEDIA_TYPES: Readonly<Record<ArtifactKind, string>> = {
+const ARTIFACT_MEDIA_TYPES: Readonly<Record<string, string>> = {
   model_input: 'application/json',
   model_response: 'application/json',
   tool_input: 'application/json',
   tool_output: 'application/json',
+  registered_command_output: 'application/octet-stream',
+  diagnostic_output: 'application/octet-stream',
+  episode: 'application/json',
 };
+
+function mediaTypeFor(kind: ArtifactKind, override?: string): string {
+  return override ?? ARTIFACT_MEDIA_TYPES[kind] ?? 'application/octet-stream';
+}
 
 /** 4 MiB is far above any bounded M02 request and far below anything harmful. */
 export const MAX_ARTIFACT_BYTES = 4 * 1024 * 1024;
@@ -55,8 +59,11 @@ export interface ArtifactRow {
   readonly contentDigest: string;
   readonly storageKey: string;
   readonly kind: ArtifactKind;
+  readonly mediaType?: string;
   readonly byteSize: number;
   readonly visibility: ArtifactVisibility;
+  readonly ownerUserId?: string | null;
+  readonly ownerSessionId?: string | null;
   readonly status: 'available' | 'missing' | 'tombstoned';
 }
 
@@ -64,6 +71,8 @@ export interface WriteArtifactParams {
   readonly tenantId: string;
   readonly projectId: string;
   readonly kind: ArtifactKind;
+  /** Overrides the kind's default; captured bytes are not always JSON. */
+  readonly mediaType?: string;
   readonly bytes: Buffer;
   readonly visibility?: ArtifactVisibility;
   readonly ownerUserId?: string | null;
@@ -83,6 +92,32 @@ export interface ArtifactWriter {
   publish(params: WriteArtifactParams): Promise<ArtifactRow>;
   /** Reads the exact bytes back and verifies the digest before returning them. */
   read(tenantId: string, projectId: string, artifactId: string): Promise<Buffer>;
+  /**
+   * Reads a byte range, verifying the whole object's digest first.
+   *
+   * Ranges are byte offsets, and the returned slice is base64, so a range may
+   * split a multi-byte character without corrupting anything: the caller
+   * decodes bytes, not text.
+   */
+  readRange(
+    tenantId: string,
+    projectId: string,
+    artifactId: string,
+    start: number,
+    end: number,
+  ): Promise<SourceRange>;
+  /**
+   * Records that the bytes are gone or were deliberately retired.
+   *
+   * Used after a disappearance so later reads fail loudly instead of silently
+   * reporting an empty result.
+   */
+  markUnavailable(
+    tenantId: string,
+    projectId: string,
+    artifactId: string,
+    status: 'missing' | 'tombstoned',
+  ): Promise<void>;
   find(
     tenantId: string,
     projectId: string,
@@ -132,6 +167,34 @@ export function createArtifactWriter(deps: ArtifactWriterDeps): ArtifactWriter {
       const storageKey = storageKeyFor(digest, params.kind, params.id);
       const target = absolutePathFor(storageKey);
 
+      // Republishing under an id that already exists must resolve to one of
+      // three outcomes, never a guess:
+      //   - identical content   -> the original identity, unchanged
+      //   - different content   -> typed conflict, and the stored bytes stay
+      //   - tombstoned/missing  -> refuse; a dead artifact is not resurrected
+      const existing = await findRow(deps.db, params.tenantId, params.projectId, params.id);
+      if (existing !== null) {
+        if (existing.contentDigest !== digest || existing.kind !== params.kind || existing.visibility !== visibility
+          || (existing.ownerUserId ?? null) !== (params.ownerUserId ?? null) || (existing.ownerSessionId ?? null) !== (params.ownerSessionId ?? null)) {
+          throw new ThreadlineError(
+            'authority_conflict',
+            'An artifact already exists under that id with different content.',
+            { reason: 'artifact_content_conflict', existingDigest: existing.contentDigest },
+          );
+        }
+        if (existing.status !== 'available') {
+          throw new ThreadlineError(
+            'authority_unavailable',
+            'The artifact is recorded but its bytes are not available.',
+            { reason: 'artifact_not_available', status: existing.status },
+          );
+        }
+        if (!readAndVerify(absolutePathFor(existing.storageKey),digest))
+          throw new ThreadlineError('authority_unavailable','Recorded artifact bytes are unavailable.');
+        // Same identity, same bytes: publication is idempotent.
+        return existing;
+      }
+
       writeAtomically(target, params.bytes);
 
       const verified = readAndVerify(target, digest);
@@ -140,13 +203,13 @@ export function createArtifactWriter(deps: ArtifactWriterDeps): ArtifactWriter {
       }
 
       try {
-        await deps.db.withTenantTransaction(params.tenantId, (tx) =>
+        const inserted = await deps.db.withTenantTransaction(params.tenantId, (tx) =>
           tx.rows<{ id: string }>(
             `INSERT INTO threadline.artifacts
                (tenant_id, project_id, id, content_digest, storage_key, kind, media_type,
                 byte_size, visibility, owner_user_id, owner_session_id, status, created_at)
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'available', $12)
-             ON CONFLICT (tenant_id, project_id, id) DO NOTHING`,
+             ON CONFLICT (id) DO NOTHING RETURNING id`,
             [
               params.tenantId,
               params.projectId,
@@ -154,7 +217,7 @@ export function createArtifactWriter(deps: ArtifactWriterDeps): ArtifactWriter {
               digest,
               storageKey,
               params.kind,
-              ARTIFACT_MEDIA_TYPES[params.kind],
+              mediaTypeFor(params.kind, params.mediaType),
               params.bytes.byteLength,
               visibility,
               params.ownerUserId ?? null,
@@ -163,17 +226,18 @@ export function createArtifactWriter(deps: ArtifactWriterDeps): ArtifactWriter {
             ],
           ),
         );
-      } catch (error) {
-        // Never leave bytes without a row: an orphan is worse than a failure.
-        try {
-          unlinkSync(target);
-        } catch {
-          logger.log({
-            level: 'warn',
-            message: 'Could not remove artifact bytes after a failed row insert.',
-            fields: { storageKey },
-          });
+        if (!inserted.length) {
+          const winner=await findRow(deps.db,params.tenantId,params.projectId,params.id);
+          if (!winner || winner.contentDigest!==digest || winner.visibility!==visibility || winner.kind!==params.kind || (winner.ownerUserId??null)!==(params.ownerUserId??null)
+            || (winner.ownerSessionId??null)!==(params.ownerSessionId??null) || winner.status!=='available')
+            throw new ThreadlineError('authority_conflict','Artifact publication conflicted with an existing identity.');
+          return winner;
         }
+      } catch (error) {
+        // A failed SQL acknowledgement may follow a committed insert, and a
+        // concurrent publisher may own the same target. Keep immutable orphan
+        // bytes rather than deleting a possibly referenced winner.
+        logger.log({level:'warn',message:'Artifact publication needs reconciliation; immutable bytes retained.',fields:{errorName:error instanceof Error?error.name:typeof error}});
         throw error;
       }
 
@@ -182,6 +246,7 @@ export function createArtifactWriter(deps: ArtifactWriterDeps): ArtifactWriter {
         contentDigest: digest,
         storageKey,
         kind: params.kind,
+        mediaType: mediaTypeFor(params.kind, params.mediaType),
         byteSize: params.bytes.byteLength,
         visibility,
         status: 'available',
@@ -199,47 +264,68 @@ export function createArtifactWriter(deps: ArtifactWriterDeps): ArtifactWriter {
         });
       }
       const path = absolutePathFor(row.storageKey);
-      if (!readAndVerify(path, row.contentDigest)) {
-        throw new ThreadlineError('authority_unavailable', 'The stored bytes do not match the recorded digest.');
+      const bytes=verifiedBytes(path,row.contentDigest,row.byteSize);
+      if (!bytes) throw new ThreadlineError('authority_unavailable','The stored bytes do not match the recorded digest.');
+      return bytes;
+    },
+
+    async readRange(
+      tenantId: string,
+      projectId: string,
+      artifactId: string,
+      start: number,
+      end: number,
+    ): Promise<SourceRange> {
+      const row = await findRow(deps.db, tenantId, projectId, artifactId);
+      if (row === null) {
+        throw new ThreadlineError('not_found', 'No artifact exists for that id.');
       }
-      return readFileSync(path);
+      if (row.status !== 'available') {
+        throw new ThreadlineError('authority_unavailable', 'The artifact bytes are not available.', {
+          status: row.status,
+        });
+      }
+      if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 0 || end < start) {
+        throw new ThreadlineError('invalid_request', 'The requested byte range is not valid.', { start, end });
+      }
+      const total = row.byteSize;
+      // A range that starts past the end is an error; one that merely runs off
+      // the end is truncated, and the caller is told which happened.
+      if (start > total) {
+        throw new ThreadlineError('invalid_request', 'The requested range starts past the end of the artifact.', {
+          start,
+          totalBytes: total,
+        });
+      }
+      const bounded = Math.min(end, total);
+      const path = absolutePathFor(row.storageKey);
+      // Slice the very buffer that was verified: a second file read would
+      // allow a replacement between verification and delivery.
+      const bytes=verifiedBytes(path,row.contentDigest,total);
+      if (!bytes) throw new ThreadlineError('authority_unavailable','The stored bytes do not match the recorded digest.');
+      const buffer=bytes.subarray(start,bounded);
+      return {start,end:bounded,totalBytes:total,truncated:bounded<total,base64:buffer.toString('base64')};
+    },
+
+    async markUnavailable(
+      tenantId: string,
+      projectId: string,
+      artifactId: string,
+      status: 'missing' | 'tombstoned',
+    ): Promise<void> {
+      await deps.db.withTenantTransaction(tenantId, (tx) =>
+        tx.rows(
+          `UPDATE threadline.artifacts SET status = $4
+            WHERE tenant_id = $1 AND project_id = $2 AND id = $3 AND status = 'available'`,
+          [tenantId, projectId, artifactId, status],
+        ),
+      );
     },
 
     async find(tenantId: string, projectId: string, artifactId: string): Promise<ArtifactRow | null> {
-      const rows = await deps.db.withTenantTransaction(tenantId, (tx) =>
-        tx.rows<{
-          id: string;
-          content_digest: string;
-          storage_key: string;
-          kind: ArtifactKind;
-          byte_size: string;
-          visibility: ArtifactVisibility;
-          status: ArtifactRow['status'];
-        }>(
-          `SELECT id, content_digest, storage_key, kind, byte_size, visibility, status
-             FROM threadline.artifacts
-            WHERE tenant_id = $1 AND project_id = $2 AND id = $3`,
-          [tenantId, projectId, artifactId],
-        ),
-      );
-      const row = rows[0];
-      if (row === undefined) {
-        return null;
-      }
-      const byteSize = Number(row.byte_size);
-      if (!Number.isSafeInteger(byteSize)) {
-        throw new ThreadlineError('internal_error', 'An artifact byte size is outside the safe range.');
-      }
-      return {
-        id: row.id,
-        contentDigest: row.content_digest.trim(),
-        storageKey: row.storage_key,
-        kind: row.kind,
-        byteSize,
-        visibility: row.visibility,
-        status: row.status,
-      };
+      return findRow(deps.db, tenantId, projectId, artifactId);
     },
+
   };
 }
 
@@ -249,7 +335,7 @@ export function createArtifactWriter(deps: ArtifactWriterDeps): ArtifactWriter {
  */
 function writeAtomically(target: string, bytes: Buffer): void {
   mkdirSync(dirname(target), { recursive: true, mode: 0o700 });
-  const temporary = `${target}.${process.pid}.${Date.now()}.partial`;
+  const temporary = `${target}.${randomUUID()}.partial`;
   let descriptor: number | null = null;
   try {
     descriptor = openSync(temporary, 'wx', 0o600);
@@ -257,6 +343,7 @@ function writeAtomically(target: string, bytes: Buffer): void {
     while (written < bytes.byteLength) {
       written += writeSync(descriptor, bytes, written, bytes.byteLength - written);
     }
+    fsyncSync(descriptor);
     closeSync(descriptor);
     descriptor = null;
     renameSync(temporary, target);
@@ -275,19 +362,63 @@ function writeAtomically(target: string, bytes: Buffer): void {
   }
 }
 
-function readAndVerify(target: string, digest: string): boolean {
-  let stats;
+function verifiedBytes(path:string,digest:string,size?:number):Buffer|null {
+  let fd:number|undefined;
   try {
-    stats = statSync(target);
-  } catch {
-    return false;
-  }
-  if (!stats.isFile()) {
-    return false;
-  }
-  return createHash('sha256').update(readFileSync(target)).digest('hex') === digest;
+    fd=openSync(path,constants.O_RDONLY|constants.O_NOFOLLOW);
+    const before=fstatSync(fd);
+    if(!before.isFile() || before.size>MAX_ARTIFACT_BYTES || (size!==undefined && before.size!==size))return null;
+    const bytes=readFileSync(fd);
+    if(bytes.length!==before.size || createHash('sha256').update(bytes).digest('hex')!==digest)return null;
+    return bytes;
+  }catch{return null;}finally{if(fd!==undefined)closeSync(fd);}
 }
+function readAndVerify(path:string,digest:string):boolean { return verifiedBytes(path,digest)!==null; }
 
-export function artifactPathUnder(root: string, storageKey: string): string {
-  return join(resolve(root), storageKey);
+async function findRow(
+  db: SqlDatabase,
+  tenantId: string,
+  projectId: string,
+  artifactId: string,
+): Promise<ArtifactRow | null> {
+  const rows = await db.withTenantTransaction(tenantId, (tx) =>
+    tx.rows<{
+      id: string;
+      content_digest: string;
+      storage_key: string;
+      kind: ArtifactKind;
+      media_type: string;
+      byte_size: string;
+      visibility: ArtifactVisibility;
+      owner_user_id: string | null;
+      owner_session_id: string | null;
+      status: ArtifactRow['status'];
+    }>(
+      `SELECT id, content_digest, storage_key, kind, media_type, byte_size, visibility,
+              owner_user_id, owner_session_id, status
+         FROM threadline.artifacts
+        WHERE tenant_id = $1 AND project_id = $2 AND id = $3`,
+      [tenantId, projectId, artifactId],
+    ),
+  );
+  const row = rows[0];
+  if (row === undefined) {
+    return null;
+  }
+  const byteSize = Number(row.byte_size);
+  if (!Number.isSafeInteger(byteSize) || byteSize < 0) {
+    throw new ThreadlineError('internal_error', 'An artifact byte size is outside the safe range.');
+  }
+  return {
+    id: row.id,
+    contentDigest: row.content_digest.trim(),
+    storageKey: row.storage_key,
+    kind: row.kind,
+    mediaType: row.media_type,
+    byteSize,
+    visibility: row.visibility,
+    ownerUserId: row.owner_user_id,
+    ownerSessionId: row.owner_session_id,
+    status: row.status,
+  };
 }

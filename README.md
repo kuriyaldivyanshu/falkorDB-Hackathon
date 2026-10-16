@@ -1,12 +1,11 @@
 # FalkorDB Track 2 architecture notes
 
-Snapshot: 16 October 2026. M02 integrates durable run admission, the owned Responses transport, read-only tools and CLI/TUI activity against real PostgreSQL/FalkorDB. Local provider/tool verification passes. The user-authorized OpenCode Go / Space Bunny model/tool acceptance passed: 3 completed model turns, 2 successful tools, 8,045 reported tokens, zero unresolved attempts. See [final M02 evidence](docs/m02-live-acceptance.md). Memory continuity and protected completion remain future work.
+Snapshot: 16 October 2026. M03 is locally integrated with durable capture, artifact Sources, graph provenance and authorized cursor replay; see [current workflow](docs/m03-development.md). M02 integrates durable run admission, the owned Responses transport, read-only tools and CLI/TUI activity against real PostgreSQL/FalkorDB. Local provider/tool verification passes. The user-authorized OpenCode Go / Space Bunny model/tool acceptance passed: 3 completed model turns, 2 successful tools, 8,045 reported tokens, zero unresolved attempts. See [final M02 evidence](docs/m02-live-acceptance.md). Memory continuity and protected completion remain future work.
 
 ## Run the local backend and client
 
 ```sh
 npm run build
-npm test
 npm run start --workspace @threadline/backend
 # In another terminal:
 node packages/cli/dist/index.js tui
@@ -14,6 +13,8 @@ node packages/cli/dist/index.js tui
 node packages/cli/dist/index.js health
 node packages/cli/dist/index.js echo "hello"
 ```
+
+Permanent package test suites and npm test scripts were removed at the user's request. Build all three packages with `npm run build`; use the CLI checks below for the local runtime. Earlier verification reports retain their historical results.
 
 The default endpoint is `http://127.0.0.1:47821`; `--backend <url>` selects another configured local endpoint. For durable M01 work, follow [local setup](docs/local-development.md): configure `.env`, start Compose, run `npm run db:setup`, then start the backend. The backend loads root `.env`; the CLI does not.
 
@@ -24,7 +25,7 @@ node packages/cli/dist/index.js admit
 node packages/cli/dist/index.js inspect
 ```
 
-`admit` requires explicit consent and retains a durable request record for retries. The TUI shows current accepted task/criteria/source authority. Echo and SSE remain process-local (`replayable=false`). See [M01 integration evidence](archive/plans/review/m01-integration-verification.md), [the implemented contract](docs/m01-contract-agreement.md) and [the master checklist](archive/plans/track2-implementation-checklist.md). Verification used Node v23.11.0; Node 24 remains untested.
+`admit` requires explicit consent and retains a durable request record for retries. The TUI shows current accepted task/criteria/source authority. Echo and `/events` remain process-local (`replayable=false`); M03 adds a separate durable project-history stream. See [M01 integration evidence](archive/plans/review/m01-integration-verification.md), [the implemented contract](docs/m01-contract-agreement.md) and [the master checklist](archive/plans/track2-implementation-checklist.md). Verification used Node v23.11.0; Node 24 remains untested.
 
 For masked provider-first setup, use `provider:setup` or `/connect` in the TUI. OpenAI, Anthropic (Claude API), OpenRouter and OpenCode Go are available. See [key validation and secure local storage](docs/provider-setup.md).
 
@@ -67,7 +68,7 @@ The MVP harness owns eleven bounded tools, lifecycle, durable capture, context p
 
 Start implementation with the [code-first master checklist](archive/plans/track2-implementation-checklist.md), split into [Agent A: Memory/Coordinator](archive/plans/track2-agent-a-checklist.md) and [Agent B: Harness/Frontend](archive/plans/track2-agent-b-checklist.md). Write the small runnable backend/TUI first; each milestone combines both lanes into one reviewed branch/commit after integration. Verification, fault evidence and packaging follow the working flow.
 
-M00 and M01 are merged; M01 is PR #2 at `067f842`. M02 is implemented and verified with a real Space Bunny model/read-tool/next-turn/final-response flow. See [the executable workflow](docs/m02-development.md), [live acceptance](docs/m02-live-acceptance.md) and [provider setup](docs/provider-setup.md). M03 continuity/capture and later milestones remain future work.
+M00 and M01 are merged; M01 is PR #2 at `067f842`. M02 is implemented and verified with a real Space Bunny model/read-tool/next-turn/final-response flow. See [the executable workflow](docs/m02-development.md), [live acceptance](docs/m02-live-acceptance.md) and [provider setup](docs/provider-setup.md). M03 capture/provenance/replay is locally verified; checkpoints and fresh-session continuity remain later milestones.
 
 **Current recommendation:** TypeScript/Node for the owned harness and local TUI/backend, PostgreSQL for identity and session operations, FalkorDB for connected memory and coordination. Native subscription adapters and investigator spawning are post-hackathon milestones. See [the complete plan](archive/plans/README.md), [harness scope](archive/plans/track2-harness-scope.md).
 
@@ -126,3 +127,7 @@ Historical research lives in archive/notes/; active architecture and checklists 
 - [Critic report](archive/plans/review/track2-critic-report.md): 14 findings against the baseline.
 - [Independent evaluation](archive/plans/review/track2-critic-evaluation.md): accepted and qualified findings.
 - [Resolution register](archive/plans/review/track2-review-resolutions.md): corrected design contracts and unexecuted implementation gates.
+
+## M03 durable evidence
+
+[Current capture/source/replay workflow](docs/m03-development.md) covers immutable original bytes, transactional capture/outbox, FalkorDB provenance, receipt reconciliation and authorized TUI cursor reconnect. [Executed M03 integration evidence](archive/plans/review/m03-integration-verification.md) distinguishes this working slice from later checkpoints and continuity.

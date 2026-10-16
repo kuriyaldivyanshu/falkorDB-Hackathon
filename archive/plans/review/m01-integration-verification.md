@@ -1,5 +1,7 @@
 # M01 combined integration verification
 
+**Repository cleanup — 16 October 2026:** permanent package test suites and npm test scripts were later removed at the user's request. Test counts and commands below record earlier verification, not currently available suites.
+
 Verified 15 October 2026 from the combined Agent A/B workspace, based on merged `ed18168` on `main`. Existing dirty documentation and lane work were preserved. This report supersedes the handoffs' unfinished integration claims; it does not claim a Git merge of M01.
 
 ## Result and checklist status

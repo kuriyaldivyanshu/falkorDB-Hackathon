@@ -1,6 +1,6 @@
 # Threadline code-first implementation checklist
 
-**15 October 2026. Proposed work, not implementation results. Two full-time contributors.** This is the execution checklist for the complete `archive/plans/` collection. It changes build order following the user's instruction: **start with working backend/frontend code, then persistence and the model/tool flow, then containment, protected verification, recovery evidence and packaging.** The [development blueprint](track2-development-blueprint.md) still controls product scope and trust contracts; this checklist supersedes its preflight-first sequencing only.
+**Updated 16 October 2026. M00–M02 are merged; M03 is locally integrated and verified. M04 onward remain proposed. Two full-time contributors.** This is the execution checklist for the complete `archive/plans/` collection. It changes build order following the user's instruction: **start with working backend/frontend code, then persistence and the model/tool flow, then containment, protected verification, recovery evidence and packaging.** The [development blueprint](track2-development-blueprint.md) still controls product scope and trust contracts; this checklist supersedes its preflight-first sequencing only.
 
 Implementation boxes start unchecked and are updated only from verified evidence. A plan, stub, diagram or passing documentation check does not finish a runtime task. Use actual code/output/evidence before checking a box. No Git branch, commit, push, merge, package publication or implementation is performed by creating this document.
 
@@ -245,32 +245,34 @@ The first checkpoint is intentionally a working service/TUI, not a checker/lockf
 
 #### Variant A — Memory/Coordinator
 
-- [ ] **M03A01** Implement immutable content-addressed artifact storage with safe project-relative locators, digest/size validation, atomic publication and availability states.
-- [ ] **M03A02** Implement capture append with stable per-session sequence positions and typed event versions; persist critical intent/result boundaries before dependent success.
-- [ ] **M03A03** Write capture/outbox rows transactionally and lease/replay them with the profile's polling, batch, timeout and retry limits.
-- [ ] **M03A04** Admit Source, Message, Observation and task-bound Attempt episodes deterministically; retain invocation/outcome/candidate/environment/revision identity.
-- [ ] **M03A05** Map registered-command failures, diagnostic nonzero exits and unknown effects into useful observed episodes without depending on model checkpoint text or inventing root cause.
-- [ ] **M03A06** Implement SQL-to-graph idempotency and ambiguous graph-write receipt reconciliation. Only known replay-safe operations get automatic retries.
-- [ ] **M03A07** Implement ordered graph Event projection into SQL views with cursor advancement in the same SQL projection transaction; notifications are wakeups, not delivery truth.
-- [ ] **M03A08** Record gaps, missing artifact bytes, ingestion lag and pending admission explicitly. Stop admission on SQL outage; do not promise an offline spool.
+- [x] **M03A01** Implement immutable content-addressed artifact storage with safe project-relative locators, digest/size validation, atomic publication and availability states.
+- [x] **M03A02** Implement capture append with stable per-session sequence positions and typed event versions; persist critical intent/result boundaries before dependent success.
+- [x] **M03A03** Write capture/outbox rows transactionally and lease/replay them with the profile's polling, batch, timeout and retry limits.
+- [x] **M03A04** Admit Source, Message, Observation and task-bound Attempt episodes deterministically; retain invocation/outcome/candidate/environment/revision identity.
+- [x] **M03A05** Map registered-command failures, diagnostic nonzero exits and unknown effects into useful observed episodes without depending on model checkpoint text or inventing root cause.
+- [x] **M03A06** Implement SQL-to-graph idempotency and ambiguous graph-write receipt reconciliation. Only known replay-safe operations get automatic retries.
+- [x] **M03A07** Implement ordered graph Event projection into SQL views with cursor advancement in the same SQL projection transaction; notifications are wakeups, not delivery truth.
+- [x] **M03A08** Record gaps, missing artifact bytes, ingestion lag and pending admission explicitly. Stop admission on SQL outage; do not promise an offline spool.
 
 #### Variant B — Harness/Frontend
 
-- [ ] **M03B01** Wire provider and read-tool lifecycle events into the capture service: complete invocation, result and final visible response keep their original correlation IDs.
-- [ ] **M03B02** Implement bounded stdout/message chunk capture plumbing for future commands, with declared ordering, 16 KiB chunks/250 ms flush and partial/gap behavior.
-- [ ] **M03B03** Add backend history/source range transport and CLI inspection that rechecks source permission on every read; raw arbitrary artifact paths are unavailable.
-- [ ] **M03B04** Implement `memory.retrieve(mode=source)` with source ID, byte offset and at most 32 KiB, returning digest/size/range/truncation/status.
-- [ ] **M03B05** Implement SSE cursor reconnect using persisted projections once available; use bounded frontend event buffers and show gaps requiring refresh.
-- [ ] **M03B06** Display capture pending/available/missing status separately from task truth and successful tool status.
-- [ ] **M03B07** Do not add graph rendering, full transcript injection or token-by-token SQL/graph writes to this stage.
+- [x] **M03B01** Wire provider and read-tool lifecycle events into the capture service: complete invocation, result and final visible response keep their original correlation IDs.
+- [x] **M03B02** Implement bounded stdout/message chunk capture plumbing for future commands, with declared ordering, 16 KiB chunks/250 ms flush and partial/gap behavior.
+- [x] **M03B03** Add backend history/source range transport and CLI inspection that rechecks source permission on every read; raw arbitrary artifact paths are unavailable.
+- [x] **M03B04** Implement `memory.retrieve(mode=source)` with source ID, byte offset and at most 32 KiB, returning digest/size/range/truncation/status.
+- [x] **M03B05** Implement SSE cursor reconnect using persisted projections once available; use bounded frontend event buffers and show gaps requiring refresh.
+- [x] **M03B06** Display capture pending/available/missing status separately from task truth and successful tool status.
+- [x] **M03B07** Do not add graph rendering, full transcript injection or token-by-token SQL/graph writes to this stage.
 
 #### Joint integration and branch readiness
 
-- [ ] **M03J01** Deliver the same capture/outbox event twice and observe one Source/Observation/Attempt and consistent sequence/cursor state.
-- [ ] **M03J02** Interrupt after SQL capture commit and after graph commit before acknowledgement; reconcile without lost or duplicate authority.
-- [ ] **M03J03** Remove a synthetic artifact and verify unavailable Source behavior; a digest alone does not restore the bytes.
-- [ ] **M03J04** Reconnect the TUI from an earlier event cursor, observe ordered events or an explicit gap, and bound client/server queues.
-- [ ] **M03J05** Inspect real stored call/result fields and compare them with the original permitted bytes. No private reasoning or credentials appear in the capture/export path.
+- [x] **M03J01** Deliver the same capture/outbox event twice and observe one Source/Observation/Attempt and consistent sequence/cursor state.
+- [x] **M03J02** Interrupt after SQL capture commit and after graph commit before acknowledgement; reconcile without lost or duplicate authority.
+- [x] **M03J03** Remove a synthetic artifact and verify unavailable Source behavior; a digest alone does not restore the bytes.
+- [x] **M03J04** Reconnect the TUI from an earlier event cursor, observe ordered events or an explicit gap, and bound client/server queues.
+- [x] **M03J05** Inspect real stored call/result fields and compare them with the original permitted bytes. No private reasoning or credentials appear in the capture/export path.
+
+**Combined integration verified — 16 October 2026:** all M03 A/B/joint checkpoints are executed and closed. See [integration evidence](review/m03-integration-verification.md) for the 155 affected ordinary checks, 77 distinct store/PTY checks across acceptance runs, production wiring and final targeted recovery/cardinality checks. [Working commands](../../docs/m03-development.md). Original lane blockers are resolved; no paid inference or Git publication occurred. M04 remains unstarted.
 
 ### M04 — Structured checkpoints and tactical state
 

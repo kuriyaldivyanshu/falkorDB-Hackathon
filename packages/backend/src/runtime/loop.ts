@@ -1,3 +1,6 @@
+import { MODEL_TOOL_OUTPUT_MAX_BYTES } from '@threadline/shared';
+import type { ProviderCapture } from '../capture/provider-capture.js';
+import type { PreparedAttempt } from '../provider/lifecycle.js';
 import { createHash } from 'node:crypto';
 
 import type { ConversationItem, FunctionTool, ResponsesDriver } from '../provider/responses.js';
@@ -19,7 +22,8 @@ import type {
   UsageObservation,
 } from './contracts.js';
 import { WorkspaceError } from '../workspace/read-only.js';
-import { resolveReadOnlyFunction } from '../workspace/tools.js';
+import { resolveModelTool } from '../capture/tools.js';
+import { SourceRetrievalError } from '../capture/sources.js';
 import type { ReadOnlyToolName } from '../workspace/read-only.js';
 
 /**
@@ -59,9 +63,24 @@ export interface ReadOnlyToolInvoker {
   invoke(name: ReadOnlyToolName, input: unknown): Promise<unknown>;
 }
 
+/**
+ * `memory.retrieve(mode=source)` is a separate surface because its authority
+ * comes from a server-resolved Source reader rather than a workspace root. It
+ * is invoked through the same guarded intent/result lifecycle as the workspace
+ * tools, so its schema and result consume the same per-turn budget.
+ */
+export interface SourceToolInvoker {
+  invoke(input: unknown): Promise<unknown>;
+}
+
 export interface RuntimeLoopDeps {
   readonly driver: ResponsesDriver;
+  readonly capture?: ProviderCapture;
+  readonly onJournalled?: (prepared: PreparedAttempt, ids: { modelRequestId: string; inputArtifactId: string }) => void;
+  readonly onSettled?: (prepared: PreparedAttempt, responseArtifactId: string | null) => void;
   readonly tools: ReadOnlyToolInvoker;
+  /** Optional until M03 Source retrieval is composed; absent means the tool is denied. */
+  readonly sources?: SourceToolInvoker;
   readonly guard: TurnGuard;
   readonly sink: ActivitySink;
   readonly tools4Provider: readonly FunctionTool[];
@@ -130,7 +149,7 @@ export function createRuntimeLoop(deps: RuntimeLoopDeps): RuntimeLoop {
       const outputJson = JSON.stringify({ denied: reason });
       return { status: 'denied', outputJson, outputDigest: sha256(outputJson), candidateDigest: null };
     };
-    const name = resolveReadOnlyFunction(call.toolName);
+    const name = resolveModelTool(call.toolName);
     if (name === null) {
       return denied(`unknown_tool:${call.toolName}`);
     }
@@ -141,11 +160,23 @@ export function createRuntimeLoop(deps: RuntimeLoopDeps): RuntimeLoop {
       return denied('malformed_arguments');
     }
     try {
-      const outputJson = JSON.stringify(await deps.tools.invoke(name, parsed));
+      if (name === 'memory.retrieve') {
+        // An absent or unauthorized Source is never a successful empty result.
+        if (!deps.sources) return denied('source_retrieval_unavailable');
+        const value = await deps.sources.invoke(parsed);
+        const outputJson = JSON.stringify(value);
+        if (Buffer.byteLength(JSON.stringify({ ...(value as Record<string,unknown>), evidenceSourceId:'00000000-0000-0000-0000-000000000000' })) > MODEL_TOOL_OUTPUT_MAX_BYTES)
+          return denied('tool_output_limit_exceeded');
+        return { status: 'succeeded', outputJson, outputDigest: sha256(outputJson), candidateDigest: null };
+      }
+      const value = await deps.tools.invoke(name, parsed);
+      const outputJson = JSON.stringify(value);
+      if (Buffer.byteLength(JSON.stringify({ ...(value as Record<string,unknown>), evidenceSourceId:'00000000-0000-0000-0000-000000000000' })) > MODEL_TOOL_OUTPUT_MAX_BYTES)
+        return denied('tool_output_limit_exceeded');
       return { status: 'succeeded', outputJson, outputDigest: sha256(outputJson), candidateDigest: null };
     } catch (error) {
-      const code = error instanceof WorkspaceError ? error.code : 'unavailable';
-      const policy = code === 'path_denied' || code === 'invalid_input';
+      const code = error instanceof WorkspaceError ? error.code : error instanceof SourceRetrievalError ? error.code : 'unavailable';
+      const policy = code === 'path_denied' || code === 'invalid_input' || code === 'unsupported_mode';
       const outputJson = JSON.stringify({ error: code });
       return {
         status: policy ? 'denied' : 'failed',
@@ -244,6 +275,7 @@ export function createRuntimeLoop(deps: RuntimeLoopDeps): RuntimeLoop {
           attempts += 1;
 
           let turn;
+          let preparedTurn: PreparedAttempt | undefined;
           try {
             turn = await deps.driver.turn({
               model: context.model,
@@ -252,10 +284,17 @@ export function createRuntimeLoop(deps: RuntimeLoopDeps): RuntimeLoop {
               signal: controller.signal,
               maxOutputTokens: policy.maxOutputTokens,
               identity,
-              authorizeAndJournal: (prepared) => guard.authorizeAndJournal(prepared),
+              authorizeAndJournal: async (prepared) => {
+                const ids = await guard.authorizeAndJournal(prepared);
+                preparedTurn = prepared;
+                if (ids) deps.onJournalled?.(prepared, ids);
+                if (deps.capture) await deps.capture.recordInput(prepared);
+              },
               onLifecycle: (event) => guard.observeLifecycle(event),
-              onVisibleText: (text) =>
-                sink({ kind: 'visible_text', sessionId: context.sessionId, text }),
+              onVisibleText: (text) => {
+                deps.capture?.observeVisibleText(text);
+                sink({ kind: 'visible_text', sessionId: context.sessionId, text });
+              },
             });
           } catch (error) {
             // A guard rejection means nothing was sent; it is not a provider failure.
@@ -289,6 +328,12 @@ export function createRuntimeLoop(deps: RuntimeLoopDeps): RuntimeLoop {
           let settlement: TerminalSettlement;
           try {
             settlement = await guard.settleAttempt(settled, terminal);
+            if (deps.capture) {
+              if (!preparedTurn) throw new Error('Provider did not journal the prepared turn.');
+              deps.onSettled?.(preparedTurn, settlement.responseArtifactId ?? null);
+              await deps.capture.recordTerminal(turn, preparedTurn);
+              if (!deps.capture.mayRelease()) throw new Error('Terminal evidence is incomplete.');
+            }
           } catch (error) {
             // A failed persistence acknowledgement blocks the next provider request.
             return outcome('blocked', `settle_failed: ${describe(error)}`, {

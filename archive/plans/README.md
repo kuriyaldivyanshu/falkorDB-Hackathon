@@ -1,6 +1,6 @@
 # Threadline architecture plan
 
-**Updated 16 October 2026. M00/M01 are merged; M02 implementation and real Space Bunny model/tool acceptance are complete. Later milestones remain proposed.** This directory consolidates the Track 2 plan and the user's subsequent request for an owned harness. It supersedes native-wrapper-first scope in the historical notes while retaining local npm/TUI delivery.
+**Updated 16 October 2026. M00–M02 are merged; M03 capture/source/replay is integrated and locally verified in the working tree. M04 onward remain proposed.** This directory consolidates the Track 2 plan and the user's subsequent request for an owned harness. It supersedes native-wrapper-first scope in the historical notes while retaining local npm/TUI delivery.
 
 **Current MVP: two contributors, one Builder, a fresh successor and a protected deterministic service checker.** Start with [the development blueprint](track2-development-blueprint.md), its fixture/contracts and ordered build gates. Eleven model-visible tools; no summarization API. Native subscription/OAuth adapters and investigator spawning are post-hackathon work.
 
@@ -80,3 +80,17 @@ All M02 A/B/joint checkpoints are checked. The user-selected Space Bunny accepta
 ## Provider connection extension
 
 The user-authorized provider-first setup is implemented: masked key entry, validation before saving, owner-only local storage, selection/replacement/removal and stale-profile protection. OpenAI, Anthropic, OpenRouter and OpenCode Go are selectable; native Anthropic uses Messages. [Workflow, storage limits and targeted evidence](../../docs/provider-setup.md). Live non-Go account compatibility is not claimed.
+
+## Start M03 with two agents
+
+M02 and its review fixes merged into `main` at `d09f35e`. The next milestone is durable capture, immutable available Sources, graph admission and source inspection. M03 is now integrated in the working tree; see [executed M03 evidence](review/m03-integration-verification.md) and [current commands](../../docs/m03-development.md). The launch prompts below remain the historical lane assignment.
+
+- [Shared M03 brief](prompts/track2-m03-shared-brief.md): read first; contract gate, exact file ownership, persistence/replay semantics and joint acceptance.
+- [Agent A launch prompt](prompts/track2-m03-agent-a.md): artifacts, capture/outbox transactions, deterministic graph admission, projection and permission services.
+- [Agent B launch prompt](prompts/track2-m03-agent-b.md): runtime capture, bounded chunks, source transport/tool, reconnecting TUI and assembled acceptance.
+
+Both agents work on M03 in the same checkout. The integration owner verifies the combined result before one branch/commit. Ordinary acceptance uses an injected provider and isolated real stores; no additional paid inference is authorized by these prompts.
+
+## M03 integrated capture and provenance
+
+[Executed verification](review/m03-integration-verification.md), [working workflow](../../docs/m03-development.md) and [implemented capture flow](diagrams/m03-capture-flow.mmd) cover both lanes and joint acceptance. The existing core SQL tables were reused; no new migration was needed. M04 remains unstarted.

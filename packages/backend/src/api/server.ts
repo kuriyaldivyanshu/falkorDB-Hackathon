@@ -11,6 +11,7 @@ import { silentLogger } from '../log.js';
 import { createEventStreamManager, type EventStreamManager } from './events-stream.js';
 import type { ManagedRuntime } from '../runtime/managed.js';
 import { registerProviderRoutes } from './provider-routes.js';
+import { registerSourceRoutes } from './source-routes.js';
 import type { ProviderSettings } from '../provider/settings.js';
 import { registerRoutes, registerRunRoutes } from './routes.js';
 
@@ -78,6 +79,7 @@ export function createHttpServer(deps: HttpServerDeps): HttpServerHandle {
   registerRoutes(app, routeDeps);
   registerProviderRoutes(app, { ...routeDeps, providerSettings: deps.providerSettings ?? (() => null) });
   registerRunRoutes(app, routeDeps);
+  registerSourceRoutes(app, routeDeps);
 
   let listening = false;
   let boundAddress: BackendAddress | null = null;

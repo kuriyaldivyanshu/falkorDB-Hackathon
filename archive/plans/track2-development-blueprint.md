@@ -2,6 +2,8 @@
 
 **Controlling MVP draft — 15 October 2026. Two full-time contributors; deadline unknown. All behavior below is proposed until its acceptance gate passes.** This document supersedes broader release commitments in the architecture references. Historical investigations remain evidence, not a backlog to implement.
 
+**Implementation status — 16 October 2026:** M00–M02 are merged; [M03 capture/source/replay](../../docs/m03-development.md) is locally integrated and verified. The [master checklist](track2-implementation-checklist.md) and dated evidence govern shipped behavior; M04 onward remain proposed.
+
 ## 1. Product promise and release boundary
 
 Threadline is a small local coding harness that preserves relevant task state across an interrupted session. A fresh Builder receives current accepted requirements, the current candidate, applicable failures, a structured checkpoint and sourced advice without receiving the previous conversation wholesale. FalkorDB connects these records and controls claims and revisions; a protected deterministic checker establishes whether output satisfies accepted criteria.
