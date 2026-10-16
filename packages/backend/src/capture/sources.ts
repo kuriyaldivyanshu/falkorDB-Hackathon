@@ -1,5 +1,6 @@
 import { ThreadlineError, MODEL_TOOL_OUTPUT_MAX_BYTES, base64LengthFor, modelFacingSourceRangeMaxBytes, serializedSourceRangeBytes } from '@threadline/shared';
 import type { ArtifactIdentity, SourceReader, SourceService } from '@threadline/shared';
+import { MAX_ARTIFACT_BYTES } from '../storage/artifacts.js';
 
 /**
  * `memory.retrieve(mode=source)` and authorized Source inspection.
@@ -107,7 +108,7 @@ export const SOURCE_RETRIEVAL_FUNCTION = {
   parameters: schema({
     mode: { type: 'string', enum: [...SUPPORTED_RETRIEVAL_MODES] },
     sourceId: { type: 'string', minLength: 1, maxLength: SOURCE_ID_MAX_CHARS },
-    offset: integer(SOURCE_RANGE_MAX_BYTES),
+    offset: integer(MAX_ARTIFACT_BYTES),
     maxBytes: integer(MODEL_SOURCE_RANGE_MAX_BYTES, 1),
   }),
 } as const;

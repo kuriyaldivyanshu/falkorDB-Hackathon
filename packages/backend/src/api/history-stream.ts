@@ -11,26 +11,28 @@ export function openHistoryStream(deps: {
   maxBacklogBytes: number;
 }): { close(): void } {
   const {raw}=deps;
-  let cursor=deps.cursor, closed=false, timer: NodeJS.Timeout | undefined;
+  let cursor=deps.cursor, closed=false, backpressured=false, timer: NodeJS.Timeout | undefined;
   const close=(destroy=false) => {
-    if (closed) return;closed=true;clearTimeout(timer);raw.off('close',onRawClose);deps.onClose();
+    if (closed) return;closed=true;clearTimeout(timer);raw.off('close',onRawClose);raw.off('drain',onDrain);deps.onClose();
     if (destroy) raw.destroy(); else raw.end();
   };
   const onRawClose=()=>close();
   raw.once('close',onRawClose);
-  const send=(event:string,data:unknown,id?:string) => {
-    const frame=`${id ? `id: ${id}\n` : ''}event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+  const write=(frame:string) => {
     if (raw.writableLength+Buffer.byteLength(frame)>deps.maxBacklogBytes) {
       const gap=`event: history.gap\ndata: ${JSON.stringify({frames:[],cursor,hasMore:false,gap:{fromSeq:cursor.afterSeq+1,toSeq:cursor.afterSeq+1}})}\n\n`;
       if (raw.writableLength+Buffer.byteLength(gap)<=deps.maxBacklogBytes) raw.write(gap);
       close();return false;
     }
-    if (!raw.write(frame)) { close(true);return false; }
+    // A false return still accepts the bytes. Wait for drain before reading more.
+    backpressured=!raw.write(frame);
     return true;
   };
+  const send=(event:string,data:unknown,id?:string) =>
+    write(`${id ? `id: ${id}\n` : ''}event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
   const poll=async()=>{
     try {
-      if(closed)return;
+      if(closed || backpressured)return;
       const page=await deps.read(cursor,100);
       if(closed)return;
       if(page.gap){send('history.gap',page);close();return;}
@@ -43,14 +45,21 @@ export function openHistoryStream(deps: {
         if(!permitted || checked.gap || permitted.seq!==cursor.afterSeq+1){send('history.gap',checked);close();return;}
         if(!send('history.event',permitted,`${cursor.graphEpoch}:${permitted.seq}`))return;
         cursor={graphEpoch:cursor.graphEpoch,afterSeq:permitted.seq};
+        if(backpressured)return;
       }
       if(!page.hasMore && !send('history.cursor',{...cursor,admission:page.admission}))return;
-      if(!closed)timer=setTimeout(()=>{void poll();},page.hasMore?0:250);
+      if(!closed && !backpressured)timer=setTimeout(()=>{void poll();},page.hasMore?0:250);
     }catch{
       if(!closed){send('history.refused',{code:'authority_unavailable',message:'Delivery stopped; reauthenticate or refresh the durable cursor.'});close();}
     }
   };
-  raw.write(': threadline durable project history; reconnect with Last-Event-ID\n\n');
+  const onDrain=()=>{
+    if(closed || !backpressured)return;
+    backpressured=false;
+    void poll();
+  };
+  raw.on('drain',onDrain);
+  write(': threadline durable project history; reconnect with Last-Event-ID\n\n');
   void poll();
   return {close:()=>close()};
 }

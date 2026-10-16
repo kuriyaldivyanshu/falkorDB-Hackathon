@@ -39,7 +39,9 @@ export const DEVELOPMENT_OUTBOX_PROFILE: OutboxProfile = {
   retryBackoffMs: [250, 1_000, 2_000],
   maxAttempts: 3,
   batchSize: 100,
-  deliveryTimeoutMs: 2000,
+  // Receipt preflight, admission and a possible receipt re-read each allow 2s.
+  // Leave headroom for the SQL preflight while staying within the 30s lease.
+  deliveryTimeoutMs: 10_000,
 };
 
 export interface OutboxDelivery {

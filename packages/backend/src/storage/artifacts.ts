@@ -363,15 +363,19 @@ function writeAtomically(target: string, bytes: Buffer): void {
 }
 
 function verifiedBytes(path:string,digest:string,size?:number):Buffer|null {
-  let fd:number|undefined;
   try {
-    fd=openSync(path,constants.O_RDONLY|constants.O_NOFOLLOW);
-    const before=fstatSync(fd);
-    if(!before.isFile() || before.size>MAX_ARTIFACT_BYTES || (size!==undefined && before.size!==size))return null;
-    const bytes=readFileSync(fd);
-    if(bytes.length!==before.size || createHash('sha256').update(bytes).digest('hex')!==digest)return null;
-    return bytes;
-  }catch{return null;}finally{if(fd!==undefined)closeSync(fd);}
+    const fd=openSync(path,constants.O_RDONLY|constants.O_NOFOLLOW);
+    try {
+      const before=fstatSync(fd);
+      if(!before.isFile() || before.size>MAX_ARTIFACT_BYTES || (size!==undefined && before.size!==size))return null;
+      const bytes=readFileSync(fd);
+      if(bytes.length!==before.size || createHash('sha256').update(bytes).digest('hex')!==digest)return null;
+      return bytes;
+    }finally{closeSync(fd);}
+  }catch(error){
+    if ((error as NodeJS.ErrnoException).code==='ENOENT') return null;
+    throw new ThreadlineError('storage_unavailable','Could not read artifact bytes.',{retryable:true});
+  }
 }
 function readAndVerify(path:string,digest:string):boolean { return verifiedBytes(path,digest)!==null; }
 
