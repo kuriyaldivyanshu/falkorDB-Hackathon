@@ -1,6 +1,6 @@
 # FalkorDB Track 2 architecture notes
 
-Snapshot: 15 October 2026. M01 now adds real PostgreSQL/FalkorDB storage, local human sessions, durable goal admission and authenticated CLI/TUI inspection. Model/tool execution, memory continuity and protected completion remain unimplemented.
+Snapshot: 16 October 2026. M02 integrates durable run admission, the owned Responses transport, read-only tools and CLI/TUI activity against real PostgreSQL/FalkorDB. Local provider/tool verification passes. The user-authorized OpenCode Go / Space Bunny model/tool acceptance passed: 3 completed model turns, 2 successful tools, 8,045 reported tokens, zero unresolved attempts. See [final M02 evidence](docs/m02-live-acceptance.md). Memory continuity and protected completion remain future work.
 
 ## Run the local backend and client
 
@@ -25,6 +25,12 @@ node packages/cli/dist/index.js inspect
 ```
 
 `admit` requires explicit consent and retains a durable request record for retries. The TUI shows current accepted task/criteria/source authority. Echo and SSE remain process-local (`replayable=false`). See [M01 integration evidence](archive/plans/review/m01-integration-verification.md), [the implemented contract](docs/m01-contract-agreement.md) and [the master checklist](archive/plans/track2-implementation-checklist.md). Verification used Node v23.11.0; Node 24 remains untested.
+
+For masked provider-first setup, use `provider:setup` or `/connect` in the TUI. OpenAI, Anthropic (Claude API), OpenRouter and OpenCode Go are available. See [key validation and secure local storage](docs/provider-setup.md).
+
+For legacy environment configuration, including OpenCode Go, see [provider configuration and smoke-test evidence](docs/provider-configuration.md).
+
+For explicit M02 preparation/start/inspect/cancel commands, see [the current runtime workflow](docs/m02-development.md) and [M02 integration evidence](archive/plans/review/m02-integration-verification.md). Configuration and preparation never infer; an explicitly started production run can incur API charges.
 
 ## Hackathon and selected track
 
@@ -61,7 +67,7 @@ The MVP harness owns eleven bounded tools, lifecycle, durable capture, context p
 
 Start implementation with the [code-first master checklist](archive/plans/track2-implementation-checklist.md), split into [Agent A: Memory/Coordinator](archive/plans/track2-agent-a-checklist.md) and [Agent B: Harness/Frontend](archive/plans/track2-agent-b-checklist.md). Write the small runnable backend/TUI first; each milestone combines both lanes into one reviewed branch/commit after integration. Verification, fault evidence and packaging follow the working flow.
 
-M00 was merged with review resolutions. M01 is now combined and independently verified; its merge workflow remains pending. The original launch instructions are the detailed [M01 Agent A prompt](archive/plans/prompts/track2-m01-agent-a.md) and [M01 Agent B prompt](archive/plans/prompts/track2-m01-agent-b.md). Both agents work on M01 from the same merged base and can consult the reference archives when stuck.
+M00 and M01 are merged; M01 is PR #2 at `067f842`. M02 is implemented and verified with a real Space Bunny model/read-tool/next-turn/final-response flow. See [the executable workflow](docs/m02-development.md), [live acceptance](docs/m02-live-acceptance.md) and [provider setup](docs/provider-setup.md). M03 continuity/capture and later milestones remain future work.
 
 **Current recommendation:** TypeScript/Node for the owned harness and local TUI/backend, PostgreSQL for identity and session operations, FalkorDB for connected memory and coordination. Native subscription adapters and investigator spawning are post-hackathon milestones. See [the complete plan](archive/plans/README.md), [harness scope](archive/plans/track2-harness-scope.md).
 

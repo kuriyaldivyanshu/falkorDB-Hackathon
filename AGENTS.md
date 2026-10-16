@@ -10,7 +10,7 @@ Threadline is a TypeScript/npm workspace for a local coding harness and FalkorDB
 - `archive/notes/` and `archive/plans/` retain architecture decisions, research, schemas, delivery plans, and historical alternatives.
 - `README.md` indexes the documentation and identifies the current recommendation.
 
-Before changing architecture or delivery guidance, read the four documents under README's **Start here** section. The owned npm/TUI proposal takes precedence over earlier web-first and independent SDK proposals. The current code is an M00 development scaffold; persistence, model providers, memory continuity, and protected completion remain unimplemented.
+Before changing architecture or delivery guidance, read the four documents under README's **Start here** section. The owned npm/TUI proposal takes precedence over earlier web-first and independent SDK proposals. M01 persistence, local sessions and accepted-goal admission are merged. M02 run control, owned provider transport and read-only tools are locally integrated with real stores and an injected test provider. The user-selected Space Bunny model/tool compatibility gate has passed; live OpenAI account access, continuity and protected completion are not available. When changing M02 run/provider/tool code, read `docs/m02-development.md` for implemented seams and pending integration gates.
 
 ## Build, Test, and Development Commands
 
@@ -22,7 +22,7 @@ Use Node.js 22 or later and npm from the repository root:
 - `node packages/cli/dist/index.js tui` — start the TUI after building.
 - `node packages/cli/dist/index.js health` and `node packages/cli/dist/index.js echo "hello"` — exercise the development CLI commands.
 
-The backend and echo command are development-only and non-durable. Commands in architecture notes describe proposed future workflows unless they are listed above.
+Accepted M01 goal/task authority is durable when storage is configured. Echo and SSE remain process-local and non-replayable. OpenAI paid model/tool testing remains deferred. The user separately authorized completing M02 on 16 October 2026; Space Bunny passed the full model/read-tool/next-turn/final-response gate. See docs/m02-live-acceptance.md. This completed acceptance does not authorize unattended future live inference. Use local transport fixtures for ordinary tests. API-key provider selection is documented in docs/provider-configuration.md. Commands in architecture notes describe proposed future workflows unless they are listed above.
 
 ## Documentation Style & Naming Conventions
 

@@ -2355,6 +2355,16 @@
           "Admitted shared budget reservation"
         ],
         [
+          "reserved_tokens",
+          "bigint CHECK (reserved_tokens >= 0)",
+          "M02 migration 3: durable admitted estimate; NULL on legacy rows"
+        ],
+        [
+          "possible_charge",
+          "boolean",
+          "M02 migration 3: observed transport uncertainty; NULL means legacy unknown"
+        ],
+        [
           "provider_request_id",
           "text",
           "Provider correlation if available; not assumed resumable"

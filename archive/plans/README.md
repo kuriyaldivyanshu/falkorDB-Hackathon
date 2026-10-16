@@ -1,6 +1,6 @@
 # Threadline architecture plan
 
-**Updated 15 October 2026. M00 and M01 now have implemented and independently verified code; later milestones remain proposed.** This directory consolidates the Track 2 plan and the user's subsequent request for an owned harness. It supersedes native-wrapper-first scope in the historical notes while retaining local npm/TUI delivery.
+**Updated 16 October 2026. M00/M01 are merged; M02 implementation and real Space Bunny model/tool acceptance are complete. Later milestones remain proposed.** This directory consolidates the Track 2 plan and the user's subsequent request for an owned harness. It supersedes native-wrapper-first scope in the historical notes while retaining local npm/TUI delivery.
 
 **Current MVP: two contributors, one Builder, a fresh successor and a protected deterministic service checker.** Start with [the development blueprint](track2-development-blueprint.md), its fixture/contracts and ordered build gates. Eleven model-visible tools; no summarization API. Native subscription/OAuth adapters and investigator spawning are post-hackathon work.
 
@@ -66,4 +66,17 @@ Both prompts cover exact task IDs, file ownership, early contract coordination, 
 
 ## M01 combined integration
 
-[Independent M01 verification](review/m01-integration-verification.md) records the resolved session, graph topology, retry, owner-bootstrap and CLI integration defects; actual PostgreSQL/FalkorDB and CLI/TUI evidence; and remaining limits. All M01 A/B tasks and joint J01–J04 are verified. J05 awaits the actual merge workflow. See [working local setup](../../docs/local-development.md) and [implemented protocol agreement](../../docs/m01-contract-agreement.md). No M02 provider execution is claimed.
+[Independent M01 verification](review/m01-integration-verification.md) records the resolved session, graph topology, retry, owner-bootstrap and CLI integration defects; actual PostgreSQL/FalkorDB and CLI/TUI evidence; and remaining limits. All M01 A/B tasks and joint J01–J04 are verified. J05 is complete after PR #2 merged at `067f842`. See [working local setup](../../docs/local-development.md) and [implemented protocol agreement](../../docs/m01-contract-agreement.md). That evidence predates M02; see the local integration below.
+
+## M02 local integration
+
+[Current executable workflow](../../docs/m02-development.md) and [independent integration evidence](review/m02-integration-verification.md) cover real-store run admission, exact-byte request journals, durable model/tool artifacts, bounded sequential execution, CLI preparation and private activity in an actual PTY. The original local snapshot passed 212 ordinary tests and 33 opt-in store cases; subsequent results are recorded in the linked evidence. Schemas and diagrams include additive attempt facts and the operational session lease.
+
+All M02 A/B/joint checkpoints are checked. The user-selected Space Bunny acceptance passed with actual file bytes, next-turn continuation and final reported usage. Final regressions: 224 ordinary tests and 34 real-store cases pass. [Final live evidence and repairs](../../docs/m02-live-acceptance.md). OpenAI live-account and subscription support remain unclaimed. The combined implementation is ready for the branch/commit/PR workflow.
+
+
+[API-key provider configuration](../../docs/provider-configuration.md) documents the subsequent user-approved OpenCode Go/custom-provider extension, Pi inspiration and successful one-request Space Bunny smoke test. The later full live model/tool acceptance is recorded separately in the evidence above.
+
+## Provider connection extension
+
+The user-authorized provider-first setup is implemented: masked key entry, validation before saving, owner-only local storage, selection/replacement/removal and stale-profile protection. OpenAI, Anthropic, OpenRouter and OpenCode Go are selectable; native Anthropic uses Messages. [Workflow, storage limits and targeted evidence](../../docs/provider-setup.md). Live non-Go account compatibility is not claimed.

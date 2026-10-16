@@ -15,3 +15,9 @@ test('only boolean passwordConfigured metadata is allowed',()=>{
  assert.doesNotThrow(()=>createJsonLogger({passwordConfigured:true}));
  assert.throws(()=>createJsonLogger({passwordConfigured:'synthetic-secret'}),RedactedLogFieldError);
 });
+test('model usage counters are numeric metadata, while token credentials stay forbidden',()=>{
+ assert.doesNotThrow(()=>createJsonLogger({reservedTokens:4346,estimatedInputTokens:2846}));
+ for (const value of ['synthetic-secret',-1,Infinity,1.5])
+  assert.throws(()=>createJsonLogger({reservedTokens:value}),RedactedLogFieldError);
+ assert.throws(()=>createJsonLogger({token:123}),RedactedLogFieldError);
+});

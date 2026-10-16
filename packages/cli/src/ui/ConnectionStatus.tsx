@@ -18,6 +18,8 @@ export interface ConnectionStatusProps {
   /** Whether a local owner session is attached. The token is never rendered. */
   readonly authenticated: boolean;
   readonly sessionIssuedAt: string | null;
+  /** Latest run/session state reported by the backend, or null. */
+  readonly runLine: string | null;
 }
 
 const STATUS_COLOR = {
@@ -40,6 +42,7 @@ export function ConnectionStatus({
   health,
   authenticated,
   sessionIssuedAt,
+  runLine,
 }: ConnectionStatusProps) {
   const attempt =
     connection.attempt > 0 ? ` (attempt ${connection.attempt})` : '';
@@ -79,6 +82,12 @@ export function ConnectionStatus({
           ? ` · issued ${sessionIssuedAt.slice(0, 19).replace('T', ' ')}Z`
           : ''}
       </Text>
+      {/*
+        Run state comes from the backend's own events. These deltas have no
+        replay, so after a gap the durable record must be read again with an
+        explicit inspect rather than assumed from this line.
+      */}
+      {runLine === null ? null : <Text dimColor>{runLine}</Text>}
     </Box>
   );
 }

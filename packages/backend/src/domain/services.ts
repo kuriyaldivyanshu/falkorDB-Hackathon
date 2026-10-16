@@ -3,6 +3,10 @@ import { ThreadlineError } from '@threadline/shared';
 import type { BackendConfig } from '../config.js';
 import type { Logger } from '../log.js';
 import { silentLogger } from '../log.js';
+
+// Re-exported so sibling domain modules name one authority for these shapes.
+export type { AuthenticatedPrincipal } from '../storage/identity.js';
+export type { ProjectScope } from './admission.js';
 import {
   admitGoal,
   readAdmissionByRequestId,
@@ -10,9 +14,22 @@ import {
   reconcilePendingAdmissions,
   type ProjectScope,
 } from './admission.js';
+import {
+  createExecutionService,
+  DEVELOPMENT_LIMITS,
+  type ExecutionDeps,
+  type StartRunDeps,
+  type StartRunRequest,
+} from './execution.js';
+import { createArtifactWriter, type ArtifactWriter } from '../storage/artifacts.js';
+import { createExecutionRegistry, type ExecutionRegistry } from '../storage/execution.js';
+import { ModelRequestJournal } from '../storage/model-requests.js';
+import type { ClaimState, RunContext, TurnGuard } from '../runtime/contracts.js';
+import type { CancelRunOutcome, RunInspectView, RunStartOutcome } from '@threadline/shared';
 import type { GraphStore } from '../storage/graph.js';
 import type { SchemaStatus } from '../storage/migrate.js';
 import type { ProjectMembershipView } from '@threadline/shared';
+import type { ActivitySink } from '../runtime/contracts.js';
 import type { SqlDatabase } from '../storage/pg.js';
 import {
   authenticateSession,
@@ -35,6 +52,38 @@ export interface StorageReadiness {
   readonly graphReady: boolean;
   readonly schema: SchemaStatus;
   readonly lastError: string | null;
+}
+
+/**
+ * The execution surface exposed to HTTP handlers and, through ports, to the
+ * loop. Everything here can refuse; nothing here bypasses a check.
+ */
+export interface ExecutionSurface {
+  readonly limits: {
+    readonly maxAttempts: number;
+    readonly maxToolCalls: number;
+    readonly maxTotalTokens: number;
+    readonly maxInputTokens: number;
+    readonly maxOutputTokens: number;
+    readonly deadlineMs: number;
+    readonly claimLeaseMs: number;
+    readonly claimHeartbeatMs: number;
+  };
+  readonly registry: ExecutionRegistry;
+  readonly journal: ModelRequestJournal;
+  readonly artifacts: ArtifactWriter;
+  start(
+    deps: StartRunDeps,
+    principal: AuthenticatedPrincipal,
+    request: StartRunRequest,
+    correlationId: string,
+  ): Promise<RunStartOutcome>;
+  heartbeat(principal: AuthenticatedPrincipal, runId: string): Promise<{ leaseExpiresAt: string; fence: number }>;
+  cancel(principal: AuthenticatedPrincipal, runId: string, reason: string): Promise<CancelRunOutcome>;
+  inspect(principal: AuthenticatedPrincipal, runId: string): Promise<RunInspectView>;
+  /** Open run ids for a project, newest first. Read-only. */
+  listActiveRuns(tenantId: string, projectId: string): Promise<readonly string[]>;
+  turnGuard(scope: RunContext, claim: ClaimState): TurnGuard;
 }
 
 export interface ApplicationServices {
@@ -62,6 +111,13 @@ export interface ApplicationServices {
   projectsFor(principal: AuthenticatedPrincipal): Promise<ProjectMembershipView[]>;
   /** Revokes a session; a revoked session can never renew a task lease. */
   revokeSession(principal: AuthenticatedPrincipal, sessionId: string): Promise<boolean>;
+  /**
+   * Execution authority: run admission, claims, budget and the loop's ports.
+   * Created only when storage is ready; absent storage means no run can start.
+   */
+  execution(): ExecutionSurface | null;
+  /** Builds the execution surface once stores are ready. Idempotent. */
+  bootstrapExecution(): void;
   /** Startup reconciliation of inbox rows whose graph outcome is unknown. */
   reconcile(tenantId: string, projectId: string): Promise<{ resolved: number; unresolved: number; quarantined: number }>;
   projectScope(tenantId: string, projectId: string): Promise<ProjectScope>;
@@ -75,10 +131,11 @@ export interface ServiceDeps {
   readonly clock: () => Date;
   readonly logger?: Logger;
   readonly schema: SchemaStatus;
+  readonly activity?: ActivitySink;
 }
 
 export function createApplicationServices(deps: ServiceDeps): ApplicationServices {
-  const logger = deps.logger ?? silentLogger;
+  const logger: Logger = deps.logger ?? silentLogger;
   const state: { sqlReady: boolean; graphReady: boolean; lastError: string | null } = {
     sqlReady: false,
     graphReady: false,
@@ -111,6 +168,64 @@ export function createApplicationServices(deps: ServiceDeps): ApplicationService
 
   const serviceDeps = { db: deps.db, graphs: deps.graphs, clock: deps.clock, logger };
 
+  // Built once the stores are ready; a run cannot exist before that.
+  let artifacts: ArtifactWriter | null = null;
+  let registry: ExecutionRegistry | null = null;
+  let journal: ModelRequestJournal | null = null;
+  let execution: ExecutionSurface | null = null;
+
+  const initialiseExecution = (): void => {
+    artifacts = createArtifactWriter({
+      db: deps.db,
+      root: deps.config.storage.artifactsDirectory,
+      clock: deps.clock,
+      logger,
+    });
+    registry = createExecutionRegistry({ db: deps.db, clock: deps.clock, logger });
+    journal = new ModelRequestJournal({
+      db: deps.db,
+      artifacts,
+      clock: deps.clock,
+      logger,
+    });
+    const executionDeps: ExecutionDeps = {
+      db: deps.db,
+      graphs: deps.graphs,
+      registry,
+      journal,
+      artifacts,
+      limits: DEVELOPMENT_LIMITS,
+      clock: deps.clock,
+      logger,
+      activity: deps.activity,
+    };
+    const service = createExecutionService(executionDeps);
+    execution = {
+      limits: DEVELOPMENT_LIMITS,
+      registry,
+      journal,
+      artifacts,
+      async start(startDeps, principal, request, correlationId): Promise<RunStartOutcome> {
+        return service.start(startDeps, principal, request, correlationId);
+      },
+      async heartbeat(principal, runId): Promise<{ leaseExpiresAt: string; fence: number }> {
+        return service.heartbeat(principal, runId);
+      },
+      async cancel(principal, runId, reason): Promise<CancelRunOutcome> {
+        return service.cancel(principal, runId, reason);
+      },
+      async inspect(principal, runId): Promise<RunInspectView> {
+        return service.inspect(principal, runId);
+      },
+      async listActiveRuns(tenantId, projectId) {
+        return service.listActiveRuns(tenantId, projectId);
+      },
+      turnGuard(scope: RunContext, claim: ClaimState): TurnGuard {
+        return service.turnGuard(scope, claim);
+      },
+    };
+  };
+
 
   const refreshReadiness = async (): Promise<StorageReadiness> => {
       state.lastError = null;
@@ -131,8 +246,14 @@ export function createApplicationServices(deps: ServiceDeps): ApplicationService
       return readiness();
     };
 
-  return {
+  const service: ApplicationServices = {
     readiness,
+
+    bootstrapExecution(): void {
+      if (execution === null) {
+        initialiseExecution();
+      }
+    },
 
     async authenticate(header: string | undefined): Promise<AuthenticatedPrincipal> {
       const token = readBearerToken(header);
@@ -180,12 +301,19 @@ export function createApplicationServices(deps: ServiceDeps): ApplicationService
       return revokeSessionRow(deps.db, principal.tenantId, sessionId, deps.clock());
     },
 
+    execution(): ExecutionSurface | null {
+      execution ??= null;
+      return execution;
+    },
+
     async projectScope(tenantId, projectId) {
       return loadProjectScopeByTenant(deps.db,tenantId,projectId);
     },
 
     refreshReadiness,
   };
+
+  return service;
 }
 
 /**

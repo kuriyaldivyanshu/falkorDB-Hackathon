@@ -236,9 +236,13 @@ export function toStorageError(error: unknown, stage: string): ThreadlineError {
   return new ThreadlineError('storage_unavailable', 'A required database operation failed.', {
     stage,
     errorName: name,
+    // Without these, an undefined column, a permission failure and a dropped
+    // connection are indistinguishable from one another at the call site.
+    ...(code === undefined ? {} : { sqlState: code }),
   });
 }
 
+// Driver messages can contain SQL values or credentials; expose SQLSTATE only.
 function readPgCode(error: unknown): string {
   if (typeof error === 'object' && error !== null && 'code' in error) {
     const code = (error as { code?: unknown }).code;
@@ -249,4 +253,38 @@ function readPgCode(error: unknown): string {
 
 function describeError(error: unknown): string {
   return error instanceof Error ? error.name : typeof error;
+}
+/**
+ * Serializes a human command admission against a worker release.
+ *
+ * Both paths take the same transaction-scoped advisory lock for the project, so
+ * an accepted human change cannot land between a worker's authority recheck and
+ * its dependent effect. This is deliberately narrow: it is a release barrier,
+ * not the M07 requirement-change pipeline.
+ *
+ * The lock is transaction-scoped, so it is always released — including on
+ * rollback — and can never strand a connection.
+ */
+/**
+ * The one key both human admission and worker release must hold.
+ *
+ * Exported so the human-command path and the worker-release path cannot drift
+ * onto different keys and silently stop serializing against each other.
+ */
+export function projectAdmissionLockKey(tenantId: string, projectId: string): string {
+  return `threadline:project-admission:${tenantId}:${projectId}`;
+}
+
+export async function withProjectAdmissionLock<TResult>(
+  db: SqlDatabase,
+  tenantId: string,
+  projectId: string,
+  work: (tx: TxClient) => Promise<TResult>,
+): Promise<TResult> {
+  return db.withTenantTransaction(tenantId, async (tx) => {
+    await tx.rows('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [
+      projectAdmissionLockKey(tenantId, projectId),
+    ]);
+    return work(tx);
+  });
 }

@@ -254,6 +254,8 @@
 | `output_owner_user_id` | `string?` | Required for user-private derived output |
 | `output_owner_session_id` | `string?` | Required for session-private derived output |
 
+M02 runtime addition: `lease_expires_ms` is the operational session lease renewed by guarded heartbeats. The initial immutable TaskState retains its admission-time lease snapshot; renewal does not change its revision or worker fence.
+
 ## Source
 
 **Memory / core.** Addressable provenance reference; content remains SQL/blob

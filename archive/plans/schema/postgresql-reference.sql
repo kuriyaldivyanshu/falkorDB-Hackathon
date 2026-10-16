@@ -643,6 +643,9 @@ CREATE TABLE model_requests (
   graph_epoch uuid NOT NULL,
   requirement_revision bigint NOT NULL CHECK (requirement_revision >= 0),
   reservation_graph_id uuid NOT NULL,
+  -- Additive runtime migration 3; NULL retains uncertainty for older rows.
+  reserved_tokens bigint CHECK (reserved_tokens >= 0),
+  possible_charge boolean,
   provider_request_id text,
   status text NOT NULL CHECK (status IN ('prepared','dispatched','streaming','completed','failed','unknown','cancelled')),
   response_artifact_id uuid,

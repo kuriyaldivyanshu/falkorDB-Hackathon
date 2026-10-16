@@ -24,9 +24,30 @@ export interface DevelopmentEchoAcceptedPayload {
   readonly durability: DevelopmentDurability;
 }
 
+export interface RunEventPayloadLocal {
+  readonly runId: string;
+  readonly sessionId: string;
+  readonly state: string;
+  readonly sessionState: string;
+  readonly detail: string;
+}
+
+export interface RunActivityPayload {
+  readonly tenantId: string;
+  readonly projectId: string;
+  readonly runId: string;
+  readonly sessionId: string;
+  readonly kind: string;
+  readonly state: string;
+  readonly detail: string;
+}
+
 export interface EventMap {
+  readonly 'run.activity': RunActivityPayload;
   readonly 'backend.status': BackendStatusPayload;
   readonly 'development.echo.accepted': DevelopmentEchoAcceptedPayload;
+  readonly 'run.state': RunEventPayloadLocal;
+  readonly 'run.attempt': RunEventPayloadLocal;
 }
 
 export type EventName = keyof EventMap;
@@ -56,7 +77,13 @@ export type ThreadlineEvent = {
 }[EventName];
 
 export function isEventName(value: unknown): value is EventName {
-  return value === 'backend.status' || value === 'development.echo.accepted';
+  return (
+    value === 'backend.status' ||
+    value === 'development.echo.accepted' ||
+    value === 'run.activity' ||
+    value === 'run.state' ||
+    value === 'run.attempt'
+  );
 }
 
 /**

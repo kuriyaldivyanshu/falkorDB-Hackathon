@@ -14,6 +14,10 @@ import {
   type HealthReport,
 } from '@threadline/shared';
 
+import { createProviderSettings, type ProviderSettings } from './provider/settings.js';
+import { join } from 'node:path';
+import { createManagedRuntime, type ManagedRuntime } from './runtime/managed.js';
+import type { ResponsesDriver } from './provider/responses.js';
 import { createHttpServer, type BackendAddress, type HttpServerHandle } from './api/server.js';
 import type { BackendConfig } from './config.js';
 import { createCommandDispatcher, type CommandDispatcher } from './domain/dispatcher.js';
@@ -81,12 +85,6 @@ const M00_GUARANTEE_NOTE =
 /** Components this milestone still does not contain, reported rather than implied. */
 const NOT_IMPLEMENTED: readonly ComponentStatus[] = [
   {
-    name: 'provider',
-    present: false,
-    ready: false,
-    detail: 'No model provider is configured or contacted at this milestone; provider turns arrive in M02.',
-  },
-  {
     name: 'checker',
     present: false,
     ready: false,
@@ -95,6 +93,11 @@ const NOT_IMPLEMENTED: readonly ComponentStatus[] = [
 ];
 
 export interface BackendDeps {
+  readonly providerVaultDirectory?: string;
+  readonly providerCredentialRevision?: string;
+  readonly providerKeyFetch?: typeof fetch;
+  /** Explicit test-only provider injection; no environment or HTTP fixture switch. */
+  readonly runtimeDriver?: ResponsesDriver;
   readonly config: BackendConfig;
   readonly clock?: () => Date;
   /** Injected by tests; production wires the real stores during start(). */
@@ -219,6 +222,8 @@ export function createBackend(deps: BackendDeps): Backend {
   });
 
   let services: ApplicationServices | null = null;
+  let runtime: ManagedRuntime | null = null;
+  let providerSettings: ProviderSettings | null = null;
 
   const openStorage = async (): Promise<void> => {
     if (deps.config.storage.mode !== 'required') {
@@ -266,6 +271,22 @@ export function createBackend(deps: BackendDeps): Backend {
       logger,
       schema: schemaStatus,
     });
+    services.bootstrapExecution();
+    runtime = createManagedRuntime({ services, db: database, dataDirectory: deps.config.dataDirectory,
+      credentialRevision: deps.providerCredentialRevision, apiKey: deps.config.storage.providerApiKey, model: deps.config.storage.providerModel,
+      providerId: deps.config.storage.providerId, providerApi: deps.config.storage.providerApi, baseUrl: deps.config.storage.providerBaseUrl,
+      ...(deps.runtimeDriver ? { driver: deps.runtimeDriver } : {}),
+      activity: (projectId, tenantId, sessionId, runId, activity) => {
+        if (publisher.closed) return;
+        const detail = activity.kind === 'visible_text' ? activity.text : activity.kind === 'run_state' ? activity.detail
+          : activity.kind === 'tool_state' ? activity.toolName : '';
+        try { publisher.publish('run.activity', { projectId, tenantId, sessionId, runId, kind: activity.kind,
+          state: 'state' in activity ? activity.state : '', detail: detail.slice(0, 4096) }); } catch { /* UI hints cannot change execution. */ }
+      },
+    });
+    providerSettings = createProviderSettings({ directory: deps.providerVaultDirectory ?? join(deps.config.dataDirectory, 'provider-credentials'),
+      runtime: () => { if (!runtime) throw new ThreadlineError('storage_unavailable', 'Owned runtime is unavailable.'); return runtime; },
+      ...(deps.providerKeyFetch ? { fetchImpl: deps.providerKeyFetch } : {}) });
     await services.refreshReadiness();
 
     const reconciled = await services.reconcile(bootstrap.tenantId, bootstrap.projectId);
@@ -279,6 +300,9 @@ export function createBackend(deps: BackendDeps): Backend {
   };
 
   const closeStorage = async (): Promise<void> => {
+    await runtime?.close();
+    runtime = null;
+    providerSettings = null;
     services = null;
     const stores = [graphStore, database, migrationDatabase];
     graphStore = null;
@@ -310,6 +334,9 @@ export function createBackend(deps: BackendDeps): Backend {
           : 'Process-local events with bounded listeners; no replay and no persistence.',
       },
       ...storeComponents(),
+      { name: 'provider', present: runtime !== null && runtime.configuration().model.length > 0,
+        ready: runtime !== null && runtime.configuration().apiKey.length > 0 && runtime.configuration().model.length > 0,
+        detail: `Owned ${runtime?.configuration().providerId ?? deps.config.storage.providerId}/${runtime?.configuration().providerApi ?? deps.config.storage.providerApi} transport; inference starts only on explicit run:start. Model compatibility requires a live turn.` },
       ...NOT_IMPLEMENTED,
     ];
     const uptimeMs = startedAt === null ? 0 : Math.max(0, clock().getTime() - startedAt);
@@ -325,7 +352,7 @@ export function createBackend(deps: BackendDeps): Backend {
         replayable: false,
         multiSession: false,
         note: storageReady
-          ? 'M01: goal, requirement, criterion and source records are durable in PostgreSQL and FalkorDB. Task execution, model turns and protected completion are not implemented yet.'
+          ? 'M02: accepted authority, model attempts and read-tool artifacts are durable. Run execution is explicitly started; SSE has no replay. Protected task completion is unavailable; paid model compatibility remains unverified.'
           : deps.config.storage.mode === 'required' ? 'M01 stores are not ready; durable admission is unavailable. Previously committed data remains in its stores.' : M00_GUARANTEE_NOTE,
       },
     };
@@ -416,12 +443,14 @@ export function createBackend(deps: BackendDeps): Backend {
       })();
       void starting_;
       const server = createHttpServer({
+        runtime: () => runtime,
         config: deps.config,
         dispatch,
         publisher,
         health,
         services: () => services,
         localBootstrap: () => localBootstrap,
+        providerSettings: () => providerSettings,
         logger,
       });
       http = server;

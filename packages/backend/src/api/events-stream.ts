@@ -25,7 +25,7 @@ export interface EventStream {
 }
 
 export interface EventStreamManager {
-  open(raw: ServerResponse): EventStream;
+  open(raw: ServerResponse, authorize?: (event: ThreadlineEvent) => Promise<boolean>): EventStream;
   /** Ends every open stream. Returns how many were still open. */
   closeAll(): number;
   readonly openCount: number;
@@ -42,12 +42,53 @@ export function createEventStreamManager(deps: EventStreamManagerDeps): EventStr
   const streams = new Set<SseStream>();
 
   return {
-    open(raw: ServerResponse): EventStream {
+    open(raw: ServerResponse, authorize?: (event: ThreadlineEvent) => Promise<boolean>): EventStream {
       const stream = new SseStream(
         raw,
         {
           maxBacklogBytes: deps.maxBacklogBytes,
-          subscribe: (deliver) => deps.publisher.subscribe(deliver),
+          subscribe: (deliver) => {
+            // Text deltas are process-local hints. Coalesce only adjacent text
+            // for the same audience/run; keep lifecycle events in FIFO order.
+            // Every private frame still gets fresh authorization immediately
+            // before delivery. No time-based permission cache is retained.
+            const queue: ThreadlineEvent[] = [];
+            let queuedBytes = 0, draining = false;
+            const size = (event: ThreadlineEvent) => Buffer.byteLength(JSON.stringify(event));
+            const subscription = deps.publisher.subscribe(event => {
+              if (stream.closed || (event.name === 'run.activity' && !authorize)) return;
+              if (event.name !== 'run.activity' && !draining && queue.length === 0) { deliver(event); return; }
+              const last = queue.at(-1);
+              let merged = false;
+              if (last?.name === 'run.activity' && event.name === 'run.activity' &&
+                last.payload.kind === 'visible_text' && event.payload.kind === 'visible_text' &&
+                last.payload.tenantId === event.payload.tenantId && last.payload.projectId === event.payload.projectId &&
+                last.payload.sessionId === event.payload.sessionId && last.payload.runId === event.payload.runId &&
+                last.payload.state === event.payload.state && Buffer.byteLength(last.payload.detail + event.payload.detail) <= 4096) {
+                const combined: ThreadlineEvent = { ...event, payload: { ...event.payload, detail: last.payload.detail + event.payload.detail } };
+                queuedBytes += size(combined) - size(last); queue[queue.length - 1] = combined; merged = true;
+              }
+              if (!merged) { queue.push(event); queuedBytes += size(event); }
+              if (queue.length > 64 || queuedBytes > deps.maxBacklogBytes) { stream.close('backlog-exceeded'); return; }
+              if (draining) return;
+              draining = true;
+              void (async () => {
+                try {
+                  while (!stream.closed && queue.length > 0) {
+                    const next = queue.shift()!; queuedBytes -= size(next);
+                    if (next.name !== 'run.activity' || (authorize && await authorize(next))) {
+                      if (!stream.closed) deliver(next);
+                    }
+                  }
+                } catch { stream.close('client-disconnected'); }
+                finally { draining = false; if (stream.closed) { queue.length = 0; queuedBytes = 0; } }
+              })();
+            });
+            return {
+              get closed() { return subscription.closed; },
+              close() { queue.length = 0; queuedBytes = 0; subscription.close(); },
+            };
+          },
         },
         (closed) => {
           streams.delete(closed);

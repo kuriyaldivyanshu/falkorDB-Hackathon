@@ -103,6 +103,25 @@ export {
 } from './admission.js';
 
 export {
+  RUN_STATES,
+  SESSION_STATES,
+  TASK_CLAIM_STATES,
+  type AttemptView,
+  type CancelRunInput,
+  type CancelRunOutcome,
+  type RunBudgetView,
+  type RunClaimView,
+  type RunEventPayload,
+  type RunInspectView,
+  type RunLaunchView,
+  type RunStartOutcome,
+  type RunState,
+  type SessionState,
+  type StartRunInput,
+  type TaskClaimState,
+} from './execution.js';
+
+export {
   COMPONENT_NAMES,
   isHealthReport,
   type BackendGuarantees,
@@ -110,3 +129,7 @@ export {
   type ComponentStatus,
   type HealthReport,
 } from './health.js';
+export { SETUP_PROVIDERS, isSetupProvider, type SetupProvider, type ProviderCheck,
+  type ProviderCheckState, type SavedProviderView, type ProviderSettingsView, type ConnectProviderInput } from './providers.js';
+export { PROVIDER_SETTINGS_ROUTE } from './providers.js';
+export { isProviderCheck, isProviderSettingsView, isConnectProviderResult, type ConnectProviderResult } from './providers.js';

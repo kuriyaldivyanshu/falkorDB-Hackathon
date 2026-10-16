@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 
 import { ThreadlineError } from '@threadline/shared';
 
-import type { SqlDatabase, TxClient } from './pg.js';
+import { projectAdmissionLockKey, type SqlDatabase, type TxClient } from './pg.js';
 
 /**
  * Durable human-command admission in SQL.
@@ -59,7 +59,18 @@ export async function recordAdmissionIntent(
   params: RecordIntentParams,
 ): Promise<RecordIntentResult> {
   return db.withTenantTransaction(params.tenantId, async (client) => {
-    await client.rows('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [params.tenantId + ':' + params.projectId + ':' + params.requestId]);
+    // Two locks, in a fixed order, so this can never deadlock the worker path:
+    // the request key keeps idempotent retries of *this* command serialized,
+    // and the shared project key serializes human admission against a worker
+    // release. `withProjectAdmissionLock` takes only the latter, so ordering
+    // project-first here would also be safe; request-first is chosen because
+    // the request key is strictly narrower.
+    await client.rows('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [
+      params.tenantId + ':' + params.projectId + ':' + params.requestId,
+    ]);
+    await client.rows('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [
+      projectAdmissionLockKey(params.tenantId, params.projectId),
+    ]);
     const existing = await loadInboxRow(client, params.tenantId, params.projectId, params.requestId);
     if (existing !== null) {
       return { kind: 'existing', inbox: existing };

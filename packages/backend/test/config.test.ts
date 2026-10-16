@@ -162,8 +162,17 @@ test('describeConfig exposes an allowlist that cannot grow into a credential lea
   ];
   for (const key of everyKey) {
     // `passwordConfigured` is a boolean about a credential, not a credential.
-    if (key.endsWith('Configured')) {
-      assert.equal(typeof (summary.storage.postgres as Record<string, unknown>)[key], 'boolean');
+    if (key.endsWith('Configured') || key.endsWith('Present')) {
+      const owner = [
+        summary,
+        summary.storage,
+        summary.storage.postgres,
+        summary.storage.falkordb,
+        summary.storage.local,
+      ] as unknown as Record<string, unknown>[];
+      const holder = owner.find((candidate) => key in candidate);
+      assert.ok(holder, `${key} must be present in the summary allowlist`);
+      assert.equal(typeof holder[key], 'boolean', `${key} must be a boolean, never a value`);
       continue;
     }
     assert.doesNotMatch(key, /(secret|token|password|authorization|credential|key)/i);
@@ -183,6 +192,7 @@ test('describeConfig exposes an allowlist that cannot grow into a credential lea
   );
   assert.equal(withSecret.storage.postgres.passwordConfigured, true);
   assert.equal(withSecret.storage.falkordb.passwordConfigured, true);
+  assert.equal(withSecret.storage.providerCredentialConfigured, false);
   assert.ok(!JSON.stringify(withSecret).includes('super-secret-local-value'));
   assert.ok(!JSON.stringify(withSecret).includes('graph-secret'));
 });
@@ -196,3 +206,22 @@ function catchConfigurationError(env: Record<string, string>): ConfigurationErro
   }
   throw new Error('expected parseBackendConfig to reject this configuration');
 }
+test('provider selection reads only the selected provider key', () => {
+  const config = parseBackendConfig({ env: { THREADLINE_PROVIDER: 'opencode-go',
+    MODEL_OPENCODE_API_KEY: 'synthetic-go-key', THREADLINE_OPENAI_API_KEY: 'other-account-key', THREADLINE_PROVIDER_MODEL: 'space-bunny' } });
+  assert.equal(config.storage.providerId, 'opencode-go');
+  assert.equal(config.storage.providerApi, 'chat-completions');
+  assert.equal(config.storage.providerApiKey, 'synthetic-go-key');
+  assert.equal(config.storage.providerBaseUrl, 'https://opencode.ai/inference/go/openai/v1');
+  assert.ok(!JSON.stringify(describeConfig(config)).includes('synthetic-go-key'));
+  assert.equal(parseBackendConfig({ env: { THREADLINE_PROVIDER: 'opencode-go', THREADLINE_OPENAI_API_KEY: 'wrong-provider' } }).storage.providerApiKey, '');
+});
+
+test('custom provider requires a safe explicit endpoint and supports explicit Responses protocol', () => {
+  assert.throws(() => parseBackendConfig({ env: { THREADLINE_PROVIDER: 'openai-compatible' } }), ConfigurationError);
+  const custom = parseBackendConfig({ env: { THREADLINE_PROVIDER: 'openai-compatible', THREADLINE_PROVIDER_API: 'responses',
+    THREADLINE_PROVIDER_BASE_URL: 'http://127.0.0.1:8080/v1', THREADLINE_PROVIDER_API_KEY: 'synthetic-custom-key' } });
+  assert.equal(custom.storage.providerApi, 'responses');
+  assert.equal(custom.storage.providerApiKey, 'synthetic-custom-key');
+  assert.throws(() => parseBackendConfig({ env: { THREADLINE_PROVIDER: 'unknown' } }), ConfigurationError);
+});

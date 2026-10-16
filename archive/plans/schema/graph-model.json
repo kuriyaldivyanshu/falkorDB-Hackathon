@@ -915,6 +915,11 @@
           "output_owner_session_id",
           "string?",
           "Required for session-private derived output"
+        ],
+        [
+          "lease_expires_ms",
+          "integer",
+          "M02 operational lease; heartbeat preserves immutable TaskState revision and fence"
         ]
       ]
     },

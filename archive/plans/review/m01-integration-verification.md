@@ -61,3 +61,5 @@ There is no automatic recovery/reissue for a lost or expired owner credential, a
 The code/checklists are prepared for the combined M01 branch/commit/PR workflow. No branch, staging, commit, push or merge was performed during this verification turn.
 
 Temporary verification services were stopped after the final run; their data/volumes were retained. The pre-existing development services and Agent A containers were left untouched. The backend started for the local setup smoke test was shut down cleanly.
+
+**Subsequent merge:** the user merged PR #2; local `main` was fast-forwarded to `067f842`. M01J05 is now complete. The statements above describe the earlier verification snapshot, including its then-pending Git workflow.

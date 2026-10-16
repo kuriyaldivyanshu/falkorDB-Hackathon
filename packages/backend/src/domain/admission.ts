@@ -144,7 +144,7 @@ export async function readCurrentAuthority(deps: AdmissionDeps, principal: Authe
   const base=await graph.roQuery<{goal_version_id:string;goal_revision:number;goal_text:string;state_id:string;task_revision:number;task_status:string;source_id:string;source_message_id:string;availability:string;source_digest:string}>(
     READ_AUTHORITY_CYPHER,{params:{project_id:projectId,graph_epoch:project.graphEpoch,goal_id:a.goalId,task_id:a.taskId,event_seq:accepted.eventSeq}});
   const row=base.data?.[0];
-  if (base.data?.length!==1 || row===undefined || row.goal_version_id!==a.goalVersionId || row.state_id!==a.taskStateId || row.availability!=='available' || row.goal_revision!==a.goalRevision || row.task_revision!==a.taskRevision || row.task_status!==a.taskStatus || row.source_message_id!==accepted.sourceMessageId)
+  if (base.data?.length!==1 || row===undefined || row.goal_version_id!==a.goalVersionId || row.availability!=='available' || row.goal_revision!==a.goalRevision || row.task_revision<a.taskRevision || row.source_message_id!==accepted.sourceMessageId)
     throw new ThreadlineError('authority_unavailable','Current goal/task/source topology is missing, duplicated or changed during read.');
   const source=await requireSource(deps,principal,project,row.source_message_id);
   if (row.source_digest!==source.body_digest || row.goal_text!==source.body) throw new ThreadlineError('authority_unavailable','Current goal provenance does not match its original source.');
@@ -163,7 +163,7 @@ export async function readCurrentAuthority(deps: AdmissionDeps, principal: Authe
       throw new ThreadlineError('authority_unavailable','A required criterion is missing or inconsistent.');
   }
   return {...a,goalText:row.goal_text,projectSlug:project.slug,graphKey:project.graphKey,
-    sourceMessageIds:[row.source_message_id],taskRevision:row.task_revision,taskStatus:row.task_status};
+    taskStateId:row.state_id,sourceMessageIds:[row.source_message_id],taskRevision:row.task_revision,taskStatus:row.task_status};
 }
 
 export async function reconcilePendingAdmissions(deps: AdmissionDeps, tenantId: string, projectId: string, _now: Date): Promise<{resolved:number;unresolved:number;quarantined:number}> {
