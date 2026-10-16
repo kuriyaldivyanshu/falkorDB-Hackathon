@@ -71,8 +71,9 @@ export function createManagedRuntime(deps: {
     async prepare(principal: AuthenticatedPrincipal, projectId: string, contextWindowTokens: number): Promise<StartRunInput> {
       configured();
       if (closed) throw new ThreadlineError('service_unavailable', 'The runtime is closing.');
-      if (!Number.isSafeInteger(contextWindowTokens) || contextWindowTokens < 1501 || contextWindowTokens > 10_000_000)
-        throw new ThreadlineError('invalid_request', 'Declare an effective context window between 1501 and 10000000 tokens.');
+      const minimum = execution().limits.maxOutputTokens + 1;
+      if (!Number.isSafeInteger(contextWindowTokens) || contextWindowTokens < minimum || contextWindowTokens > 10_000_000)
+        throw new ThreadlineError('invalid_request', `Declare an effective context window between ${minimum} and 10000000 tokens; actual input must also fit before dispatch.`);
       const authority = await deps.services.authority(principal, projectId);
       const exec = execution();
       const key = randomUUID();

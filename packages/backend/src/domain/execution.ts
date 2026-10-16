@@ -348,11 +348,16 @@ export function createExecutionService(deps: ExecutionDeps) {
            WHERE r.operation='task.claim' RETURN r.request_digest AS request_digest,r.result_json AS result_json`,
           { params: { graph_epoch: scope.graphEpoch, request_id: request.requestId } });
         const receipt = receipts.data?.[0];
-        if (!receipt) return { kind: 'accepted', runId: existing.runId, sessionId: existing.sessionId,
-          pendingReason: 'The graph claim has no resolved receipt; automatic dispatch is disabled.' };
+        if (!receipt) {
+          if (existing.claimRefused) throw new ThreadlineError('authority_conflict', 'This run request was definitively refused. Prepare a new request against current authority.',
+            { reason: 'claim_refused', runId: existing.runId, sessionId: existing.sessionId, correlationId });
+          return { kind: 'accepted', runId: existing.runId, sessionId: existing.sessionId,
+            pendingReason: 'The graph claim has no resolved receipt; automatic dispatch is disabled.' };
+        }
         const result = JSON.parse(receipt.result_json) as { sessionId?: unknown; taskId?: unknown };
         if (receipt.request_digest !== authorizationDigest || result.sessionId !== existing.sessionId || result.taskId !== request.taskId)
           throw new ThreadlineError('authority_conflict', 'The graph claim receipt does not match the stored admission.');
+        await markRunActive(deps.db, scope.tenantId, scope.projectId, existing.runId);
         return { kind: 'replayed', run: (await service.inspect(principal, existing.runId)).run };
       }
 
@@ -408,7 +413,14 @@ export function createExecutionService(deps: ExecutionDeps) {
       const row = claimed.data?.[0];
       if (row === undefined) {
         // The guard refused: stale epoch/revision, already claimed, or a receipt
-        // exists. SQL identities remain for inspection; nothing is accepted.
+        // exists. This returned statement made no claim for these SQL identities.
+        // A thrown graph error remains ambiguous and never enters this cleanup.
+        await deps.db.withTenantTransaction(scope.tenantId, async tx => {
+          await tx.rows(`UPDATE threadline.agent_sessions SET runtime_status='stopped',ended_at=$1
+            WHERE tenant_id=$2 AND project_id=$3 AND id=$4 AND ended_at IS NULL`, [clock(),scope.tenantId,scope.projectId,sessionId]);
+          await tx.rows(`UPDATE threadline.runs SET observed_status='cancelled',finished_at=$1
+            WHERE tenant_id=$2 AND project_id=$3 AND id=$4 AND finished_at IS NULL`, [clock(),scope.tenantId,scope.projectId,runId]);
+        });
         deps.activity?.({
           kind: 'run_state',
           runId,
@@ -418,10 +430,11 @@ export function createExecutionService(deps: ExecutionDeps) {
         throw new ThreadlineError(
           'authority_conflict',
           'The task claim was refused: epoch, revision, owner or lease does not match.',
-          { correlationId },
+          { correlationId, runId, sessionId, reason: 'claim_refused' },
         );
       }
 
+      await markRunActive(deps.db, scope.tenantId, scope.projectId, runId);
       const claim: ClaimState = {
         fence: row.fence,
         revision: row.revision,
@@ -459,6 +472,7 @@ export function createExecutionService(deps: ExecutionDeps) {
       runId: string,
     ): Promise<{ leaseExpiresAt: string; fence: number }> {
       const located = await locateSession(deps.db, deps.graphs, principal.tenantId, runId);
+      await requireRunControl(deps.db, principal, located);
       const updated = await service.turnGuard({ tenantId: principal.tenantId, projectId: located.projectId,
         runId, sessionId: located.sessionId, taskId: located.taskGraphId, profileId: located.profileId,
         workspaceId: located.workspaceId, graphEpoch: located.graphEpoch, model: located.modelId, correlationId: randomUUID() },
@@ -474,7 +488,7 @@ export function createExecutionService(deps: ExecutionDeps) {
       reason: string,
     ): Promise<CancelRunOutcome> {
       const located = await locateSession(deps.db, deps.graphs, principal.tenantId, runId);
-      await requireProjectMembership(deps.db, principal.tenantId, located.projectId, principal.userId);
+      await requireRunControl(deps.db, principal, located);
       await deps.db.withTenantTransaction(principal.tenantId, async (tx) => {
         await tx.rows(
           `UPDATE threadline.agent_sessions SET runtime_status = 'stopping', ended_at = $1
@@ -527,6 +541,7 @@ export function createExecutionService(deps: ExecutionDeps) {
     async inspect(principal: AuthenticatedPrincipal, runId: string): Promise<RunInspectView> {
       const located = await locateSession(deps.db, deps.graphs, principal.tenantId, runId);
       await requireProjectMembership(deps.db, principal.tenantId, located.projectId, principal.userId);
+      const unresolvedAttempts = await deps.journal.countUnresolved(principal.tenantId, located.projectId, located.sessionId);
       const budgetView: RunBudgetView = {
         maxAttempts: limits.maxAttempts,
         attemptsUsed: await deps.journal.countAttempts(
@@ -552,8 +567,7 @@ export function createExecutionService(deps: ExecutionDeps) {
           located.sessionId,
         ),
         deadlineAt: new Date(located.createdAt.getTime() + limits.deadlineMs).toISOString(),
-        blockedOnReconciliation:
-          (await deps.journal.countUnresolved(principal.tenantId, located.projectId, located.sessionId)) > 0,
+        blockedOnReconciliation: unresolvedAttempts > 0,
       };
       return {
         run: {
@@ -598,7 +612,7 @@ export function createExecutionService(deps: ExecutionDeps) {
             finishedAt: attempt.finishedAt === null ? null : attempt.finishedAt.toISOString(),
           }),
         ),
-        unresolvedAttempts: budgetView.blockedOnReconciliation ? 1 : 0,
+        unresolvedAttempts,
       };
     },
 
@@ -704,16 +718,29 @@ function claimParams(input: ClaimParamInput): Record<string, string | number> {
   };
 }
 
+async function markRunActive(db: SqlDatabase, tenantId: string, projectId: string, runId: string): Promise<void> {
+  await db.withTenantTransaction(tenantId, tx => tx.rows(`UPDATE threadline.runs SET observed_status='active'
+    WHERE tenant_id=$1 AND project_id=$2 AND id=$3 AND observed_status='admitted' AND finished_at IS NULL`, [tenantId,projectId,runId]));
+}
+
+async function requireRunControl(db: SqlDatabase, principal: AuthenticatedPrincipal, run: LocatedSession): Promise<void> {
+  await requireProjectMembership(db, principal.tenantId, run.projectId, principal.userId);
+  if (run.initiatedBy !== principal.userId)
+    throw new ThreadlineError('unauthorized', 'Only the run initiator may renew or cancel this run.', { reason: 'run_initiator_required' });
+}
+
 async function findExistingRun(
   db: SqlDatabase,
   tenantId: string,
   projectId: string,
   requestId: string,
-): Promise<{ runId: string; sessionId: string; authorizationDigest: string } | null> {
+): Promise<{ runId: string; sessionId: string; authorizationDigest: string; claimRefused: boolean } | null> {
   const rows = await db.withTenantTransaction(tenantId, (tx) =>
-    tx.rows<{ run_id: string; session_id: string; authorization_digest: string }>(
-      `SELECT s.run_id, s.id AS session_id, s.authorization_digest
+    tx.rows<{ run_id: string; session_id: string; authorization_digest: string; claim_refused: boolean }>(
+      `SELECT s.run_id, s.id AS session_id, s.authorization_digest,
+          (r.observed_status='cancelled' AND r.finished_at IS NOT NULL AND s.runtime_status='stopped') AS claim_refused
          FROM threadline.agent_sessions s
+         JOIN threadline.runs r ON r.tenant_id=s.tenant_id AND r.id=s.run_id
         WHERE s.tenant_id = $1 AND s.project_id = $2
           AND s.authorization_manifest->>'requestId' = $3
         LIMIT 1`,
@@ -721,7 +748,7 @@ async function findExistingRun(
     ),
   );
   const row = rows[0];
-  return row === undefined ? null : { runId: row.run_id, sessionId: row.session_id, authorizationDigest: row.authorization_digest };
+  return row === undefined ? null : { runId: row.run_id, sessionId: row.session_id, authorizationDigest: row.authorization_digest, claimRefused: row.claim_refused };
 }
 
 async function assertOneLiveRun(db: SqlDatabase, tenantId: string, projectId: string): Promise<void> {
@@ -778,6 +805,7 @@ async function registerCandidateWorkspace(
 }
 
 interface LocatedSession {
+  readonly initiatedBy: string;
   readonly projectId: string;
   readonly sessionId: string;
   readonly taskGraphId: string;
@@ -832,6 +860,7 @@ async function locateSession(
       graph_key: string;
       policy_digest: string;
       profile_config_digest: string;
+      initiated_by: string;
       run_status: 'admitted' | 'active' | 'paused' | 'completed' | 'cancelled';
       session_status: 'reserved' | 'live' | 'stopping' | 'stopped' | 'unknown';
       created_at: Date;
@@ -840,7 +869,7 @@ async function locateSession(
               p.model_id, pj.graph_epoch, pj.graph_key,
               trim(r.policy_digest) AS policy_digest,
               trim(p.config_digest) AS profile_config_digest,
-              r.observed_status AS run_status, s.runtime_status AS session_status, r.created_at
+              r.initiated_by, r.observed_status AS run_status, s.runtime_status AS session_status, r.created_at
          FROM threadline.agent_sessions s
          JOIN threadline.runs r ON r.tenant_id = s.tenant_id AND r.id = s.run_id
          JOIN threadline.provider_profiles p
@@ -867,6 +896,7 @@ async function locateSession(
   if (current.data?.length !== 1 || !claim)
     throw new ThreadlineError('authority_unavailable', 'The run has no unique current task state.');
   return {
+    initiatedBy: row.initiated_by,
     projectId: row.project_id,
     sessionId: row.session_id,
     taskGraphId: row.task_graph_id,

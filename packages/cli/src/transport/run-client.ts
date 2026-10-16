@@ -78,6 +78,10 @@ export function createRunClient(options: RunClientOptions): RunClient {
     } catch (error) {
       throw new BackendProtocolError(url, `the response body was not JSON (status ${response.status})`, response.status, { cause: error });
     }
+    if (response.status >= 400 && isObject(body) && str(body['code']) && str(body['message'])) {
+      const correlation = isObject(body['details']) && str(body['details']['correlationId']) ? ` correlation=${body['details']['correlationId']}` : '';
+      throw new BackendProtocolError(url, `${body['code']}: ${body['message']}${correlation}`, response.status);
+    }
     // The backend registers the run routes only when it has real run
     // configuration, and refuses to serve them otherwise. That refusal arrives
     // as a framework 404 rather than a run view, so it is reported as such
@@ -89,10 +93,6 @@ export function createRunClient(options: RunClientOptions): RunClient {
           'when supported; run operations fail closed without required storage and credentials.',
         response.status,
       );
-    }
-    if (response.status >= 400 && isObject(body) && str(body['code']) && str(body['message'])) {
-      const correlation = isObject(body['details']) && str(body['details']['correlationId']) ? ` correlation=${body['details']['correlationId']}` : '';
-      throw new BackendProtocolError(url, `${body['code']}: ${body['message']}${correlation}`, response.status);
     }
     return { url, status: response.status, body };
   };

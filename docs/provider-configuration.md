@@ -40,7 +40,7 @@ THREADLINE_PROVIDER_API_KEY=<your-private-key>
 THREADLINE_PROVIDER_MODEL=<that-provider-model-id>
 ```
 
-`THREADLINE_PROVIDER_API` accepts `responses` or `chat-completions`. Custom endpoints require an explicit HTTPS URL; HTTP is restricted to loopback. URL user information, query credentials and fragments are rejected. Only the selected provider's key variable is read into runtime configuration. There is no automatic switch of provider, key, model or billing route after a refusal or unknown send.
+`THREADLINE_PROVIDER_API` accepts `responses`, `chat-completions` or `anthropic-messages`. Custom endpoints require an explicit HTTPS URL; HTTP is restricted to loopback. URL user information, query credentials and fragments are rejected. Only the selected provider's key variable is read into runtime configuration. There is no automatic switch of provider, key, model or billing route after a refusal or unknown send.
 
 The provider/protocol/base URL are bound into prepared profile settings and checked at admission. Changing them requires a new matching profile. The private key stays in the coordinator; metadata summaries expose only whether it is configured. API keys do not enter SQL, artifacts, tools or CLI command arguments. Interactive setup briefly holds masked input and sends it to the local backend; only the backend persists it.
 

@@ -833,3 +833,11 @@ test('owner-only provider onboarding validates before save and refuses stale pre
     assert.equal(probes, 3);
   } finally { await backend.stop(); }
 });
+
+test('review: prepare refuses a context window smaller than the configured output ceiling', options, async t => {
+  const backend = createBackend({ config: liveConfig() }); t.after(() => backend.stop());
+  const address = await backend.start(), { projectId } = await acceptedGoal(backend);
+  const token = JSON.parse(await readFile(backend.localBootstrap!.sessionTokenPath, 'utf8')).token;
+  const response = await fetch(address.url + '/runs/prepare', { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify({ projectId, contextWindowTokens: backend.services.execution()!.limits.maxOutputTokens }) });
+  assert.equal(response.status, 400);
+});

@@ -184,3 +184,7 @@ test('no run command performs inference against the real backend', async () => {
     await backend.stop();
   }
 });
+test('an unknown run preserves its typed not_found error and correlation id', async () => {
+  const missing = runClient(async () => new Response(JSON.stringify({ code: 'not_found', message: 'No run exists for that id.', details: { correlationId: 'missing-run-correlation' } }), { status: 404 }));
+  await assert.rejects(missing.inspectRun('unknown-run'), /not_found: No run exists.*missing-run-correlation/);
+});

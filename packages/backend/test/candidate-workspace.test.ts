@@ -208,3 +208,21 @@ test('an empty run identity is refused', async () => {
     (error) => error instanceof Error && /run identity is required/.test(String(error)),
   );
 });
+
+test('a seed directory swapped for a symlink after listing is refused before recursion', async t => {
+  const fs = (await import('node:fs/promises')).default;
+  const { syncBuiltinESMExports } = await import('node:module');
+  const root = await tempDir(), seed = join(root, 'seed'), outside = join(root, 'outside');
+  await mkdir(join(seed, 'src'), { recursive: true }); await mkdir(outside);
+  await writeFile(join(outside, 'private.mjs'), 'outside seed');
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const original = fs.readdir;
+  const mock = t.mock.method(fs, 'readdir', async (...args: Parameters<typeof fs.readdir>) => {
+    const entries = await Reflect.apply(original, fs, args);
+    if (String(args[0]) === seed) { await fs.rm(join(seed, 'src'), { recursive: true }); await symlink(outside, join(seed, 'src')); }
+    return entries;
+  });
+  syncBuiltinESMExports();
+  try { await assert.rejects(digestSeedTree(seed), /seed changed/); }
+  finally { mock.mock.restore(); syncBuiltinESMExports(); }
+});

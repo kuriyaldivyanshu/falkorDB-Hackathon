@@ -96,6 +96,9 @@ export async function digestSeedTree(seedRoot: string): Promise<{ digest: string
         throw new CandidatePreparationError('seed_invalid', `The seed contains a symlink at ${path}.`);
       }
       if (entry.isDirectory()) {
+        const current = await lstat(absolute);
+        if (current.isSymbolicLink() || !current.isDirectory())
+          throw new CandidatePreparationError('seed_invalid', `The seed changed at ${path}.`);
         await walk(absolute);
         continue;
       }
@@ -103,6 +106,8 @@ export async function digestSeedTree(seedRoot: string): Promise<{ digest: string
         throw new CandidatePreparationError('seed_invalid', `The seed contains a non-regular entry at ${path}.`);
       }
       const stats = await lstat(absolute);
+      if (stats.isSymbolicLink() || !stats.isFile())
+        throw new CandidatePreparationError('seed_invalid', `The seed changed at ${path}.`);
       fileCount += 1;
       totalBytes += stats.size;
       if (fileCount > CANDIDATE_LIMITS.maxFiles || totalBytes > CANDIDATE_LIMITS.maxBytes) {

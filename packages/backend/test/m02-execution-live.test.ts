@@ -1087,3 +1087,62 @@ test('live: human command admission and worker release serialize on one project 
 
   await backend.stop();
 });
+
+test('review: a definite claim refusal closes SQL identities and its retry stays refused', options, async t => {
+  const backend = await admittedBackend(nextTenantSlug()); t.after(() => backend.stop());
+  const seeded = await seedExecution(backend, { probeStatus: 'configured', authRoute: 'api_key' });
+  const execution = backend.services.execution()!;
+  const authority = await authorityOf(backend, seeded.projectId);
+  const request = startInput(seeded.projectId, authority.taskId, seeded.profile.id, seeded.host.hostId);
+  const refused = { ...request, expectedRevision: 999 };
+  const first = await captureFailure(() => execution.start({ apiKey: 'test-key' }, seeded.principal, refused, randomUUID()));
+  assert.equal(first.code, 'authority_conflict');
+  assert.deepEqual(await execution.listActiveRuns(seeded.principal.tenantId, seeded.projectId), []);
+  const retry = await captureFailure(() => execution.start({ apiKey: 'test-key' }, seeded.principal, refused, randomUUID()));
+  assert.equal(retry.code, 'authority_conflict'); assert.equal(reasonOf(retry), 'claim_refused');
+  const next = await execution.start({ apiKey: 'test-key' }, seeded.principal, { ...request, requestId: randomUUID() }, randomUUID());
+  assert.equal(next.kind, 'admitted');
+});
+
+test('review: only the initiating project member can heartbeat or cancel a run', options, async t => {
+  const slug = nextTenantSlug(), stores = await openStores(slug), backend = await admittedBackend(slug, stores); t.after(() => backend.stop());
+  const seeded = await seedExecution(backend, { probeStatus: 'configured', authRoute: 'api_key', stores });
+  const authority = await authorityOf(backend, seeded.projectId), execution = backend.services.execution()!;
+  const started = await execution.start({ apiKey: 'test-key' }, seeded.principal, startInput(seeded.projectId, authority.taskId, seeded.profile.id, seeded.host.hostId), randomUUID());
+  assert.equal(started.kind, 'admitted'); if (started.kind !== 'admitted') return;
+  const other = randomUUID(), session = randomUUID(), token = randomUUID() + randomUUID();
+  await stores.db.query("INSERT INTO threadline.users(id,display_name,status) VALUES($1,'review-other-member','active')", [other]);
+  await stores.db.withTenantTransaction(seeded.principal.tenantId, async tx => {
+    await tx.rows("INSERT INTO threadline.tenant_memberships(tenant_id,id,user_id,role,status) VALUES($1,$2,$3,'member','active')", [seeded.principal.tenantId,randomUUID(),other]);
+    await tx.rows(`INSERT INTO threadline.user_sessions(tenant_id,id,user_id,token_hash,auth_method,last_seen_at,expires_at,idle_expires_at,client_label)
+      VALUES($1,$2,$3,$4,'local_bootstrap',now(),now()+interval '1 hour',now()+interval '30 minutes','review')`, [seeded.principal.tenantId,session,other,createHash('sha256').update(token).digest('hex')]);
+  });
+  const headers = { authorization: `Bearer ${token}`, 'content-type': 'application/json' };
+  const heartbeat = () => fetch(`${backend.address!.url}/runs/${started.run.runId}/heartbeat`, { method: 'POST', headers, body: '{}' });
+  assert.equal((await heartbeat()).status, 401, 'a tenant user without project access cannot renew the lease');
+  await stores.db.withTenantTransaction(seeded.principal.tenantId, tx => tx.rows("INSERT INTO threadline.project_memberships(tenant_id,project_id,id,user_id,role,status) VALUES($1,$2,$3,$4,'editor','active')", [seeded.principal.tenantId,seeded.projectId,randomUUID(),other]));
+  assert.equal((await heartbeat()).status, 401, 'project membership does not grant control of another user’s run');
+  const cancelled = await fetch(`${backend.address!.url}/runs/cancel`, { method: 'POST', headers, body: JSON.stringify({ runId: started.run.runId, reason: 'unauthorized cancellation' }) });
+  assert.equal(cancelled.status, 401);
+  const owner = await execution.inspect(seeded.principal, started.run.runId);
+  assert.equal(owner.run.sessionState, 'live'); assert.equal(owner.run.claim.leaseExpiresAt, started.run.claim.leaseExpiresAt);
+  await execution.heartbeat(seeded.principal, started.run.runId);
+  assert.equal((await execution.cancel(seeded.principal, started.run.runId, 'owner cancellation')).acknowledged, true);
+});
+
+test('review: inspection persists active state and reports the exact unresolved count', options, async t => {
+  const slug = nextTenantSlug(), stores = await openStores(slug), backend = await admittedBackend(slug, stores); t.after(() => backend.stop());
+  const seeded = await seedExecution(backend, { probeStatus: 'configured', authRoute: 'api_key', stores });
+  const authority = await authorityOf(backend, seeded.projectId), execution = backend.services.execution()!;
+  const started = await execution.start({ apiKey: 'test-key' }, seeded.principal, startInput(seeded.projectId, authority.taskId, seeded.profile.id, seeded.host.hostId), randomUUID());
+  assert.equal(started.kind, 'admitted'); if (started.kind !== 'admitted') return;
+  assert.equal((await execution.inspect(seeded.principal, started.run.runId)).run.state, 'active');
+  const guard = await guardFor(execution, backend, seeded, authority, started.run), identity = await guard.beginTurn();
+  await guard.authorizeAndJournal(preparedAttempt(identity, 'fixture-model-m02', { inputItems: 1, digestSeed: 'review-count' }));
+  await stores.db.withTenantTransaction(seeded.principal.tenantId, tx => tx.rows(`INSERT INTO threadline.model_requests
+    (tenant_id,project_id,id,agent_session_id,logical_request_id,attempt_no,profile_id,input_artifact_id,input_digest,profile_digest,graph_epoch,requirement_revision,reservation_graph_id,status,created_at,reserved_tokens,possible_charge)
+    SELECT tenant_id,project_id,$3,agent_session_id,$4,1,profile_id,input_artifact_id,input_digest,profile_digest,graph_epoch,requirement_revision,$5,'prepared',now(),reserved_tokens,false
+    FROM threadline.model_requests WHERE tenant_id=$1 AND id=$2`, [seeded.principal.tenantId,identity.attemptId,randomUUID(),randomUUID(),randomUUID()]));
+  const inspected = await execution.inspect(seeded.principal, started.run.runId);
+  assert.equal(inspected.unresolvedAttempts, 2); assert.equal(inspected.run.budget.blockedOnReconciliation, true);
+});
