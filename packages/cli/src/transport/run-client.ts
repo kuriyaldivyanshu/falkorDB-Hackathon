@@ -34,7 +34,7 @@ export interface RunClientOptions {
 export interface RunClient {
   readonly baseUrl: string;
   readonly authenticated: boolean;
-  prepareRun(projectId: string, contextWindowTokens: number): Promise<StartRunInput>;
+  prepareRun(projectId: string, contextWindowTokens: number, profileId?: string): Promise<StartRunInput>;
   startRun(input: StartRunInput, signal?: AbortSignal): Promise<RunStartOutcome>;
   inspectRun(runId: string, signal?: AbortSignal): Promise<RunInspectView>;
   cancelRun(runId: string, reason: string, signal?: AbortSignal): Promise<CancelRunOutcome>;
@@ -101,9 +101,9 @@ export function createRunClient(options: RunClientOptions): RunClient {
     baseUrl,
     authenticated: options.token !== null && options.token.length > 0,
 
-    async prepareRun(projectId, contextWindowTokens) {
+    async prepareRun(projectId, contextWindowTokens,profileId) {
       const { url, status, body } = await call(BACKEND_ROUTES.runPrepare,
-        { method: 'POST', body: { projectId, contextWindowTokens } }, undefined);
+        { method: 'POST', body: { projectId, contextWindowTokens,profileId } }, undefined);
       if (status !== 200 || !isObject(body) || !str(body['projectId']) || !str(body['requestId']) ||
           !str(body['taskId']) || !str(body['profileId']) || !str(body['workspaceId']) ||
           !num(body['expectedRevision']) || !num(body['expectedRequirementRevision']))

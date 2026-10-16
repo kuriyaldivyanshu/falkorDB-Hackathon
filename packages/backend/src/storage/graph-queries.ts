@@ -79,7 +79,8 @@ OPTIONAL MATCH (c)-[:CURRENT_VERSION]->(v:ConstraintVersion)
 OPTIONAL MATCH (v)-[:SOURCED_FROM]->(src:Source)
 RETURN c.id AS constraint_id,c.current_revision AS current_revision,
  v.id AS version_id,v.revision AS revision,v.field AS field,v.value AS value,
- src.id AS source_id,v.source_id AS declared_source_id`;
+ src.id AS source_id,v.source_id AS declared_source_id,
+ src.source_sql_id AS source_message_id,src.content_digest AS source_digest`;
 export const READ_CRITERIA_CYPHER = String.raw`
 MATCH (t:Task {id:$task_id})-[:REQUIRES]->(k:Criterion)
 RETURN k.id AS criterion_id,k.ref AS ref,k.text AS text,k.required AS required`;

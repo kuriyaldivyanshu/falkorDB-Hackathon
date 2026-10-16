@@ -2,7 +2,7 @@
 
 **Controlling MVP draft — 15 October 2026. Two full-time contributors; deadline unknown. All behavior below is proposed until its acceptance gate passes.** This document supersedes broader release commitments in the architecture references. Historical investigations remain evidence, not a backlog to implement.
 
-**Implementation status — 17 October 2026:** M00–M03 are merged; [M04 checkpoints and tactical state](review/m04-integration-verification.md) are locally integrated and verified. The [master checklist](track2-implementation-checklist.md) and dated evidence govern implemented behavior; M05 onward, including the new human command gates, remain proposed.
+**Implementation status — 17 October 2026:** M00–M04 are merged; [M05 bounded context and terminal controls](review/m05-integration-verification.md) are locally integrated and verified, uncommitted. The [master checklist](track2-implementation-checklist.md) and dated evidence govern implemented behavior; M06 onward remain proposed.
 
 ## 1. Product promise and release boundary
 

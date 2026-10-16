@@ -1,20 +1,20 @@
 import { useEffect, useRef, useState } from 'react';
 import { Box, Text, useInput } from 'ink';
 import TextInput from 'ink-text-input';
-import type { ProviderSettingsView, SavedProviderView } from '@threadline/shared';
+import type { ProviderSettingsView, SavedProviderView, SetupProvider } from '@threadline/shared';
 import type { ProviderClient } from '../transport/provider-client.js';
 
 type Step = 'choose' | 'action' | 'model' | 'key' | 'confirm' | 'check' | 'remove' | 'busy' | 'done';
-export function ProviderSetup({ client, onClose }: { client: ProviderClient; onClose: () => void }) {
+export function ProviderSetup({ client, onClose,initialProvider }: { client: ProviderClient; onClose: () => void;initialProvider?:SetupProvider }) {
   const [view, setView] = useState<ProviderSettingsView | null>(null);
   const [selected, setSelected] = useState<SavedProviderView | null>(null);
   const [step, setStep] = useState<Step>('choose');
   const [input, setInput] = useState(''), [model, setModel] = useState(''), [message, setMessage] = useState('');
   const privateKey = useRef(''), alive = useRef(true);
-  useEffect(() => { alive.current = true; void client.list().then(setView).catch(() => setMessage('Provider settings are unavailable. Check your owner session and backend.'));
-    return () => { alive.current = false; privateKey.current = ''; }; }, [client]);
+  useEffect(() => { alive.current = true; void client.list().then(value=>{setView(value);const choice=value.providers.find(p=>p.id===initialProvider);if(choice){setSelected(choice);setStep(choice.saved?'action':'model');}}).catch(() => setMessage('Provider settings are unavailable. Check your owner session and backend.'));
+    return () => { alive.current = false; privateKey.current = ''; }; }, [client,initialProvider]);
   function close() { privateKey.current = ''; setInput(''); onClose(); }
-  useInput((_input, key) => { if (key.escape && step !== 'busy') close(); });
+  useInput((_input, key) => { if ((key.escape || key.ctrl&&_input==='c') && step !== 'busy') close(); });
   async function perform(operation: () => Promise<void>) {
     setStep('busy'); setMessage(''); setInput('');
     try { await operation(); if (alive.current) setStep('done'); }

@@ -1,4 +1,5 @@
-import { MODEL_TOOL_OUTPUT_MAX_BYTES } from '@threadline/shared';
+import type { createRuntimeContext } from '../context/runtime.js';
+import { MODEL_TOOL_OUTPUT_MAX_BYTES, ThreadlineError } from '@threadline/shared';
 import type { ProviderCapture } from '../capture/provider-capture.js';
 import type { PreparedAttempt } from '../provider/lifecycle.js';
 import { createHash } from 'node:crypto';
@@ -78,6 +79,8 @@ export interface SourceToolInvoker {
 
 export interface RuntimeLoopDeps {
   readonly driver: ResponsesDriver;
+  readonly context?: ReturnType<typeof createRuntimeContext>;
+  readonly admissionBarrier?: (work:()=>Promise<void>)=>Promise<void>;
   readonly capture?: ProviderCapture;
   readonly onJournalled?: (prepared: PreparedAttempt, ids: { modelRequestId: string; inputArtifactId: string }) => void;
   readonly onSettled?: (prepared: PreparedAttempt, responseArtifactId: string | null) => void;
@@ -223,6 +226,7 @@ export function createRuntimeLoop(deps: RuntimeLoopDeps): RuntimeLoop {
       const correlationId: CorrelationId = context.correlationId;
 
       let attempts = 0;
+      let renderRetries = 0;
       let toolCalls = 0;
       let releasedToolCalls = 0;
       let visibleText = '';
@@ -299,6 +303,11 @@ export function createRuntimeLoop(deps: RuntimeLoopDeps): RuntimeLoop {
             return outcome('failed', `begin_turn_failed: ${describe(error)}`);
           }
           attempts += 1;
+          try { if (deps.context) history=[...await deps.context.reconstruct(history)]; }
+          catch(error){
+            if(error instanceof ThreadlineError&&error.details?.['reason']==='context_refresh_required'&&renderRetries<3){renderRetries++;attempts--;continue;}
+            return outcome('blocked', `context_refused: ${describe(error)}`);
+          }
 
           let turn;
           let preparedTurn: PreparedAttempt | undefined;
@@ -311,19 +320,28 @@ export function createRuntimeLoop(deps: RuntimeLoopDeps): RuntimeLoop {
               maxOutputTokens: policy.maxOutputTokens,
               identity,
               authorizeAndJournal: async (prepared) => {
-                const ids = await guard.authorizeAndJournal(prepared);
-                preparedTurn = prepared;
-                if (ids) deps.onJournalled?.(prepared, ids);
-                if (deps.capture) await deps.capture.recordInput(prepared);
+                const work=async()=>{
+                  await deps.context?.admit(prepared);
+                  const ids = await guard.authorizeAndJournal(prepared);
+                  await deps.context?.journaled(prepared);
+                  preparedTurn = prepared;
+                  if (ids) deps.onJournalled?.(prepared, ids);
+                  if (deps.capture) await deps.capture.recordInput(prepared);
+                };
+                if(deps.admissionBarrier)await deps.admissionBarrier(work);else await work();
               },
-              onLifecycle: (event) => guard.observeLifecycle(event),
+              onLifecycle: (event) => { guard.observeLifecycle(event); deps.context?.observe(event); },
               onVisibleText: (text) => {
                 deps.capture?.observeVisibleText(text);
                 sink({ kind: 'visible_text', sessionId: context.sessionId, text });
               },
             });
           } catch (error) {
-            // A guard rejection means nothing was sent; it is not a provider failure.
+            // Only this pre-journal stale-render refusal is retryable. It occurs
+            // before any attempt row or network invocation; ambiguous sends never retry.
+            if(error instanceof ThreadlineError&&error.details?.['reason']==='context_refresh_required'&&!preparedTurn&&renderRetries<3){
+              renderRetries++;attempts--;continue;
+            }
             return outcome('failed', `turn_refused: ${describe(error)}`);
           }
 
@@ -354,6 +372,7 @@ export function createRuntimeLoop(deps: RuntimeLoopDeps): RuntimeLoop {
           let settlement: TerminalSettlement;
           try {
             settlement = await guard.settleAttempt(settled, terminal);
+            await deps.context?.settled(settled);
             if (deps.capture) {
               if (!preparedTurn) throw new Error('Provider did not journal the prepared turn.');
               deps.onSettled?.(preparedTurn, settlement.responseArtifactId ?? null);

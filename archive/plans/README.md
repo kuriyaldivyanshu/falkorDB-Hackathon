@@ -1,6 +1,6 @@
 # Threadline architecture plan
 
-**Updated 16 October 2026. M00–M03 are merged; M04 checkpoints and tactical state are locally integrated and verified. M05 onward remain proposed.** This directory consolidates the Track 2 plan and the user's subsequent request for an owned harness. It supersedes native-wrapper-first scope in the historical notes while retaining local npm/TUI delivery.
+**Updated 17 October 2026. M00–M04 are merged; M05 bounded context and terminal controls are locally integrated and verified, uncommitted. M06 onward remain proposed.** This directory consolidates the Track 2 plan and the user's subsequent request for an owned harness. It supersedes native-wrapper-first scope in the historical notes while retaining local npm/TUI delivery.
 
 **Current MVP: two contributors, one Builder, a fresh successor and a protected deterministic service checker.** Start with [the development blueprint](track2-development-blueprint.md), its fixture/contracts and ordered build gates. Eleven model-visible tools; no summarization API. Native subscription/OAuth adapters and investigator spawning are post-hackathon work.
 
@@ -8,7 +8,7 @@
 
 ## Incremental terminal interface
 
-[Terminal command and UI contract](track2-terminal-command-contract.md) specifies the command catalog, backend dependencies, screen/input behavior and selective Pi reuse. Commands ship with M05–M09 capabilities; M10 consolidates the interface. New gates are unchecked in both lanes and the master checklist.
+[Terminal command and UI contract](track2-terminal-command-contract.md) specifies the command catalog, backend dependencies, screen/input behavior and selective Pi reuse. Commands ship with M05–M09 capabilities; M10 consolidates the interface. M05 gates are checked in both lanes and the master checklist; later gates remain unchecked. See [M05 workflow and evidence](review/m05-integration-verification.md).
 
 ## Interactive reading view
 
@@ -102,3 +102,7 @@ Both agents work on M03 in the same checkout. The integration owner verifies the
 ## M04 working checkpoint flow
 
 [Executed checkpoint integration and commands](review/m04-integration-verification.md) cover the real seven-tool runtime, immutable manifest Sources, per-session coverage, automatic checkpoint policy, receipt recovery and CLI/TUI inspection. Retrieval packets and successor lifecycle remain later milestones.
+
+## M05 bounded memory and terminal controls
+
+[M05 integration evidence](review/m05-integration-verification.md) records task-scoped graph retrieval, immutable packets, exact-wire budget admission, per-attempt occurrences, explicit model selection and the implemented terminal inventory. Real PostgreSQL/FalkorDB and an injected provider were used; no external inference was made. M06 containment and M07 successor continuity are next milestones, not completed capabilities.

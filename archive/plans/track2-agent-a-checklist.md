@@ -1,6 +1,6 @@
 # Threadline Agent A checklist — Memory and Coordinator
 
-**Updated 16 October 2026. M00–M03 are merged; M04 is locally integrated and verified. M05 onward remain proposed.** This is one lane of the [master code-first checklist](track2-implementation-checklist.md), not a separate product or branch. Read master sections 1–4 before editing. Use the same task IDs in your handoff. Master status is authoritative; reconcile this lane view at each milestone.
+**Updated 17 October 2026. M00–M04 are merged; M05 is locally integrated and verified, uncommitted. M06 onward remain proposed.** This is one lane of the [master code-first checklist](track2-implementation-checklist.md), not a separate product or branch. Read master sections 1–4 before editing. Use the same task IDs in your handoff. Master status is authoritative; reconcile this lane view at each milestone.
 
 Work beside [Agent B](track2-agent-b-checklist.md) from the same recorded base and integration checkout. Do not create branches, commit, push, reset or merge during parallel coding. The integration owner creates one combined branch/commit only after both lanes and joint checks are ready.
 
@@ -101,28 +101,22 @@ The redundant original Agent A handoff was removed after integration. Its fake `
 
 ### M05 — Bounded graph retrieval and context construction
 
-**Depends on:** M03 and M04; real model loop M02. **Combined milestone result:** The next request contains exact current authority plus relevant bounded sourced memory, without replaying the old transcript.
+**Verified locally — 17 October 2026.** Combined real-store, injected-provider and PTY checks supersede the earlier partial handoffs. [M05 integration evidence and limitations](review/m05-integration-verification.md). M05 is uncommitted; no paid inference was used.
 
-- [ ] **M05A01** Implement indexed current-task closure from stable goals/constraints/criteria, TaskState, candidate and required Sources; do not rank mandatory authority by similarity.
-- [ ] **M05A02** Resolve current governing versions, graph epoch/generation/revision and membership/source scope before selection; recheck version guards before admission.
-- [ ] **M05A03** Implement P0 exact authority/unresolved effects, P1 current blockers/checklist/diagnostics, P2 compatible advice and P3 bulk references, with reasons and source/version bindings.
-- [ ] **M05A04** Implement at most three hops/64 optional candidates, four advisory failures and two procedures, using declared compatibility rather than global recency.
-- [ ] **M05A05** Differentiate exact proof from advice: proof requires current candidate/criteria/environment/revision; advice requires relevant paths/signature/task family/preconditions and never completes work.
-- [ ] **M05A06** Implement immutable packet manifest with selected items, exact/excerpt/reference representations, template/policy version, token count precision, inclusion reasons and omission counts.
-- [ ] **M05A07** Enforce 6,000 default/8,000 maximum packet and whole-request limits, preserving output/headroom. Exact mandatory overflow blocks or requires accepted narrower scope/compatible budget.
-- [ ] **M05A08** Implement source deduplication by scope/version/digest; do not merge unrelated candidates/failures or treat repeat messages as corroboration.
-- [ ] **M05A09** Implement task-relevant `memory.retrieve(mode=search)` with bounded output and cumulative next-request allocation; no unrestricted Cypher, vector database or classifier API.
+- [x] **M05A01** Implement indexed current-task closure from stable goals/constraints/criteria, TaskState, candidate and required Sources; do not rank mandatory authority by similarity.
+- [x] **M05A02** Resolve current governing versions, graph epoch/generation/revision and membership/source scope before selection; recheck version guards before admission.
+- [x] **M05A03** Implement P0 exact authority/unresolved effects, P1 current blockers/checklist/diagnostics, P2 compatible advice and P3 bulk references, with reasons and source/version bindings.
+- [x] **M05A04** Implement at most three hops/64 optional candidates, four advisory failures and two procedures, using declared compatibility rather than global recency.
+- [x] **M05A05** Differentiate exact proof from advice: proof requires current candidate/criteria/environment/revision; advice requires relevant paths/signature/task family/preconditions and never completes work.
+- [x] **M05A06** Implement immutable packet manifest with selected items, exact/excerpt/reference representations, template/policy version, token count precision, inclusion reasons and omission counts.
+- [x] **M05A07** Enforce 6,000 default/8,000 maximum packet and whole-request limits, preserving output/headroom. Exact mandatory overflow blocks or requires accepted narrower scope/compatible budget.
+- [x] **M05A08** Implement source deduplication by scope/version/digest; do not merge unrelated candidates/failures or treat repeat messages as corroboration.
+- [x] **M05A09** Implement task-relevant `memory.retrieve(mode=search)` with bounded output and cumulative next-request allocation; no unrestricted Cypher, vector database or classifier API.
+- [x] **M05A10** Publish versioned authenticated operation-capability metadata and typed client bindings for the M05 command catalog; reuse existing routes and preserve per-call authorization.
+- [x] **M05A11** Implement authorized model/profile discovery and prospective immutable profile selection; prepare/start binds selected provider/model/billing/limits, denies stale selection and never changes an active run or probes paid inference automatically.
+- [x] **M05A12** Expose existing checkpoint/plan/recovery plus bounded refresh/context/compact/search through explicit typed human operations; define durable plain-text/follow-up admission, refusal while busy, and initial instruction Sources without silently accepting requirement changes.
 
-**Before branch readiness:** coordinate with Agent B, then complete this milestone’s joint checks in [master section 5](track2-implementation-checklist.md#5-milestone-sequence). Proposed single combined commit: `feat: assemble bounded task context from graph memory`.
-
-
-#### Incremental terminal contract — additional gates
-
-See [command behavior, backend dependencies and Pi reuse](track2-terminal-command-contract.md). These new gates are proposed; prior completion marks do not cover them.
-
-- [ ] **M05A10** Publish versioned authenticated operation-capability metadata and typed client bindings for the M05 command catalog; reuse existing routes and preserve per-call authorization.
-- [ ] **M05A11** Implement authorized model/profile discovery and prospective immutable profile selection; prepare/start binds selected provider/model/billing/limits, denies stale selection and never changes an active run or probes paid inference automatically.
-- [ ] **M05A12** Expose existing checkpoint/plan/recovery plus bounded refresh/context/compact/search through explicit typed human operations; define durable plain-text/follow-up admission, refusal while busy, and initial instruction Sources without silently accepting requirement changes.
+**Joint gates:** M05J01–J06 are verified in the [master checklist](track2-implementation-checklist.md#5-milestone-sequence). Procedures, protected completion and fresh successors retain their later milestone gates.
 
 ### M06 — Guarded patches, snapshots and contained registered commands
 

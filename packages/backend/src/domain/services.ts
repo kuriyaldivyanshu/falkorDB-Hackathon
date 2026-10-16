@@ -1,3 +1,5 @@
+import { createContextService } from '../context/service.js';
+import type { ContextService } from '@threadline/shared';
 import { createCaptureWorker } from '../capture/worker.js';
 import { ThreadlineError } from '@threadline/shared';
 
@@ -31,7 +33,10 @@ import { createProjectionService, type ProjectionService } from '../storage/proj
 import { createCheckpointService } from '../checkpoint/service.js';
 import { ModelRequestJournal } from '../storage/model-requests.js';
 import { createSourceService } from '../storage/sources.js';
-import type { CheckpointService, ReplayService, SourceService } from '@threadline/shared';
+import type { CapabilityReport, CheckpointService, ReplayService, SourceService } from '@threadline/shared';
+import { createCapabilityService, type CapabilityService } from '../api/capability-service.js';
+import { createProvisioningService, type ProvisioningService } from './provisioning.js';
+import { requireProjectMembership } from '../storage/identity.js';
 import type { ClaimState, RunContext, TurnGuard } from '../runtime/contracts.js';
 import type { CancelRunOutcome, RunInspectView, RunStartOutcome } from '@threadline/shared';
 import type { GraphStore } from '../storage/graph.js';
@@ -181,6 +186,26 @@ export interface ApplicationServices {
    * than a route-shaped variant of them.
    */
   checkpoints(): CheckpointService | null;
+  context(): ContextService | null;
+  /**
+   * Operation-capability metadata for the authenticated caller.
+   *
+   * Read-only and nonsecret. It tells a client what exists and what it needs;
+   * it never authorizes, and every call still rechecks server-side.
+   */
+  provisioning(): ProvisioningService;
+  /**
+   * Confirms active membership in a project.
+   *
+   * Weaker than `authority`, which additionally requires an admitted task. Used
+   * by operations that must work before a task exists, such as listing models.
+   */
+  membership(principal: AuthenticatedPrincipal, projectId: string): Promise<void>;
+  capabilities(scope: {
+    readonly tenantId: string;
+    readonly userId: string;
+    readonly projectId: string | null;
+  }): Promise<CapabilityReport>;
   /**
    * The typed `ReplayService`, or `null` before storage is ready.
    *
@@ -257,6 +282,9 @@ export function createApplicationServices(deps: ServiceDeps): ApplicationService
   let capture: CaptureStore | null = null;
   let sources: SourceService | null = null;
   let checkpointService: CheckpointService | null = null;
+  let contextService: ContextService | null = null;
+  const capabilityService: CapabilityService = createCapabilityService({ db: deps.db });
+  let provisioningService: ProvisioningService | null = null;
   let replayService: ReplayService | null = null;
   let graphSurface: GraphProjectionSurface | null = null;
   let execution: ExecutionSurface | null = null;
@@ -270,6 +298,11 @@ export function createApplicationServices(deps: ServiceDeps): ApplicationService
       logger,
     });
     registry = createExecutionRegistry({ db: deps.db, clock: deps.clock, logger });
+    provisioningService = createProvisioningService({
+      db: deps.db,
+      registry,
+      clock: deps.clock,
+    });
     capture = createCaptureStore({ db: deps.db, artifacts, clock: deps.clock, logger });
     sources = createSourceService({
       db: deps.db,
@@ -358,6 +391,20 @@ export function createApplicationServices(deps: ServiceDeps): ApplicationService
       },
       logger,
     });
+    contextService=createContextService({db:deps.db,graphs:deps.graphs,artifacts,checkpoints:checkpointService,clock:deps.clock,
+      authorityFor:async scope=>{
+        const now=deps.clock();
+        const sessions=await deps.db.withTenantTransaction(scope.tenantId,tx=>tx.rows<{
+          id:string; display_name:string; slug:string; expires_at:Date;idle_expires_at:Date;
+        }>(`SELECT s.id,u.display_name,t.slug,s.expires_at,s.idle_expires_at FROM threadline.user_sessions s
+            JOIN threadline.users u ON u.id=s.user_id JOIN threadline.tenants t ON t.id=s.tenant_id
+            WHERE s.tenant_id=$1 AND s.user_id=$2 AND s.id=$3 AND s.revoked_at IS NULL
+              AND s.expires_at>$4 AND s.idle_expires_at>$4 AND u.status='active'`,
+          [scope.tenantId,scope.userId,scope.userSessionId??null,now]));
+        const session=sessions[0];if(!session)throw new ThreadlineError('unauthorized','A live initiating human session is required.');
+        return readCurrentAuthority(serviceDeps,{tenantId:scope.tenantId,userId:scope.userId,sessionId:session.id,
+          displayName:session.display_name,tenantSlug:session.slug,expiresAt:session.expires_at,idleExpiresAt:session.idle_expires_at},scope.projectId);
+      }});
     journal = new ModelRequestJournal({
       db: deps.db,
       artifacts,
@@ -502,8 +549,31 @@ export function createApplicationServices(deps: ServiceDeps): ApplicationService
       return sources;
     },
 
+    context() { return contextService; },
+
     checkpoints(): CheckpointService | null {
       return checkpointService;
+    },
+
+    async membership(principal: AuthenticatedPrincipal, projectId: string): Promise<void> {
+      await requireProjectMembership(deps.db, principal.tenantId, projectId, principal.userId);
+    },
+
+    provisioning(): ProvisioningService {
+      if (provisioningService === null) {
+        throw new ThreadlineError('storage_unavailable', 'Provisioning storage is unavailable.');
+      }
+      return provisioningService;
+    },
+
+    async capabilities(scope: {
+    readonly tenantId: string;
+    readonly userId: string;
+    readonly projectId: string | null;
+  }): Promise<CapabilityReport> {
+      // The caller supplies only identities the route already resolved from the
+      // authenticated session; the service re-reads everything it reports.
+      return capabilityService.report(scope);
     },
 
     replay(): ReplayService | null {

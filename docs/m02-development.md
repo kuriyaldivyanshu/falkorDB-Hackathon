@@ -20,10 +20,10 @@ The backend resolves the selected key from [owner-only saved provider settings](
 
 Keep the same `--request-record` path when retrying an admission. An existing record from another project must not be reused or silently replaced. Run mutable candidates outside directories whose sync software creates hard links; the read-only tool safety checks intentionally refuse multiply linked files. See the [live acceptance environment finding](m02-live-acceptance.md).
 
-After separately choosing a compatible model and its effective context capacity, preparation creates a copied candidate, local host registration, account and immutable provider profile. The declared capacity is a limit, not an account-access probe:
+M05 now requires explicit immutable profile selection before preparation. In the TUI use `/model` or `/model choose`, declare compatible context/output limits, then `/run prepare` and `/run start confirm`. See the [current command inventory and context evidence](../archive/plans/review/m05-integration-verification.md). Selection, listing and preparation do not probe the provider. The lower-level CLI requires the selected profile ID returned by selection; preparation creates a copied candidate and registrations while reusing that profile:
 
 ```sh
-node packages/cli/dist/index.js run:prepare --project <project-id> --context-window <declared-tokens>
+node packages/cli/dist/index.js run:prepare --project <project-id> --profile <selected-profile-id> --context-window <declared-tokens>
 ```
 
 Use the returned real identities to construct the explicit start command. **`run:start` consumes provider allowance and can incur charges. Live acceptance was explicitly authorized; ordinary tests still use fixtures.**
@@ -43,7 +43,7 @@ Reuse the exact start identities on a response retry. A replay returns the store
 
 ## What is implemented
 
-`runtime/managed.ts` composes one owned loop behind authenticated prepare/start/cancel/inspect/heartbeat routes. Candidate paths and host/fingerprint bindings are resolved from trusted registrations, never model arguments or client-supplied filesystem paths. Preparation uses a separate copy of the authored inventory fixture; the original UTC-formatting defect remains. M02 exposed `workspace.read`, `workspace.search` and `workspace.inspect`; [M03](m03-development.md) adds the source-only `memory.retrieve` tool. Traversal, hidden/secret paths, symlinks, hardlinks, non-regular files, invalid UTF-8 and NUL content are refused. Tool results are bounded to 32 KiB, scans to 1000 entries, 50 MiB and depth 16. These observed-change checks are not the future effectful OS sandbox.
+`runtime/managed.ts` composes one owned loop behind authenticated prepare/start/cancel/inspect/heartbeat routes. Candidate paths and host/fingerprint bindings are resolved from trusted registrations, never model arguments or client-supplied filesystem paths. Preparation uses a separate copy of the authored inventory fixture; the original UTC-formatting defect remains. M02 exposed `workspace.read`, `workspace.search` and `workspace.inspect`; [M03](m03-development.md) added source-range `memory.retrieve`; [M05](../archive/plans/review/m05-integration-verification.md) extends it with bounded graph search and composes current memory into every request. Traversal, hidden/secret paths, symlinks, hardlinks, non-regular files, invalid UTF-8 and NUL content are refused. Tool results are bounded to 32 KiB, scans to 1000 entries, 50 MiB and depth 16. These observed-change checks are not the future effectful OS sandbox.
 
 The TurnGuard rechecks the initiating human session stored in the authorization manifest, membership, profile/account ownership, immutable profile digest, graph epoch/revisions/fence, live run/session, operational lease and original source bytes. Dispatch and tool intent admission share the per-project lock with human command admission. Reservations use the whole serialized request plus framing allowance and requested output ceiling. The conservative one-token-per-byte reservation estimate is not measured usage or proof of real model capacity. The run also enforces its input, attempt, tool, token and deadline limits.
 

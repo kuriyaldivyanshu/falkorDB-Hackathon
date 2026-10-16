@@ -540,7 +540,7 @@ export const TACTICAL_FUNCTIONS = [
     }) },
   { type: 'function', name: 'task_update_plan', description: 'Patch bounded plan steps by stable id; unrelated steps are preserved. Completing every step does not complete or verify the task.', strict: true,
     parameters: schema({ steps: patchSchema, baseRevision: baseRevisionSchema }) },
-  { type: 'function', name: 'memory_refresh', description: 'Return whether the current checkpoint state is ready, stale, blocked or capture-pending, with its pointer and Source. Does not search the graph and does not change the loaded context.', strict: true,
+  { type: 'function', name: 'memory_refresh', description: 'Stage the current bounded authority and sourced memory packet. It replaces the memory block before the next dependent turn; staging does not acknowledge provider delivery.', strict: true,
     parameters: schema({}) },
 ] as const;
 

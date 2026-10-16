@@ -1,6 +1,6 @@
 # FalkorDB Track 2 architecture notes
 
-Snapshot: 16 October 2026. M03 is merged. M04 checkpoints, tactical plans and deterministic recovery are locally integrated and verified; see [checkpoint workflow and evidence](archive/plans/review/m04-integration-verification.md). M02 integrates durable run admission, the owned Responses transport, read-only tools and CLI/TUI activity against real PostgreSQL/FalkorDB. Local provider/tool verification passes. The user-authorized OpenCode Go / Space Bunny model/tool acceptance passed: 3 completed model turns, 2 successful tools, 8,045 reported tokens, zero unresolved attempts. See [final M02 evidence](docs/m02-live-acceptance.md). Memory continuity and protected completion remain future work.
+Snapshot: 17 October 2026. M00–M04 are merged. M05 bounded graph context, explicit model/profile selection and terminal controls are committed on the M05 PR branch and locally verified; see [M05 workflow and evidence](archive/plans/review/m05-integration-verification.md). Verification used real PostgreSQL/FalkorDB and an injected provider with no external inference. The separately authorized M02 OpenCode Go / Space Bunny acceptance remains recorded in [M02 evidence](docs/m02-live-acceptance.md). Contained edits, fresh-successor continuity and protected completion remain later milestones.
 
 ## Run the local backend and client
 
@@ -31,9 +31,9 @@ For masked provider-first setup, use `provider:setup` or `/connect` in the TUI. 
 
 For legacy environment configuration, including OpenCode Go, see [provider configuration and smoke-test evidence](docs/provider-configuration.md).
 
-For explicit M02 preparation/start/inspect/cancel commands, see [the current runtime workflow](docs/m02-development.md) and [M02 integration evidence](archive/plans/review/m02-integration-verification.md). Configuration and preparation never infer; an explicitly started production run can incur API charges.
+For explicit preparation/start/inspect/cancel commands, see [the current runtime workflow](docs/m02-development.md) and [M02 integration evidence](archive/plans/review/m02-integration-verification.md). Configuration and preparation never infer; an explicitly started production run can incur API charges.
 
-The [incremental terminal command plan](archive/plans/track2-terminal-command-contract.md) now assigns backend and CLI/TUI controls to M05–M09, including model selection, context compaction, recovery and fresh/resume behavior. These are planned commands; M10 consolidates the complete interface.
+The [incremental terminal command plan](archive/plans/track2-terminal-command-contract.md) now assigns backend and CLI/TUI controls to M05–M09, including model selection, context compaction, recovery and fresh/resume behavior. M05 commands are implemented locally; fresh/resume and protected completion retain their M07/M08 gates. M10 consolidates the interface.
 
 ## Hackathon and selected track
 
@@ -70,7 +70,7 @@ The MVP harness owns eleven bounded tools, lifecycle, durable capture, context p
 
 Start implementation with the [code-first master checklist](archive/plans/track2-implementation-checklist.md), split into [Agent A: Memory/Coordinator](archive/plans/track2-agent-a-checklist.md) and [Agent B: Harness/Frontend](archive/plans/track2-agent-b-checklist.md). Write the small runnable backend/TUI first; each milestone combines both lanes into one reviewed branch/commit after integration. Verification, fault evidence and packaging follow the working flow.
 
-M00 and M01 are merged; M01 is PR #2 at `067f842`. M02 is implemented and verified with a real Space Bunny model/read-tool/next-turn/final-response flow. See [the executable workflow](docs/m02-development.md), [live acceptance](docs/m02-live-acceptance.md) and [provider setup](docs/provider-setup.md). M03 is merged; M04 checkpoints and tactical state are locally verified. Bounded context retrieval and fresh-session continuity remain later milestones.
+M00 and M01 are merged; M01 is PR #2 at `067f842`. M02 is implemented and verified with a real Space Bunny model/read-tool/next-turn/final-response flow. See [the executable workflow](docs/m02-development.md), [live acceptance](docs/m02-live-acceptance.md) and [provider setup](docs/provider-setup.md). M03 and M04 are merged. M05 bounded context retrieval and terminal controls are committed on the M05 PR branch and locally verified. Fresh-session continuity remains a later milestone.
 
 **Current recommendation:** TypeScript/Node for the owned harness and local TUI/backend, PostgreSQL for identity and session operations, FalkorDB for connected memory and coordination. Native subscription adapters and investigator spawning are post-hackathon milestones. See [the complete plan](archive/plans/README.md), [harness scope](archive/plans/track2-harness-scope.md).
 

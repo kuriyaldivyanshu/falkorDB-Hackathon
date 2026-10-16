@@ -393,6 +393,7 @@ export const ARTIFACT_KINDS = [
   'registered_command_output',
   'diagnostic_output',
   'episode',
+  'context_packet',
 ] as const;
 
 export type ArtifactKind = (typeof ARTIFACT_KINDS)[number];

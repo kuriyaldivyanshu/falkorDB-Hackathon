@@ -1,3 +1,6 @@
+import { registerContextRoutes } from './context-routes.js';
+import { ThreadlineError } from '@threadline/shared';
+
 import { registerCheckpointRoutes } from './checkpoint-routes.js';
 import Fastify, { type FastifyInstance } from 'fastify';
 
@@ -13,6 +16,8 @@ import { createEventStreamManager, type EventStreamManager } from './events-stre
 import type { ManagedRuntime } from '../runtime/managed.js';
 import { registerProviderRoutes } from './provider-routes.js';
 import { registerSourceRoutes } from './source-routes.js';
+import { registerCapabilityRoutes } from './capability-routes.js';
+import { registerProvisioningRoutes } from './provisioning-routes.js';
 import type { ProviderSettings } from '../provider/settings.js';
 import { registerRoutes, registerRunRoutes } from './routes.js';
 
@@ -82,6 +87,21 @@ export function createHttpServer(deps: HttpServerDeps): HttpServerHandle {
   registerRunRoutes(app, routeDeps);
   registerSourceRoutes(app, routeDeps);
   registerCheckpointRoutes(app, { services: routeDeps.services });
+  // Registered exactly once, alongside the other operation routes.
+  registerCapabilityRoutes(app, routeDeps);
+  registerContextRoutes(app, routeDeps);
+  registerProvisioningRoutes(app, {
+    services: routeDeps.services,
+    // Resolved through the same service surface every other route uses, so there
+    // is one provisioning implementation rather than a route-local one.
+    provisioning: () => {
+      const current = deps.services?.() ?? null;
+      if (current === null) {
+        throw new ThreadlineError('service_unavailable', 'Storage is not ready.');
+      }
+      return current.provisioning();
+    },
+  });
 
   let listening = false;
   let boundAddress: BackendAddress | null = null;

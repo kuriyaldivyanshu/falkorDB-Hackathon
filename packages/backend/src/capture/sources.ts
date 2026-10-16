@@ -26,7 +26,7 @@ import { MAX_ARTIFACT_BYTES } from '../storage/artifacts.js';
  */
 
 export const SOURCE_RETRIEVAL_TOOL_NAME = 'memory.retrieve';
-export const SUPPORTED_RETRIEVAL_MODES = ['source'] as const;
+export const SUPPORTED_RETRIEVAL_MODES = ['source','search'] as const;
 
 /**
  * The model-facing ceiling on **original** Source bytes.
@@ -103,13 +103,15 @@ export const SOURCE_RETRIEVAL_FUNCTION = {
   type: 'function',
   name: 'memory_retrieve',
   description:
-    'Read a bounded byte range from one captured Source recorded by this project. Returns the content digest, total bytes, the exact returned range and base64 bytes. Absent or unauthorized Sources are unavailable, never empty. Search is not supported.',
+    'Read a bounded byte range from one captured Source recorded by this project. Returns the content digest, total bytes, the exact returned range and base64 bytes. Absent or unauthorized Sources are unavailable, never empty. For search mode, supply query and limit and null Source fields; results are bounded sourced advice, not completion proof.',
   strict: true,
   parameters: schema({
-    mode: { type: 'string', enum: [...SUPPORTED_RETRIEVAL_MODES] },
-    sourceId: { type: 'string', minLength: 1, maxLength: SOURCE_ID_MAX_CHARS },
+    mode: { type: 'string', enum: ['source','search'] },
+    sourceId: { type: ['string','null'], minLength: 1, maxLength: SOURCE_ID_MAX_CHARS },
     offset: integer(MAX_ARTIFACT_BYTES),
     maxBytes: integer(MODEL_SOURCE_RANGE_MAX_BYTES, 1),
+    query: {type:['string','null'],maxLength:1000},
+    limit: integer(30,1),
   }),
 } as const;
 
