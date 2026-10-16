@@ -1,3 +1,4 @@
+import { registerCheckpointRoutes } from './checkpoint-routes.js';
 import Fastify, { type FastifyInstance } from 'fastify';
 
 import type { HealthReport } from '@threadline/shared';
@@ -80,6 +81,7 @@ export function createHttpServer(deps: HttpServerDeps): HttpServerHandle {
   registerProviderRoutes(app, { ...routeDeps, providerSettings: deps.providerSettings ?? (() => null) });
   registerRunRoutes(app, routeDeps);
   registerSourceRoutes(app, routeDeps);
+  registerCheckpointRoutes(app, { services: routeDeps.services });
 
   let listening = false;
   let boundAddress: BackendAddress | null = null;

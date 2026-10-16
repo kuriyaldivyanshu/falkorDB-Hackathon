@@ -49,6 +49,12 @@ const OPTION_SPEC = {
   epoch: { type: 'string' },
   'after-seq': { type: 'string' },
   limit: { type: 'string' },
+  // Checkpoint and plan (M04). `task` already exists for run control.
+  run: { type: 'string' },
+  progress: { type: 'string' },
+  'next-action': { type: 'string' },
+  'base-revision': { type: 'string' },
+  step: { type: 'string', multiple: true },
   'show-store-readiness': { type: 'boolean', default: false },
   help: { type: 'boolean', short: 'h', default: false },
 } satisfies ParseArgsOptionsConfig;
@@ -69,7 +75,10 @@ export type CliCommand =
   | 'run:cancel'
   | 'source:inspect'
   | 'source:read'
-  | 'history:replay';
+  | 'history:replay'
+  | 'tactical:inspect'
+  | 'tactical:checkpoint'
+  | 'tactical:plan';
 
 /** The full identity needed to start one run. Nothing here is defaulted. */
 export interface StartRunRequest {
@@ -110,6 +119,16 @@ export interface CliInvocation {
   readonly replayEpoch: string | null;
   readonly replayAfterSeq: number | null;
   readonly replayLimit: number | null;
+  /** Task id for the `tactical:*` commands. */
+  readonly checkpointTaskId: string | null;
+  /** Run that binds the checkpoint, when one exists. */
+  readonly checkpointRunId: string | null;
+  readonly checkpointProgress: string | null;
+  readonly checkpointNextAction: string | null;
+  /** Repeatable `--step stepId[:status][=text]`. */
+  readonly checkpointSteps: readonly string[] | null;
+  /** Decimal-string revision token. Never parsed as a number. */
+  readonly checkpointBaseRevision: string | null;
   readonly help: boolean;
 }
 
@@ -135,6 +154,33 @@ function readReplaySeq(raw: string | undefined): number {
 
 function readReplayLimit(raw: string | undefined): number | null {
   return raw === undefined ? null : readBoundedInteger('--limit', raw, 1, REPLAY_MAX_PAGE);
+}
+
+/**
+ * A revision token is carried as a decimal string end to end.
+ *
+ * It is validated, never converted. Passing `--base-revision 7` is refused so an
+ * operator is not left believing a value was carried when it would have rounded.
+ */
+function readRevisionToken(raw: string | undefined): string | null {
+  if (raw === undefined) return null;
+  if (!/^[0-9]+$/.test(raw.trim())) {
+    throw new UsageError('--base-revision must be a decimal string such as 7, not a number expression.');
+  }
+  const value = raw.trim();
+  // Canonical form and a length bound only. A decimal string never rounds, so
+  // there is no floating-point threshold here either.
+  if (!/^(0|[1-9][0-9]*)$/.test(value)) {
+    throw new UsageError('--base-revision must be a canonical decimal string with no sign or leading zeros.');
+  }
+  if (value.length > 32) {
+    throw new UsageError('--base-revision exceeds the supported length of 32 digits.');
+  }
+  return value;
+}
+
+function hasAnyCheckpointInput(values: Record<string, unknown>): boolean {
+  return ['progress', 'next-action', 'base-revision', 'step', 'run'].some((key) => values[key] !== undefined);
 }
 
 export class UsageError extends Error {
@@ -175,6 +221,17 @@ Commands:
                    Request one bounded durable replay page. A gap is reported
                    with refresh guidance rather than skipped.
 
+  tactical:inspect --project <uuid> --task <uuid>
+                   Read the current checkpoint pointer, manifest, freshness,
+                   coverage and plan. A revision is a decimal string.
+  tactical:checkpoint --project <uuid> --task <uuid> [--run <id>]
+                   [--progress <text>] [--next-action <text>] [--base-revision <n>]
+                   Record progress and the next action. The durable operation
+                   identity is kept in --request-record, so a retry reuses it.
+  tactical:plan --project <uuid> --task <uuid> [--run <id>]
+                   --step <stepId>[:<status>][=<text>] [--base-revision <n>]
+                   Patch plan steps by stable id. Unrelated steps are preserved.
+
   run:inspect <id>   Read the backend's durable run, claim, budget and attempts.
   run:cancel <id>    Request cancellation. An acknowledgement is not proof that
                       provider compute stopped.
@@ -194,7 +251,7 @@ Options:
   --expect-requirement-revision <n>  Optimistic concurrency for requirements.
   --reason <text>         Cancellation reason recorded by the backend.
   --request <uuid>        With inspect, read this admission receipt.
-  --request-record <p>    Durable retry record (default .threadline/admission.json).
+  --request-record <p>    Durable retry record (admission.json; checkpoint.json for tactical commands).
   --accept-fixture <s>    Explicit noninteractive acceptance of these exact bytes.
   -h, --help              Show this help.
 
@@ -205,7 +262,7 @@ requests that the backend do work it has already authorized.
 Durable commands require a private local credential and a storage-ready backend:
   --project <uuid>            Target an authorized project.
   --request <uuid>            With inspect, read this admission receipt.
-  --request-record <p>        Durable retry record (default .threadline/admission.json).
+  --request-record <p>        Durable retry record (admission.json; checkpoint.json for tactical commands).
   --accept-fixture <sha256>   Explicit noninteractive acceptance of these exact bytes.
 
 "echo" remains process-local and non-durable. Closing the CLI never stops the
@@ -231,7 +288,7 @@ export function parseCliArgs(argv: readonly string[]): CliInvocation {
   const common = {
     projectId: values.project ?? null,
     requestId: values.request ?? null,
-    requestRecordPath: values['request-record'] ?? '.threadline/admission.json',
+    requestRecordPath: values['request-record'] ?? (positionals[0]?.startsWith('tactical:') ? '.threadline/checkpoint.json' : '.threadline/admission.json'),
     acceptedFixtureDigest: values['accept-fixture'] ?? null,
     backendUrl: readBackendUrl(values.backend),
     requestTimeoutMs: readTimeout(values.timeout),
@@ -243,6 +300,12 @@ export function parseCliArgs(argv: readonly string[]): CliInvocation {
     replayEpoch: null as string | null,
     replayAfterSeq: null as number | null,
     replayLimit: null as number | null,
+    checkpointTaskId: null as string | null,
+    checkpointRunId: null as string | null,
+    checkpointProgress: null as string | null,
+    checkpointNextAction: null as string | null,
+    checkpointSteps: null as readonly string[] | null,
+    checkpointBaseRevision: null as string | null,
     showStoreReadiness: values['show-store-readiness'],
     contextWindowTokens: values['context-window'] === undefined ? null : readRevision('--context-window', values['context-window']),
     help: values.help,
@@ -281,6 +344,35 @@ export function parseCliArgs(argv: readonly string[]): CliInvocation {
       runId,
       cancelReason: name === 'run:cancel' ? requireOption('--reason', values.reason) : null,
       ...common,
+    };
+  }
+
+  if (name === 'tactical:inspect' || name === 'tactical:checkpoint' || name === 'tactical:plan') {
+    const projectId = values.project;
+    if (projectId === undefined || projectId.length === 0) {
+      throw new UsageError(`"${name}" needs --project <uuid> and --task <uuid>.`);
+    }
+    const task = values.task;
+    if (task === undefined || task.length === 0) {
+      throw new UsageError(`"${name}" needs --task <uuid> so the backend can resolve scope.`);
+    }
+    if (positionals.length > 1) throw new UsageError(`"${name}" takes no positional arguments.`);
+    const baseRevision = readRevisionToken(values['base-revision']);
+    if (name === 'tactical:inspect' && hasAnyCheckpointInput(values)) {
+      throw new UsageError('"tactical:inspect" reports state only; use tactical:checkpoint or tactical:plan to change it.');
+    }
+    const steps = values.step === undefined ? null : [...values.step];
+    if (name !== 'tactical:plan' && steps !== null) {
+      throw new UsageError(`--step is only valid for "tactical:plan".`);
+    }
+    return {
+      ...common, command: name, echoText: null, start: null, runId: null, cancelReason: null,
+      checkpointTaskId: task,
+      checkpointRunId: values.run ?? null,
+      checkpointProgress: values.progress ?? null,
+      checkpointNextAction: values['next-action'] ?? null,
+      checkpointSteps: steps,
+      checkpointBaseRevision: baseRevision,
     };
   }
 

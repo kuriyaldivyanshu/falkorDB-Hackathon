@@ -1,6 +1,6 @@
 # Threadline Agent A checklist — Memory and Coordinator
 
-**15 October 2026. Proposed implementation work; all tasks initially unexecuted.** This is one lane of the [master code-first checklist](track2-implementation-checklist.md), not a separate product or branch. Read master sections 1–4 before editing. Use the same task IDs in your handoff. Master status is authoritative; reconcile this lane view at each milestone.
+**Updated 16 October 2026. M00–M03 are merged; M04 is locally integrated and verified. M05 onward remain proposed.** This is one lane of the [master code-first checklist](track2-implementation-checklist.md), not a separate product or branch. Read master sections 1–4 before editing. Use the same task IDs in your handoff. Master status is authoritative; reconcile this lane view at each milestone.
 
 Work beside [Agent B](track2-agent-b-checklist.md) from the same recorded base and integration checkout. Do not create branches, commit, push, reset or merge during parallel coding. The integration owner creates one combined branch/commit only after both lanes and joint checks are ready.
 
@@ -86,18 +86,18 @@ The redundant original Agent A handoff was removed after integration. Its fake `
 
 ### M04 — Structured checkpoints and tactical state
 
-**Depends on:** M03. **Combined milestone result:** Current progress/checklist is source-backed, with exact per-session coverage and automatic failure-safe persistence.
+**Integrated and verified — 16 October 2026, from `a2fe8a2`.** The earlier partial handoff and missing-composition blockers are resolved.
 
-- [ ] **M04A01** Implement runtime validation for `memory-checkpoint.schema.json` and `memory-episode.schema.json`; TypeScript declarations alone are insufficient at the boundary.
-- [ ] **M04A02** Build checkpoint manifests from trusted authority, candidate/environment identity, meaningful captured outcomes, unresolved effects and pending questions.
-- [ ] **M04A03** Maintain exact immutable checkpoint Source, TaskState pointer and CHECKPOINT_SOURCE edge atomically with state/event/receipt updates.
-- [ ] **M04A04** Track unique `(session_id, covered_capture_seq)` entries separately from graph-admission cursors; validate covered position never exceeds admitted/available evidence.
-- [ ] **M04A05** Implement automatic checkpoints for admission, accepted changes, mutating/registered-command terminal outcomes, failure, unknown effects and safe handoff; fallback after five meaningful uncheckpointed events.
-- [ ] **M04A06** Exclude checkpoint-publication events from their own checkpoint trigger; coalesce routine read/search activity without dropping its captured records.
-- [ ] **M04A07** Implement versioned plan/checkpoint patch merge that preserves unrelated progress, Sources and unresolved effects, and rejects conflicting stale updates.
-- [ ] **M04A08** Reconstruct structured state deterministically when the model provides no narrative recap. Model prose remains an attributed proposal, never accepted proof.
+- [x] **M04A01** Implement runtime validation for `memory-checkpoint.schema.json` and `memory-episode.schema.json`; TypeScript declarations alone are insufficient at the boundary.
+- [x] **M04A02** Build checkpoint manifests from trusted authority, candidate/environment identity, meaningful captured outcomes, unresolved effects and pending questions.
+- [x] **M04A03** Maintain exact immutable checkpoint Source, TaskState pointer and CHECKPOINT_SOURCE edge atomically with state/event/receipt updates.
+- [x] **M04A04** Track unique `(session_id, covered_capture_seq)` entries separately from graph-admission cursors; validate covered position never exceeds admitted/available evidence.
+- [x] **M04A05** Implement automatic checkpoints for admission, accepted changes, mutating/registered-command terminal outcomes, failure, unknown effects and safe handoff; fallback after five meaningful uncheckpointed events.
+- [x] **M04A06** Exclude checkpoint-publication events from their own checkpoint trigger; coalesce routine read/search activity without dropping its captured records.
+- [x] **M04A07** Implement versioned plan/checkpoint patch merge that preserves unrelated progress, Sources and unresolved effects, and rejects conflicting stale updates.
+- [x] **M04A08** Reconstruct structured state deterministically when the model provides no narrative recap. Model prose remains an attributed proposal, never accepted proof.
 
-**Before branch readiness:** coordinate with Agent B, then complete this milestone’s joint checks in [master section 5](track2-implementation-checklist.md#5-milestone-sequence). Proposed single combined commit: `feat: persist structured checkpoints with capture coverage`.
+[M04 executed evidence and working commands](review/m04-integration-verification.md) record 94 focused cases and 26 real-store/terminal scenarios. This includes production seven-tool dispatch, guarded immutable TaskState/Source publication, receipt reconciliation, concurrent patch refusal/retry, automatic triggers, bounded recovery, unknown-effect preservation, authorization, four streams and actual PTY states. M06/M07 producers remain future work; their trigger seams were exercised with synthetic observations. No paid inference, permanent suites or Git publication.
 
 ### M05 — Bounded graph retrieval and context construction
 
@@ -115,6 +115,15 @@ The redundant original Agent A handoff was removed after integration. Its fake `
 
 **Before branch readiness:** coordinate with Agent B, then complete this milestone’s joint checks in [master section 5](track2-implementation-checklist.md#5-milestone-sequence). Proposed single combined commit: `feat: assemble bounded task context from graph memory`.
 
+
+#### Incremental terminal contract — additional gates
+
+See [command behavior, backend dependencies and Pi reuse](track2-terminal-command-contract.md). These new gates are proposed; prior completion marks do not cover them.
+
+- [ ] **M05A10** Publish versioned authenticated operation-capability metadata and typed client bindings for the M05 command catalog; reuse existing routes and preserve per-call authorization.
+- [ ] **M05A11** Implement authorized model/profile discovery and prospective immutable profile selection; prepare/start binds selected provider/model/billing/limits, denies stale selection and never changes an active run or probes paid inference automatically.
+- [ ] **M05A12** Expose existing checkpoint/plan/recovery plus bounded refresh/context/compact/search through explicit typed human operations; define durable plain-text/follow-up admission, refusal while busy, and initial instruction Sources without silently accepting requirement changes.
+
 ### M06 — Guarded patches, snapshots and contained registered commands
 
 **Depends on:** M02–M05; containment proof before effectful tool exposure. **Combined milestone result:** Actual bounded edits and command outcomes, with no credential/network/path escape and honest cancellation.
@@ -128,6 +137,13 @@ The redundant original Agent A handoff was removed after integration. Its fake `
 - [ ] **M06A07** Reconcile lost terminal persistence against actual command/workspace state before retry; never rerun an unknown command blindly.
 
 **Before branch readiness:** coordinate with Agent B, then complete this milestone’s joint checks in [master section 5](track2-implementation-checklist.md#5-milestone-sequence). Proposed single combined commit: `feat: execute guarded patches and isolated registered commands`.
+
+
+#### Incremental terminal contract — additional gates
+
+See [command behavior, backend dependencies and Pi reuse](track2-terminal-command-contract.md). These new gates are proposed; prior completion marks do not cover them.
+
+- [ ] **M06A09** Publish ordered stop/pause and authorized bounded candidate-diff/log operations for /stop, /pause, /diff and /logs; cancellation-requested, confirmed stopped and unknown remain distinct.
 
 ### M07 — Human changes, clarification and fresh successor
 
@@ -144,6 +160,13 @@ The redundant original Agent A handoff was removed after integration. Its fake `
 
 **Before branch readiness:** coordinate with Agent B, then complete this milestone’s joint checks in [master section 5](track2-implementation-checklist.md#5-milestone-sequence). Proposed single combined commit: `feat: recover fresh sessions under current requirements`.
 
+
+#### Incremental terminal contract — additional gates
+
+See [command behavior, backend dependencies and Pi reuse](track2-terminal-command-contract.md). These new gates are proposed; prior completion marks do not cover them.
+
+- [ ] **M07A09** Publish authorized session listing and explicit reattach/resume/fresh semantics plus change/answer operations; /new creates a guarded successor for the accepted task, /resume never revives retired authority or retries unknown dispatch.
+
 ### M08 — Protected checker and current-evidence completion
 
 **Depends on:** M06–M07; deliberately after working application code. **Combined milestone result:** Only actual protected evidence for the current candidate/criteria/environment can complete the task.
@@ -156,6 +179,13 @@ The redundant original Agent A handoff was removed after integration. Its fake `
 - [ ] **M08A06** Validate permission to change accepted criteria/check bundle separately from candidate edits. A Builder cannot approve its own modified acceptance definition.
 
 **Before branch readiness:** coordinate with Agent B, then complete this milestone’s joint checks in [master section 5](track2-implementation-checklist.md#5-milestone-sequence). Proposed single combined commit: `feat: accept completion from protected current verification`.
+
+
+#### Incremental terminal contract — additional gates
+
+See [command behavior, backend dependencies and Pi reuse](track2-terminal-command-contract.md). These new gates are proposed; prior completion marks do not cover them.
+
+- [ ] **M08A09** Expose typed human verification/completion/evidence operations backed by the same protected checker and guarded acceptance used by model tools; preserve candidate/criteria/environment binding.
 
 ### M09 — Sourced procedural memory and semantic reuse
 
@@ -183,6 +213,13 @@ The redundant original Agent A handoff was removed after integration. Its fake `
 - [ ] **M10A06** Implement backend backpressure, replay cursor/overload responses and bounded request/event payloads. No unbounded subscription/listener growth.
 
 **Before branch readiness:** coordinate with Agent B, then complete this milestone’s joint checks in [master section 5](track2-implementation-checklist.md#5-milestone-sequence). Proposed single combined commit: `feat: complete terminal task and evidence workflow`.
+
+
+#### Incremental terminal contract — additional gates
+
+See [command behavior, backend dependencies and Pi reuse](track2-terminal-command-contract.md). These new gates are proposed; prior completion marks do not cover them.
+
+- [ ] **M10A07** Audit command capability/transport coverage against the terminal contract and close remaining integration inconsistencies; core M05–M08 operations must already ship in their milestones.
 
 ### M11 — Recovery, scope and resource acceptance suite
 
@@ -223,6 +260,13 @@ The redundant original Agent A handoff was removed after integration. Its fake `
 - [ ] **M13A06** Keep secrets outside exported backups/evidence and fail restore/startup with unavailable evidence rather than fabricating repair.
 
 **Before branch readiness:** coordinate with Agent B, then complete this milestone’s joint checks in [master section 5](track2-implementation-checklist.md#5-milestone-sequence). Proposed single combined commit: `feat: package local harness with setup diagnostics`.
+
+
+#### Incremental terminal contract — additional gates
+
+See [command behavior, backend dependencies and Pi reuse](track2-terminal-command-contract.md). These new gates are proposed; prior completion marks do not cover them.
+
+- [ ] **M13A07** Expose packaged bounded doctor diagnostics using backend/provider-profile readiness without automatic paid probes.
 
 ## Full-plan obligations and final handoff
 

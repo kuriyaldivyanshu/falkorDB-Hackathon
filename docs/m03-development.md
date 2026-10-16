@@ -2,6 +2,8 @@
 
 Updated 16 October 2026 against merged M02 base `d09f35e`. M03 is integrated in the working tree. The owned runtime records permitted evidence, admits graph provenance, projects ordered history and serves bounded Source reads. Ordinary acceptance uses an injected provider; it makes no external inference requests.
 
+For current checkpoint/plan tools and deterministic tail recovery, see [M04 workflow and verification](../archive/plans/review/m04-integration-verification.md). M03 source/history APIs remain the underlying evidence surface.
+
 ## Running and inspecting evidence
 
 Build/start/configure/admit using [the executable M02 workflow](m02-development.md) and [provider setup](provider-setup.md). Starting an actual model run still requires explicit user authorization. Source/history inspection does not infer.

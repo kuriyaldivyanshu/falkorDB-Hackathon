@@ -7,6 +7,7 @@ import type { Logger } from '../log.js';
 
 /** One local-tenant delivery worker. Construction performs no work. */
 export function createCaptureWorker(deps: {
+  afterDrain?: () => Promise<void>;
   db: SqlDatabase; tenantId: string; graph: GraphProjectionSurface; clock: () => Date; logger: Logger;
 }) {
   const owner = randomUUID();
@@ -54,6 +55,7 @@ export function createCaptureWorker(deps: {
     const projects = await deps.db.withTenantTransaction(deps.tenantId, tx => tx.rows<{ id: string; graph_key: string }>(
       `SELECT id,graph_key FROM threadline.projects WHERE tenant_id=$1 AND status='ready' ORDER BY id LIMIT 100`, [deps.tenantId]));
     for (const project of projects) await deps.graph.projection.projectOnce(deps.tenantId,project.id,project.graph_key);
+    await deps.afterDrain?.();
   };
   const runOnce = (): Promise<void> => {
     if (stopped) return Promise.reject(new ThreadlineError('service_unavailable','Capture worker is stopped.'));

@@ -102,6 +102,9 @@ export async function ensureCoreSchema(deps: MigrationDeps): Promise<MigrationRe
     });
     await hardenSessions(deps);
     await migrateModelAttemptFacts(deps);
+    await migrateCheckpointState(deps);
+    await migrateCheckpointIntent(deps);
+    await migrateCheckpointOutcomes(deps);
     await grantApplicationPrivileges(deps);
     return { status: current, durationMs: Date.now() - startedAt };
   }
@@ -142,7 +145,10 @@ export async function ensureCoreSchema(deps: MigrationDeps): Promise<MigrationRe
   });
 
   await hardenSessions(deps);
-    await migrateModelAttemptFacts(deps);
+  await migrateModelAttemptFacts(deps);
+  await migrateCheckpointState(deps);
+  await migrateCheckpointIntent(deps);
+  await migrateCheckpointOutcomes(deps);
   await grantApplicationPrivileges(deps);
 
   const applied = await readSchemaStatus(deps.migrationDb);
@@ -203,6 +209,103 @@ LANGUAGE sql SECURITY DEFINER SET search_path = threadline, pg_catalog AS $$
  WHERE s.token_hash=p_token_hash AND s.revoked_at IS NULL AND u.status='active' AND t.status='active' AND tm.status='active'
 $$;
 REVOKE ALL ON FUNCTION threadline.session_by_token_hash(char(64)) FROM PUBLIC;`;
+// Additive M04 facts. A checkpoint is an immutable manifest artifact plus the
+// current pointer and its coverage; the graph holds the pointer too, so SQL must
+// record what was published and which operation produced it. Versions 1-3 stay
+// byte-identical.
+const CHECKPOINT_STATE_SQL = `CREATE TABLE threadline.task_checkpoints (
+  tenant_id uuid NOT NULL,
+  project_id uuid NOT NULL,
+  task_id uuid NOT NULL,
+  revision bigint NOT NULL CHECK (revision > 0),
+  operation_id uuid NOT NULL,
+  manifest_artifact_id uuid NOT NULL,
+  manifest_digest char(64) NOT NULL,
+  checkpoint_source_id uuid NOT NULL,
+  producer_session_id uuid NOT NULL,
+  requirement_revision bigint NOT NULL CHECK (requirement_revision >= 0),
+  covered_capture_seq bigint NOT NULL CHECK (covered_capture_seq >= 0),
+  graph_epoch uuid NOT NULL,
+  visibility text NOT NULL CHECK (visibility IN ('project','user','session')),
+  producer_kind text NOT NULL CHECK (producer_kind IN ('service','agent_proposal')),
+  publication_state text NOT NULL CHECK (publication_state IN ('committed','pending','ambiguous')),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (tenant_id, project_id, task_id, revision),
+  UNIQUE (tenant_id, project_id, task_id, operation_id),
+  FOREIGN KEY (tenant_id, project_id, manifest_artifact_id) REFERENCES threadline.artifacts(tenant_id, project_id, id)
+);
+ALTER TABLE threadline.task_checkpoints ENABLE ROW LEVEL SECURITY;
+ALTER TABLE threadline.task_checkpoints FORCE ROW LEVEL SECURITY;
+CREATE POLICY tenant_fence ON threadline.task_checkpoints USING (tenant_id = nullif(current_setting('threadline.tenant_id', true), '')::uuid) WITH CHECK (tenant_id = nullif(current_setting('threadline.tenant_id', true), '')::uuid);
+
+CREATE TABLE threadline.checkpoint_coverage (
+  tenant_id uuid NOT NULL,
+  project_id uuid NOT NULL,
+  task_id uuid NOT NULL,
+  session_id uuid NOT NULL,
+  covered_capture_seq bigint NOT NULL CHECK (covered_capture_seq >= 0),
+  graph_admitted_capture_seq bigint NOT NULL CHECK (graph_admitted_capture_seq >= 0),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (tenant_id, project_id, task_id, session_id),
+  FOREIGN KEY (tenant_id, project_id) REFERENCES threadline.projects(tenant_id, id)
+);
+ALTER TABLE threadline.checkpoint_coverage ENABLE ROW LEVEL SECURITY;
+ALTER TABLE threadline.checkpoint_coverage FORCE ROW LEVEL SECURITY;
+CREATE POLICY tenant_fence ON threadline.checkpoint_coverage USING (tenant_id = nullif(current_setting('threadline.tenant_id', true), '')::uuid) WITH CHECK (tenant_id = nullif(current_setting('threadline.tenant_id', true), '')::uuid);`;
+
+// Additive M04 facts. A staged checkpoint must record the exact intent it came
+// from, so a replay compares what was submitted rather than re-deriving a
+// fingerprint from the manifest it produced -- otherwise a changed payload could
+// be reconstructed to look identical. The graph position that proves commitment
+// is recorded when the receipt is read back. Versions 1-4 stay byte-identical.
+const CHECKPOINT_INTENT_SQL = `ALTER TABLE threadline.task_checkpoints
+ ADD COLUMN submission_fingerprint char(64),
+ ADD COLUMN graph_event_seq bigint CHECK (graph_event_seq > 0),
+ ADD COLUMN graph_committed_at timestamptz,
+ ADD COLUMN resolved_at timestamptz;`;
+
+async function migrateCheckpointIntent(deps: MigrationDeps): Promise<void> {
+  await deps.migrationDb.withTransaction(async (tx) => {
+    await tx.rows('SELECT pg_advisory_xact_lock(73010402)');
+    const checksum = sha256Hex(CHECKPOINT_INTENT_SQL);
+    const rows = await tx.rows<{ checksum: string }>(
+      "SELECT checksum FROM threadline.schema_migrations WHERE store='postgres' AND version=5",
+    );
+    if (rows[0]) {
+      if (rows[0].checksum.trim() !== checksum) {
+        throw new ThreadlineError('schema_incompatible', 'Checkpoint-intent migration checksum differs.');
+      }
+      return;
+    }
+    await tx.rows(CHECKPOINT_INTENT_SQL);
+    await tx.rows(
+      "INSERT INTO threadline.schema_migrations(id,store,version,checksum) VALUES(gen_random_uuid(),'postgres',5,$1)",
+      [checksum],
+    );
+  });
+}
+
+async function migrateCheckpointState(deps: MigrationDeps): Promise<void> {
+  await deps.migrationDb.withTransaction(async (tx) => {
+    await tx.rows('SELECT pg_advisory_xact_lock(73010402)');
+    const checksum = sha256Hex(CHECKPOINT_STATE_SQL);
+    const rows = await tx.rows<{ checksum: string }>(
+      "SELECT checksum FROM threadline.schema_migrations WHERE store='postgres' AND version=4",
+    );
+    if (rows[0]) {
+      if (rows[0].checksum.trim() !== checksum) {
+        throw new ThreadlineError('schema_incompatible', 'Checkpoint migration checksum differs.');
+      }
+      return;
+    }
+    await tx.rows(CHECKPOINT_STATE_SQL);
+    await tx.rows(
+      "INSERT INTO threadline.schema_migrations(id,store,version,checksum) VALUES(gen_random_uuid(),'postgres',4,$1)",
+      [checksum],
+    );
+  });
+}
+
 async function hardenSessions(deps: MigrationDeps): Promise<void> {
  await deps.migrationDb.withTransaction(async tx => {
   await tx.rows('SELECT pg_advisory_xact_lock(73010402)');
@@ -235,5 +338,22 @@ async function migrateModelAttemptFacts(deps: MigrationDeps): Promise<void> {
     }
     await tx.rows(MODEL_ATTEMPT_FACTS_SQL);
     await tx.rows("INSERT INTO threadline.schema_migrations(id,store,version,checksum) VALUES(gen_random_uuid(),'postgres',3,$1)", [checksum]);
+  });
+}
+
+// Pending graph writes and definite refusals are distinct durable outcomes.
+const CHECKPOINT_OUTCOMES_SQL = `ALTER TABLE threadline.task_checkpoints
+ DROP CONSTRAINT task_checkpoints_publication_state_check,
+ ADD CONSTRAINT task_checkpoints_publication_state_check
+ CHECK (publication_state IN ('committed','pending','ambiguous','rejected')),
+ ADD COLUMN rejection_reason text;`;
+async function migrateCheckpointOutcomes(deps:MigrationDeps):Promise<void> {
+  await deps.migrationDb.withTransaction(async tx=>{
+    await tx.rows('SELECT pg_advisory_xact_lock(73010402)');
+    const checksum=sha256Hex(CHECKPOINT_OUTCOMES_SQL);
+    const rows=await tx.rows<{checksum:string}>("SELECT checksum FROM threadline.schema_migrations WHERE store='postgres' AND version=6");
+    if(rows[0]){if(rows[0].checksum.trim()!==checksum)throw new ThreadlineError('schema_incompatible','Checkpoint-outcomes migration checksum differs.');return;}
+    await tx.rows(CHECKPOINT_OUTCOMES_SQL);
+    await tx.rows("INSERT INTO threadline.schema_migrations(id,store,version,checksum) VALUES(gen_random_uuid(),'postgres',6,$1)",[checksum]);
   });
 }

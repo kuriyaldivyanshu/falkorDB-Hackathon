@@ -6,6 +6,12 @@ import { EXIT_FAILURE, EXIT_OK, runEcho, runHealth } from './one-shot.js';
 import { createBackendClient } from './transport/backend-client.js';
 import { createSourceClient } from './transport/source-client.js';
 import { historyReplayCommand, sourceInspectCommand, sourceReadCommand } from './ui/source-commands.js';
+import {
+  checkpointInspectCommand,
+  checkpointWriteCommand,
+  planUpdateCommand,
+} from './ui/checkpoint-commands.js';
+import { checkpointRoutes, createTacticalHttp } from './transport/checkpoint-http.js';
 import { readLocalSessionCredential } from './credentials/local-session.js';
 import { describeCause } from './transport/errors.js';
 import { createRunClient } from './transport/run-client.js';
@@ -72,6 +78,11 @@ async function main(argv: readonly string[]): Promise<number> {
       timeoutMs: invocation.requestTimeoutMs,
       token: credential?.token ?? null,
     });
+  const checkpointHttp = () => createTacticalHttp({
+    baseUrl: invocation.backendUrl,
+    token: credential?.token ?? null,
+    timeoutMs: invocation.requestTimeoutMs,
+  });
   const runClient = createRunClient({
     baseUrl: invocation.backendUrl,
     requestTimeoutMs: invocation.requestTimeoutMs,
@@ -97,6 +108,12 @@ async function main(argv: readonly string[]): Promise<number> {
       return runInspectCommand(runClient, invocation, write);
     case 'run:cancel':
       return runCancelCommand(runClient, invocation, write);
+    case 'tactical:inspect':
+      return checkpointInspectCommand(checkpointHttp(), invocation, write);
+    case 'tactical:checkpoint':
+      return checkpointWriteCommand(checkpointHttp(), invocation, write);
+    case 'tactical:plan':
+      return planUpdateCommand(checkpointHttp(), invocation, write);
     case 'source:inspect':
       return sourceInspectCommand(sourceClient(), invocation, write);
     case 'source:read':
@@ -108,7 +125,18 @@ async function main(argv: readonly string[]): Promise<number> {
     case 'echo':
       return runEcho(client, invocation.echoText ?? '', write);
     case 'tui':
-      await startTui({ client, endpoint: client.baseUrl, credential, sourceClient: sourceClient(), providerClient: ['127.0.0.1', 'localhost', '[::1]'].includes(new URL(invocation.backendUrl).hostname) ? providerClient() : undefined });
+      const target = invocation.projectId !== null && invocation.checkpointTaskId !== null
+        ? checkpointRoutes(invocation.projectId, invocation.checkpointTaskId)
+        : undefined;
+      await startTui({
+        client, endpoint: client.baseUrl, credential,
+        sourceClient: sourceClient(),
+        // The routes are only supplied when a target is known; otherwise the
+        // panel reports the capability as unavailable rather than showing an
+        // empty checkpoint.
+        tacticalClient: checkpointHttp(),
+        tacticalRoutes: target,
+        providerClient: ['127.0.0.1', 'localhost', '[::1]'].includes(new URL(invocation.backendUrl).hostname) ? providerClient() : undefined });
       return EXIT_OK;
   }
 }

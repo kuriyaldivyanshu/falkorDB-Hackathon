@@ -28,9 +28,10 @@ import { createCaptureStore, type CaptureStore } from '../storage/capture.js';
 import { createGraphAdmitter, type GraphAdmitter } from '../storage/graph-admission.js';
 import { createGraphDeliverer, reconcileQuarantined } from '../storage/graph-delivery.js';
 import { createProjectionService, type ProjectionService } from '../storage/projection.js';
+import { createCheckpointService } from '../checkpoint/service.js';
 import { ModelRequestJournal } from '../storage/model-requests.js';
 import { createSourceService } from '../storage/sources.js';
-import type { ReplayService, SourceService } from '@threadline/shared';
+import type { CheckpointService, ReplayService, SourceService } from '@threadline/shared';
 import type { ClaimState, RunContext, TurnGuard } from '../runtime/contracts.js';
 import type { CancelRunOutcome, RunInspectView, RunStartOutcome } from '@threadline/shared';
 import type { GraphStore } from '../storage/graph.js';
@@ -96,6 +97,35 @@ export interface ExecutionSurface {
 /**
  * SQL-to-graph delivery, admission and projection, as one composed surface.
  */
+/**
+ * Reads tool executions that are still running or unknown.
+ *
+ * A running or unknown effect is carried into every checkpoint unchanged. It is
+ * never cleared by a proposal and never resolved by assuming success.
+ */
+async function activeEffects(
+  db: SqlDatabase,
+  scope: { tenantId: string; projectId: string; taskId: string; agentSessionId?: string | null },
+  operationId?: string,
+): Promise<{ execution_id: string; status: 'running' | 'unknown'; source_id: string }[]> {
+  const rows = await db.withTenantTransaction(scope.tenantId, (tx) =>
+    tx.rows<{ id: string; status: string; capture_event_id: string }>(
+      `SELECT e.id,e.status,e.input_artifact_id AS capture_event_id
+         FROM threadline.tool_executions e JOIN threadline.agent_sessions s
+           ON s.tenant_id=e.tenant_id AND s.id=e.agent_session_id
+        WHERE e.tenant_id=$1 AND e.project_id=$2 AND s.task_graph_id=$3
+          AND e.status IN ('running','unknown') AND ($4::uuid IS NULL OR e.id<>$4::uuid)
+        ORDER BY e.started_at ASC`,
+      [scope.tenantId, scope.projectId, scope.taskId, operationId ?? null],
+    ),
+  );
+  return rows.map((row) => ({
+    execution_id: row.id,
+    status: row.status === 'running' ? ('running' as const) : ('unknown' as const),
+    source_id: row.capture_event_id,
+  }));
+}
+
 export interface GraphProjectionSurface {
   readonly admitter: GraphAdmitter;
   readonly projection: ProjectionService;
@@ -143,6 +173,14 @@ export interface ApplicationServices {
    * permission and availability rules that run are the ones that were proven.
    */
   sources(): SourceService | null;
+  /**
+   * The checkpoint service, or `null` before storage is ready.
+   *
+   * One authority for both the model tools and any HTTP route, so there is a
+   * single implementation of the merge, revision and publication rules rather
+   * than a route-shaped variant of them.
+   */
+  checkpoints(): CheckpointService | null;
   /**
    * The typed `ReplayService`, or `null` before storage is ready.
    *
@@ -218,6 +256,7 @@ export function createApplicationServices(deps: ServiceDeps): ApplicationService
   let journal: ModelRequestJournal | null = null;
   let capture: CaptureStore | null = null;
   let sources: SourceService | null = null;
+  let checkpointService: CheckpointService | null = null;
   let replayService: ReplayService | null = null;
   let graphSurface: GraphProjectionSurface | null = null;
   let execution: ExecutionSurface | null = null;
@@ -270,6 +309,55 @@ export function createApplicationServices(deps: ServiceDeps): ApplicationService
       }),
       reconcile: reconcileQuarantined,
     };
+    checkpointService = createCheckpointService({
+      db: deps.db,
+      artifacts,
+      graphs: deps.graphs,
+      clock: deps.clock,
+      // Trusted authority is resolved here, once, so neither a model nor a route
+      // can supply a task, run, session, revision or Source identity.
+      authorityFor: async (scope, operationId, db = deps.db) => {
+        const rows = await db.withTenantTransaction(scope.tenantId, tx => tx.rows<{
+          graph_key: string; graph_epoch:string; task_graph_id: string; run_id: string; session_id: string;
+        }>(`SELECT pj.graph_key,pj.graph_epoch,s.task_graph_id,s.run_id,s.id AS session_id
+            FROM threadline.agent_sessions s
+            JOIN threadline.projects pj ON pj.tenant_id=s.tenant_id AND pj.id=s.project_id
+            JOIN threadline.runs r ON r.tenant_id=s.tenant_id AND r.id=s.run_id AND r.project_id=s.project_id
+            JOIN threadline.project_memberships pm ON pm.tenant_id=s.tenant_id AND pm.project_id=s.project_id
+              AND pm.user_id=$4 AND pm.status='active'
+            JOIN threadline.tenant_memberships tm ON tm.tenant_id=s.tenant_id AND tm.user_id=$4 AND tm.status='active'
+            JOIN threadline.users u ON u.id=$4 AND u.status='active'
+            WHERE s.tenant_id=$1 AND s.project_id=$2 AND s.task_graph_id=$3 AND r.initiated_by=$4
+              AND ($5::uuid IS NULL OR s.run_id=$5) AND ($6::uuid IS NULL OR s.id=$6)
+              AND s.run_id=(SELECT recent.run_id FROM threadline.agent_sessions recent
+                WHERE recent.tenant_id=s.tenant_id AND recent.project_id=s.project_id AND recent.task_graph_id=s.task_graph_id
+                ORDER BY recent.created_at DESC,recent.id LIMIT 1)
+            ORDER BY s.created_at DESC LIMIT 1`,
+          [scope.tenantId,scope.projectId,scope.taskId,scope.userId,scope.runId ?? null,scope.agentSessionId ?? null]));
+        const row=rows[0];
+        if (!row) return {ok:false,reason:'No authorized run binding exists.'};
+        const task = await deps.graphs.graph(row.graph_key).roQuery<{
+          requirement_revision:number; current_revision:number; graph_epoch:string; fence:number;
+        }>(`MATCH (p:ProjectRoot {id:$project_id}), (t:Task {id:$task_id})-[:CURRENT_STATE]->(s:TaskState)
+            MATCH (p)-[:HAS_RUN]->(r:Run {id:$run_id}), (a:AgentSession {sql_id:$session_id,run_id:$run_id})
+            WHERE p.graph_epoch=$graph_epoch AND s.revision=t.current_revision AND s.status=t.current_status
+              AND (t.current_status<>'running' OR t.owner_session_id=a.id)
+            RETURN t.requirement_revision AS requirement_revision,t.current_revision AS current_revision,
+              p.graph_epoch AS graph_epoch,coalesce(t.fence,0) AS fence`,
+          {params:{project_id:scope.projectId,task_id:row.task_graph_id,graph_epoch:row.graph_epoch,run_id:row.run_id,session_id:row.session_id}});
+        const authority=task.data?.[0];
+        if (task.data?.length!==1 || !authority?.graph_epoch)
+          throw new ThreadlineError('authority_unavailable','The task has no unique current graph authority.');
+        return {ok:true,authority:{taskId:row.task_graph_id,runId:row.run_id,
+          graphEpoch:authority.graph_epoch,requirementRevision:String(authority.requirement_revision),
+          taskRevision:String(authority.current_revision),fence:authority.fence,
+          candidateDigest:null,environmentDigest:null,producerSessionId:row.session_id,
+          producerKind:'service' as const,visibility:'project' as const},
+          unresolvedEffects:await activeEffects(db,{...scope,agentSessionId:row.session_id},operationId),
+          episodeSourceIds:[],pendingQuestionId:null};
+      },
+      logger,
+    });
     journal = new ModelRequestJournal({
       db: deps.db,
       artifacts,
@@ -346,7 +434,19 @@ export function createApplicationServices(deps: ServiceDeps): ApplicationService
 
     startCapture(tenantId) {
       if (!graphSurface) throw new ThreadlineError('storage_unavailable', 'Capture graph is unavailable.');
-      worker ??= createCaptureWorker({ db: deps.db, tenantId, graph: graphSurface, clock: deps.clock, logger });
+      worker ??= createCaptureWorker({ db: deps.db, tenantId, graph: graphSurface, clock: deps.clock, logger,
+        afterDrain: async () => {
+          const scopes=await deps.db.withTenantTransaction(tenantId,tx=>tx.rows<{
+            project_id:string;task_graph_id:string;initiated_by:string;run_id:string;session_id:string;
+          }>(`SELECT DISTINCT ON (s.project_id,s.task_graph_id) s.project_id,s.task_graph_id,r.initiated_by,s.run_id,s.id AS session_id
+              FROM threadline.agent_sessions s JOIN threadline.runs r ON r.tenant_id=s.tenant_id AND r.id=s.run_id
+              WHERE s.tenant_id=$1 ORDER BY s.project_id,s.task_graph_id,s.created_at DESC LIMIT 100`,[tenantId]));
+          for(const scope of scopes) {
+            try { await checkpointService?.evaluateTrigger({tenantId,projectId:scope.project_id,taskId:scope.task_graph_id,
+              userId:scope.initiated_by,runId:scope.run_id,agentSessionId:scope.session_id},'uncheckpointed_fallback'); }
+            catch { logger.log({level:'warn',message:'Checkpoint reconciliation remains pending.'}); }
+          }
+        } });
       worker.start();
     },
     async flushCapture() { if (!worker) throw new ThreadlineError('storage_unavailable', 'Capture worker is unavailable.'); await worker.runOnce(); },
@@ -400,6 +500,10 @@ export function createApplicationServices(deps: ServiceDeps): ApplicationService
 
     sources(): SourceService | null {
       return sources;
+    },
+
+    checkpoints(): CheckpointService | null {
+      return checkpointService;
     },
 
     replay(): ReplayService | null {

@@ -2,7 +2,7 @@
 
 **Controlling MVP draft — 15 October 2026. Two full-time contributors; deadline unknown. All behavior below is proposed until its acceptance gate passes.** This document supersedes broader release commitments in the architecture references. Historical investigations remain evidence, not a backlog to implement.
 
-**Implementation status — 16 October 2026:** M00–M02 are merged; [M03 capture/source/replay](../../docs/m03-development.md) is locally integrated and verified. The [master checklist](track2-implementation-checklist.md) and dated evidence govern shipped behavior; M04 onward remain proposed.
+**Implementation status — 17 October 2026:** M00–M03 are merged; [M04 checkpoints and tactical state](review/m04-integration-verification.md) are locally integrated and verified. The [master checklist](track2-implementation-checklist.md) and dated evidence govern implemented behavior; M05 onward, including the new human command gates, remain proposed.
 
 ## 1. Product promise and release boundary
 
@@ -19,13 +19,17 @@ Exclude RLM, automatic model summaries, a second model Verifier, investigator sp
 
 ## 2. Frozen contracts and unresolved prerequisites
 
-The implementation inputs are [fixture manifest](contracts/fixture-manifest.json), [development policy](contracts/development-profile.json), [checkpoint schema](contracts/memory-checkpoint.schema.json) and [episode schema](contracts/memory-episode.schema.json). These are design artifacts, not implemented validators or passing experiments. Domain names are defined in [CONTEXT.md](../../CONTEXT.md).
+The implementation inputs are [fixture manifest](contracts/fixture-manifest.json), [development policy](contracts/development-profile.json), [checkpoint schema](contracts/memory-checkpoint.schema.json) and [episode schema](contracts/memory-episode.schema.json). M04 now validates checkpoint and episode records at runtime; see [executed integration evidence](review/m04-integration-verification.md). Other policy and lifecycle fields remain targets until their milestones execute. Domain names are defined in [CONTEXT.md](../../CONTEXT.md).
 
 The fixture fixes CSV formatting, UTC normalization, freshness, invalid-input handling and exact expected outputs. The reference clock is fixed; changing freshness from 600 to 60 seconds is an explicit human-accepted requirement revision. Free-text changes remain pending until normalized and accepted. The agent cannot silently alter acceptance criteria.
 
 The [code-first checklist](track2-implementation-checklist.md) starts with a runnable backend/TUI, creates the authored candidate alongside read-only model tools, and implements protected assertions later. The verification milestone hashes the declared seed, protected cases, launcher and environment. The seed's timestamp-format defect is authored and disclosed; observe its real protected-check failure before the checked repair demonstration, rather than requiring the model to invent a mistake. A generic repaired exporter may already satisfy the changed threshold. Its old receipt still becomes stale; a new code diff is not required.
 
 Exact Node patch, database/container digests, lockfile, model identifier and effective model context limits remain unfilled compatibility/release values. Install dependencies normally while scaffolding and retain the generated lockfile; no separate lockfile/checker project blocks initial code. Select and test compatible values as their runtime paths are implemented, and freeze actual release versions at packaging. Neither an API account nor a subscription proves a route works. Doctor verifies configuration without automatically spending money; an explicitly initiated development run verifies the selected paid route. API credentials stay in the coordinator environment and are removed from command environments. No application certificate or Threadline OAuth flow is required for this BYOK route. Future subscription routes must use documented official runtime integrations, subject to their own evidence and tests.
+
+## Incremental command delivery
+
+The [terminal command and UI contract](track2-terminal-command-contract.md) controls human-facing commands and interaction. Backend operations and CLI/TUI controls ship together: M05 discovery/model/context/checkpoint controls, M06 stop/pause/diff/logs, M07 change/answer/new/resume, M08 protected verification/completion, M09 procedure evidence. M10 consolidates these working flows; it is not the first command implementation gate. Agent A publishes typed capability/operation contracts; Agent B binds registry, completion and views. Exact new task IDs are in the master and lane checklists. This adds prospective work without reopening M04 acceptance or introducing summarization/OAuth scope.
 
 ## 3. Small module boundaries and ownership
 

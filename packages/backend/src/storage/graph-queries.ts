@@ -172,10 +172,11 @@ SET a.lease_expires_ms=$lease_expires_ms
 RETURN t.current_revision AS revision,t.fence AS fence
 `;
 
-export const RELEASE_CLAIM_CYPHER = String.raw`
+function releaseClaimQuery(preserveCheckpoint:boolean):string { return String.raw`
 MATCH (p:ProjectRoot {id:$project_id})
 MATCH (t:Entity:Task {id:$task_id})-[old:CURRENT_STATE]->(s:Entity:TaskState)
 MATCH (a:AgentSession {sql_id:$session_id,run_id:$run_id}), (r:Run {id:$run_id})
+${preserveCheckpoint?'MATCH (checkpoint:Source {id:$checkpoint_source_id})':''}
 WHERE p.graph_epoch = $graph_epoch AND t.owner_session_id = $session_id
   AND t.fence = $fence AND t.current_status = 'running'
   AND s.revision = t.current_revision AND s.fence = $fence
@@ -186,12 +187,17 @@ SET a.status='stopped', r.status='completed', r.reserved_slots=0, t.current_stat
     t.owner_session_id = CASE WHEN $new_status = 'ready' THEN null ELSE $session_id END
 DELETE old
 CREATE (t)-[:CURRENT_STATE {id:$state_edge_id, schema_version:1, created_at_ms:$now_ms, producer_id:$session_id}]->
- (:Entity:TaskState {id:$state_id, schema_version:1, created_at_ms:$now_ms, producer_id:$session_id,
+ (next:Entity:TaskState {id:$state_id, schema_version:1, created_at_ms:$now_ms, producer_id:$session_id,
    visibility:'project', task_id:$task_id, revision:t.current_revision, status:$new_status,
    owner_session_id:t.owner_session_id, fence:t.fence, lease_expires_ms:$lease_expires_ms,
-   requirement_revision:t.requirement_revision, unresolved_effects:false})
+   requirement_revision:t.requirement_revision, unresolved_effects:false,
+   checkpoint_source_id:s.checkpoint_source_id,checkpoint_revision:s.checkpoint_revision})
+${preserveCheckpoint?', (next)-[:CHECKPOINT_SOURCE {id:$checkpoint_edge_id,schema_version:1,created_at_ms:$now_ms,producer_id:$session_id}]->(checkpoint)':''}
 RETURN t.current_revision AS revision, t.fence AS fence
 `;
+}
+export const RELEASE_CLAIM_CYPHER=releaseClaimQuery(false);
+export const RELEASE_CHECKPOINTED_CLAIM_CYPHER=releaseClaimQuery(true);
 
 /**
  * Current release authority for one worker turn.
@@ -211,7 +217,7 @@ MATCH (t:Entity:Task {id:$task_id})
 WHERE p.graph_epoch = $graph_epoch
   AND t.owner_session_id = $session_id
   AND t.fence = $fence
-  AND t.current_revision = $revision
+  AND t.current_revision >= $revision
   AND t.requirement_revision = $requirement_revision
   AND t.current_status = 'running'
 // The M02 Run binding is the graph Run node plus the AgentSession that points

@@ -42,10 +42,11 @@ import {
   READ_REQUIRED_SOURCES_CYPHER,
   RENEW_CLAIM_CYPHER,
   RELEASE_CLAIM_CYPHER,
+  RELEASE_CHECKPOINTED_CLAIM_CYPHER,
 } from '../storage/graph-queries.js';
 import type { GraphStore } from '../storage/graph.js';
 import type { ModelRequestJournal } from '../storage/model-requests.js';
-import { withProjectAdmissionLock, type SqlDatabase } from '../storage/pg.js';
+import { withTaskCheckpointLock, withProjectAdmissionLock, type SqlDatabase } from '../storage/pg.js';
 import { requireProjectMembership } from '../storage/identity.js';
 import type { AuthenticatedPrincipal, ProjectScope } from './services.js';
 
@@ -1115,6 +1116,7 @@ function createTurnGuard(input: {
         { reason: 'release_authority_lost' },
       );
     }
+    liveRevision = row.revision; // Checkpoint-only states retain the same owner, fence and requirement.
     if (row.run_id !== scope.runId) {
       throw new ThreadlineError('authority_conflict', 'The task is bound to a different run.', {
         reason: 'run_binding_changed',
@@ -1510,8 +1512,13 @@ function createTurnGuard(input: {
     },
 
     async releaseClaim(): Promise<void> {
+      await withTaskCheckpointLock(db,scope.tenantId,scope.projectId,scope.taskId,async(db)=>{
       const graph = graphs.graph(await currentGraphKey(db, scope));
-      await graph.query(RELEASE_CLAIM_CYPHER, {
+      const checkpoint=await graph.roQuery<{source_id:string}>(
+        'MATCH (t:Task {id:$id}) WHERE t.checkpoint_source_id IS NOT NULL RETURN t.checkpoint_source_id AS source_id',
+        {params:{id:scope.taskId}});
+      const sourceId=checkpoint.data?.[0]?.source_id;
+      await graph.query(sourceId?RELEASE_CHECKPOINTED_CLAIM_CYPHER:RELEASE_CLAIM_CYPHER, {
         params: {
           run_id: scope.runId,
           project_id: scope.projectId,
@@ -1522,6 +1529,7 @@ function createTurnGuard(input: {
           now_ms: clock().getTime(), lease_expires_ms: clock().getTime(),
           state_id: randomUUID(), state_edge_id: randomUUID(),
           new_status: 'ready',
+          checkpoint_source_id:sourceId??'',checkpoint_edge_id:randomUUID(),
         },
       });
       await db.withTenantTransaction(scope.tenantId, (tx) =>
@@ -1531,6 +1539,7 @@ function createTurnGuard(input: {
           [clock(), scope.tenantId, scope.projectId, scope.sessionId],
         ),
       );
+      }, 'release');
     },
   };
 }
