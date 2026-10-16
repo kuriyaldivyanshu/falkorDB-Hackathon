@@ -523,7 +523,7 @@ const patchSchema = {
     required: ['stepId','text','status'], additionalProperties: false },
 } as const;
 
-const baseRevisionSchema = { type: 'string', pattern: '^[0-9]+$', maxLength: 24 } as const;
+const baseRevisionSchema = { type: ['string', 'null'], pattern: '^[0-9]+$', maxLength: 24 } as const;
 
 /**
  * The three M04 tools, advertised alongside the four M03 tools for a total of

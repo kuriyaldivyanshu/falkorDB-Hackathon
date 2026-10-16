@@ -89,6 +89,7 @@ export interface ArtifactWriterDeps {
 }
 
 export interface ArtifactWriter {
+  withDatabase(db: SqlDatabase): ArtifactWriter;
   publish(params: WriteArtifactParams): Promise<ArtifactRow>;
   /** Reads the exact bytes back and verifies the digest before returning them. */
   read(tenantId: string, projectId: string, artifactId: string): Promise<Buffer>;
@@ -144,6 +145,7 @@ export function createArtifactWriter(deps: ArtifactWriterDeps): ArtifactWriter {
 
   return {
     root,
+    withDatabase(db) { return createArtifactWriter({ ...deps, db }); },
 
     async publish(params: WriteArtifactParams): Promise<ArtifactRow> {
       if (params.bytes.byteLength === 0) {

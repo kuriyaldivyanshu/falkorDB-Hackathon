@@ -1,3 +1,4 @@
+import { unlink } from 'node:fs/promises';
 import { EXIT_FAILURE, EXIT_OK, type LineSink } from '../one-shot.js';
 import { describeCause } from '../transport/errors.js';
 import { ThreadlineError } from '@threadline/shared';
@@ -99,6 +100,10 @@ export async function checkpointWriteCommand(
       },
       ...(invocation.checkpointBaseRevision === null ? {} : { baseRevision: invocation.checkpointBaseRevision }),
     });
+    if (result.state === 'committed' || (result.state === 'rejected' && result.rejection?.kind !== 'payload_conflict')) {
+      try { await unlink(invocation.requestRecordPath); }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+    }
     for (const line of formatCheckpointResult(result)) out(line);
     // A record is only retired once the submission reached a terminal answer.
     if (result.state === 'rejected' && result.rejection?.kind === 'payload_conflict') {
@@ -152,6 +157,10 @@ export async function planUpdateCommand(
       })),
       ...(invocation.checkpointBaseRevision === null ? {} : { baseRevision: invocation.checkpointBaseRevision }),
     });
+    if (result.state === 'committed' || (result.state === 'rejected' && result.rejection?.kind !== 'payload_conflict')) {
+      try { await unlink(invocation.requestRecordPath); }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+    }
     for (const line of formatCheckpointResult(result)) out(line);
     return result.state === 'committed' ? EXIT_OK : EXIT_FAILURE;
   } catch (error) {

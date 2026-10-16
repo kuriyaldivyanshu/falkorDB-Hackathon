@@ -1512,7 +1512,7 @@ function createTurnGuard(input: {
     },
 
     async releaseClaim(): Promise<void> {
-      await withTaskCheckpointLock(db,scope.tenantId,scope.projectId,scope.taskId,async()=>{
+      await withTaskCheckpointLock(db,scope.tenantId,scope.projectId,scope.taskId,async(db)=>{
       const graph = graphs.graph(await currentGraphKey(db, scope));
       const checkpoint=await graph.roQuery<{source_id:string}>(
         'MATCH (t:Task {id:$id}) WHERE t.checkpoint_source_id IS NOT NULL RETURN t.checkpoint_source_id AS source_id',
@@ -1539,7 +1539,7 @@ function createTurnGuard(input: {
           [clock(), scope.tenantId, scope.projectId, scope.sessionId],
         ),
       );
-      });
+      }, 'release');
     },
   };
 }

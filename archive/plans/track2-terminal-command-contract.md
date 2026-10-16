@@ -1,6 +1,6 @@
 # Threadline incremental terminal command and UI contract
 
-Updated 17 October 2026. **Proposed implementation work from M05 onward.** This closes the missing command-surface specification; it does not claim the commands below already work. Existing M00–M04 acceptance remains historical evidence. Backend capability, CLI parity and TUI interaction must ship together in the owning milestone. M10 consolidates the interface rather than introducing core actions for the first time.
+Updated 16 October 2026. **Proposed implementation work from M05 onward.** This closes the missing command-surface specification; it does not claim the commands below already work. Existing M00–M04 acceptance remains historical evidence. Backend capability, CLI parity and TUI interaction must ship together in the owning milestone. M10 consolidates the interface rather than introducing core actions for the first time.
 
 ## 1. Scope and ownership
 
@@ -83,7 +83,7 @@ Use small searchable model/session pickers and forms for checkpoint/plan/change/
 
 ## 6. What to reuse from archived Pi
 
-Inspected local archive on 17 October 2026; no claim about the latest upstream release:
+Local archive inspection planned for 17 October 2026; no claim about the latest upstream release:
 
 - [Pi built-in catalog](../pi-main/packages/coding-agent/src/core/slash-commands.ts): reuse the small name/description/argument-hint pattern and a single source for discovery. Adapt to typed capability IDs and handlers. Pi's catalog is a useful short reference; avoid copying its entire interactive controller.
 - [Pi interactive mode](../pi-main/packages/coding-agent/src/modes/interactive/interactive-mode.ts): inspect `createBaseAutocompleteProvider` and `setupEditorSubmitHandler` for completion/selection flow. Threadline should use registry dispatch rather than reproduce its large command if-chain or extension machinery.

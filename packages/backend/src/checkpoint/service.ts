@@ -17,7 +17,7 @@ import { publishCheckpointGraph } from './graph.js';
 
 export interface CheckpointServiceDeps {
   db:SqlDatabase; artifacts:ArtifactWriter; graphs:GraphStore; clock:()=>Date;
-  authorityFor:(scope:CheckpointScope)=>Promise<{ok:true;authority:AuthorityFacts;
+  authorityFor:(scope:CheckpointScope,operationId?:string,db?:SqlDatabase)=>Promise<{ok:true;authority:AuthorityFacts;
     unresolvedEffects:CheckpointManifest['unresolved_effects'];episodeSourceIds:readonly string[];
     pendingQuestionId:string|null}|{ok:false;reason:string}>;
   logger?:{log:(r:{level:'info'|'warn'|'error';message:string;fields?:Record<string,string|number|boolean>})=>void};
@@ -26,11 +26,12 @@ interface TailRow {agent_session_id:string;capture_seq:string;kind:string;payloa
   raw_artifact_id:string|null;output_artifact_id:string|null;input_artifact_id:string|null;status:string|null;tool_name:string|null;exit_code:number|null;candidate_digest:string|null;}
 
 /** One service for HTTP, model tools and deterministic restart/trigger processing. */
-export function createCheckpointService(deps:CheckpointServiceDeps) {
+export function createCheckpointService(deps:CheckpointServiceDeps, lockHeld=false) {
+  const lockedService=(db:SqlDatabase)=>createCheckpointService({...deps,db,artifacts:deps.artifacts.withDatabase(db)},true);
   const store=createCheckpointStore(deps);
-  const authorize=async(scope:CheckpointScope)=>{
+  const authorize=async(scope:CheckpointScope,operationId?:string)=>{
     await requireActiveMember(deps.db,scope.tenantId,scope.projectId,scope.userId);
-    return deps.authorityFor(scope);
+    return deps.authorityFor(scope,operationId,deps.db);
   };
   const keyFor=async(scope:CheckpointScope)=>{
     const p=await deps.db.withTenantTransaction(scope.tenantId,tx=>tx.rows<{graph_key:string}>(
@@ -116,12 +117,14 @@ export function createCheckpointService(deps:CheckpointServiceDeps) {
     planPatch:(s.planPatch??[]).map(p=>({step_id:p.step_id,text:p.text??null,status:p.status??null})),
     pendingQuestionId:s.pendingQuestionId??null,baseRevision:s.baseRevision??null});
 
-  const submit=async(scope:CheckpointScope,submission:CheckpointSubmission,automatic=false,lockHeld=false):Promise<CheckpointResult>=>{
+  const submit=async(scope:CheckpointScope,submission:CheckpointSubmission,automatic=false):Promise<CheckpointResult>=>{
+    if(!lockHeld)return withTaskCheckpointLock(deps.db,scope.tenantId,scope.projectId,scope.taskId,
+      db=>lockedService(db).submit(scope,submission,automatic));
     await requireActiveMember(deps.db,scope.tenantId,scope.projectId,scope.userId);
     const operationId=submission.operationId;
     if(!isUuid(operationId))return {state:'rejected',operationId,rejection:{kind:'invalid',field:'operationId',reason:'A stable UUID is required.'}};
     const work=async():Promise<CheckpointResult>=>{
-      let resolved=await authorize(scope);
+      let resolved=await authorize(scope,operationId);
       if(!resolved.ok)return {state:'rejected',operationId,rejection:{kind:scope.runId?'unauthorized':'awaiting_run_binding',
         ...(scope.runId?{reason:resolved.reason}:{taskId:scope.taskId})} as CheckpointResult['rejection']};
       scope={...scope,runId:resolved.authority.runId,agentSessionId:resolved.authority.producerSessionId};
@@ -136,7 +139,7 @@ export function createCheckpointService(deps:CheckpointServiceDeps) {
       const pending=rows.find(r=>!r.graph_committed_at&&r.publication_state!=='rejected');
       if(pending){const reconciled=await publish(scope,pending,resolved.authority);
         if(reconciled.state!=='committed'&&reconciled.state!=='rejected')return {...reconciled,operationId,previous};
-        resolved=await authorize(scope);if(!resolved.ok)throw new ThreadlineError('unauthorized',resolved.reason);}
+        resolved=await authorize(scope,operationId);if(!resolved.ok)throw new ThreadlineError('unauthorized',resolved.reason);}
       const pointer=await store.currentPointer(scope);const revision=pointer?.checkpointRevision??'0';
       let base:string|undefined;
       try{base=safeExpectedRevision(submission.baseRevision);}catch{return {state:'rejected',operationId,
@@ -195,7 +198,7 @@ export function createCheckpointService(deps:CheckpointServiceDeps) {
       const row=await store.stage(scope,manifest,operationId,fingerprint(submission),String(BigInt(rows[0]?.revision??'0')+1n));
       return publish(scope,row,resolved.authority);
     };
-    return lockHeld?work():withTaskCheckpointLock(deps.db,scope.tenantId,scope.projectId,scope.taskId,work);
+    return work();
   };
   const stateFor=async(scope:CheckpointScope,batchSize=RECOVERY_BATCH_EVENTS):Promise<{view:TacticalStateView;tail:TailRow[]}>=>{
     const resolved=await authorize(scope);
@@ -222,7 +225,8 @@ export function createCheckpointService(deps:CheckpointServiceDeps) {
   };
   const inspect=async(scope:CheckpointScope):Promise<TacticalStateView>=>(await stateFor(scope)).view;
   const evaluateTrigger=async(scope:CheckpointScope,trigger:CheckpointTrigger):Promise<CheckpointResult|null>=>{
-    return withTaskCheckpointLock(deps.db,scope.tenantId,scope.projectId,scope.taskId,async()=>{
+    if(!lockHeld)return withTaskCheckpointLock(deps.db,scope.tenantId,scope.projectId,scope.taskId,
+      db=>lockedService(db).evaluateTrigger(scope,trigger));
     const resolved=await authorize(scope);if(!resolved.ok)return null;
     const manifest=await store.currentManifest(scope);const tail=await loadTail(scope,manifest);
     const pending=(await store.rows(scope)).find(r=>!r.graph_committed_at&&r.publication_state!=='rejected');
@@ -241,8 +245,7 @@ export function createCheckpointService(deps:CheckpointServiceDeps) {
     const token=createHash('sha256').update(JSON.stringify([scope.taskId,trigger,resolved.authority.requirementRevision,
       [...(await store.frontiers(scope))].map(([id,f])=>[id,f.admittedThrough])])).digest('hex');
     const operationId=`${token.slice(0,8)}-${token.slice(8,12)}-4${token.slice(13,16)}-8${token.slice(17,20)}-${token.slice(20,32)}`;
-    return submit(scope,{operationId},true,true);
-    });
+    return submit(scope,{operationId},true);
   };
   const recover:CheckpointService['recover']=async(scope,options)=>{
     if(options?.limit!==undefined&&(!Number.isInteger(options.limit)||options.limit<1||options.limit>RECOVERY_MAX_EVENTS))

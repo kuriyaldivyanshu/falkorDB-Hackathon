@@ -37,6 +37,8 @@ export interface SqlDatabase {
   withTenantTransaction<TResult>(tenantId: string, work: (tx: TxClient) => Promise<TResult>): Promise<TResult>;
   /** Runs `work` inside one transaction without a tenant fence. */
   withTransaction<TResult>(work: (tx: TxClient) => Promise<TResult>): Promise<TResult>;
+  /** Pins SQL operations to one connection for the duration of work. */
+  withConnection<TResult>(work: (db: SqlDatabase) => Promise<TResult>): Promise<TResult>;
   /** Cheap liveness probe. Throws `storage_unavailable` when unreachable. */
   ping(): Promise<void>;
   close(): Promise<void>;
@@ -110,9 +112,10 @@ export function createSqlDatabase(deps: SqlDatabaseDeps): SqlDatabase {
   const withTransaction = async <TResult>(
     work: (tx: TxClient) => Promise<TResult>,
     tenantId?: string,
+    connection?: PoolClient,
   ): Promise<TResult> => {
     assertOpen(closed);
-    const client = await acquire(pool);
+    const client = connection ?? await acquire(pool);
     let discard = false;
     try {
       await client.query('BEGIN');
@@ -141,14 +144,45 @@ export function createSqlDatabase(deps: SqlDatabaseDeps): SqlDatabase {
         ? error
         : toStorageError(error, 'postgres_transaction');
     } finally {
-      client.release(discard);
+      if (!connection) client.release(discard);
     }
   };
 
-  return {
+  const database: SqlDatabase = {
     query: run,
     withTenantTransaction: (tenantId, work) => withTransaction(work, tenantId),
     withTransaction: (work) => withTransaction(work),
+
+    async withConnection(work) {
+      assertOpen(closed);
+      const client = await acquire(pool);
+      let released = false;
+      const scoped: SqlDatabase = {
+        ...database,
+        async query(text, values = []) {
+          assertOpen(closed || released);
+          try { return (await client.query(text, values as unknown[])).rows; }
+          catch (error) { throw toStorageError(error, 'postgres_query'); }
+        },
+        withTenantTransaction(tenantId, work) {
+          assertOpen(closed || released);
+          return withTransaction(work, tenantId, client);
+        },
+        withTransaction(work) {
+          assertOpen(closed || released);
+          return withTransaction(work, undefined, client);
+        },
+        async withConnection(work) { assertOpen(closed || released); return work(scoped); },
+        async ping() { await scoped.query('SELECT 1'); },
+        async close() { throw new ThreadlineError('internal_error', 'Cannot close a reserved connection.'); },
+      };
+      try { return await work(scoped); }
+      finally {
+        released = true;
+        // Discard releases session locks even after a failed SQL acknowledgement.
+        client.release(true);
+      }
+    },
 
     async ping(): Promise<void> {
       assertOpen(closed);
@@ -171,6 +205,7 @@ export function createSqlDatabase(deps: SqlDatabaseDeps): SqlDatabase {
       return closed;
     },
   };
+  return database;
 }
 
 async function acquire(pool: Pool): Promise<PoolClient> {
@@ -276,26 +311,27 @@ export function projectAdmissionLockKey(tenantId: string, projectId: string): st
 }
 
 /**
- * Serializes one task's checkpoint read/merge/revision allocation/publication.
- *
- * Taken as a transaction-scoped advisory lock keyed on the task, so two
- * concurrent patches cannot both read the same current revision and each stage
- * a replacement that overwrites the other. The lock is transaction-scoped, so a
- * failure releases it and no connection is stranded.
+ * Serializes checkpoint publication and claim release on one reserved connection.
+ * A session lock survives the short SQL transactions: staging must commit before
+ * graph publication so a lost graph acknowledgement can still be reconciled.
+ * Every SQL-backed dependency in work must use the supplied database.
  */
 export async function withTaskCheckpointLock<TResult>(
   db: SqlDatabase,
   tenantId: string,
   projectId: string,
   taskId: string,
-  work: (tx: TxClient) => Promise<TResult>,
+  work: (db: SqlDatabase) => Promise<TResult>,
+  policy: 'checkpoint' | 'release' = 'checkpoint',
 ): Promise<TResult> {
-  return db.withTenantTransaction(tenantId, async (tx) => {
-    await tx.rows("SET LOCAL lock_timeout = '2s'");
-    await tx.rows('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [
-      `threadline:task-checkpoint:${tenantId}:${projectId}:${taskId}`,
-    ]);
-    return work(tx);
+  return db.withConnection(async (connection) => {
+    await connection.withTenantTransaction(tenantId, async (tx) => {
+      await tx.rows(policy === 'release' ? "SET LOCAL lock_timeout = '0'" : "SET LOCAL lock_timeout = '2s'");
+      await tx.rows('SELECT pg_advisory_lock(hashtextextended($1, 0))', [
+        `threadline:task-checkpoint:${tenantId}:${projectId}:${taskId}`,
+      ]);
+    });
+    return work(connection);
   });
 }
 

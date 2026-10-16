@@ -106,6 +106,7 @@ export interface ExecutionSurface {
 async function activeEffects(
   db: SqlDatabase,
   scope: { tenantId: string; projectId: string; taskId: string; agentSessionId?: string | null },
+  operationId?: string,
 ): Promise<{ execution_id: string; status: 'running' | 'unknown'; source_id: string }[]> {
   const rows = await db.withTenantTransaction(scope.tenantId, (tx) =>
     tx.rows<{ id: string; status: string; capture_event_id: string }>(
@@ -113,8 +114,9 @@ async function activeEffects(
          FROM threadline.tool_executions e JOIN threadline.agent_sessions s
            ON s.tenant_id=e.tenant_id AND s.id=e.agent_session_id
         WHERE e.tenant_id=$1 AND e.project_id=$2 AND s.task_graph_id=$3
-          AND e.status IN ('running','unknown') ORDER BY e.started_at ASC`,
-      [scope.tenantId, scope.projectId, scope.taskId],
+          AND e.status IN ('running','unknown') AND ($4::uuid IS NULL OR e.id<>$4::uuid)
+        ORDER BY e.started_at ASC`,
+      [scope.tenantId, scope.projectId, scope.taskId, operationId ?? null],
     ),
   );
   return rows.map((row) => ({
@@ -314,8 +316,8 @@ export function createApplicationServices(deps: ServiceDeps): ApplicationService
       clock: deps.clock,
       // Trusted authority is resolved here, once, so neither a model nor a route
       // can supply a task, run, session, revision or Source identity.
-      authorityFor: async (scope) => {
-        const rows = await deps.db.withTenantTransaction(scope.tenantId, tx => tx.rows<{
+      authorityFor: async (scope, operationId, db = deps.db) => {
+        const rows = await db.withTenantTransaction(scope.tenantId, tx => tx.rows<{
           graph_key: string; graph_epoch:string; task_graph_id: string; run_id: string; session_id: string;
         }>(`SELECT pj.graph_key,pj.graph_epoch,s.task_graph_id,s.run_id,s.id AS session_id
             FROM threadline.agent_sessions s
@@ -351,7 +353,7 @@ export function createApplicationServices(deps: ServiceDeps): ApplicationService
           taskRevision:String(authority.current_revision),fence:authority.fence,
           candidateDigest:null,environmentDigest:null,producerSessionId:row.session_id,
           producerKind:'service' as const,visibility:'project' as const},
-          unresolvedEffects:await activeEffects(deps.db,{...scope,agentSessionId:row.session_id}),
+          unresolvedEffects:await activeEffects(db,{...scope,agentSessionId:row.session_id},operationId),
           episodeSourceIds:[],pendingQuestionId:null};
       },
       logger,
