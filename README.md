@@ -6,7 +6,7 @@ Coding agents lose useful context between sessions: a requirement changed, a pre
 
 Threadline is being built as a local npm package for **FalkorDB Track 2: Agent Memory and Coordination**. It connects to an existing coding agent, records permitted evidence, and supplies a small, current, source-backed memory packet when the agent needs it.
 
-> **Development status:** the repository is migrating to this product. The storage foundation (SQL catalog, restricted-role row-level security, immutable source files), the source-backed graph admission worker and semantic memory (task creation, sourced proposals, explicit human acceptance, corrections and task requirements, with current-memory reads) are verified against local PostgreSQL and FalkorDB. Observed episodes, reusable procedures, bounded context, coordination claims and native Codex integration are not yet implemented; capability output reports each of them as unavailable. The retired owned-execution code has been removed.
+> **Development status:** the repository is migrating to this product. The storage foundation (SQL catalog, restricted-role row-level security, immutable source files), the source-backed graph admission worker and semantic memory (task creation, sourced proposals, explicit human acceptance, corrections and task requirements, with current-memory reads) are verified against local PostgreSQL and FalkorDB. A human CLI and a project-bound, read-only stdio MCP server now expose that memory, and the Codex profile that starts the MCP server can be rendered as a preview. Observed episodes, reusable procedures, bounded context, native capture, session enrollment, model-written memory, coordination claims and handoffs are not yet implemented; capability output reports each of them as unavailable. The retired owned-execution code has been removed.
 
 ## What we are building
 
@@ -30,6 +30,14 @@ Codex owns the coding experience: authentication, model selection, reasoning, fi
 3. **Selected history import** reads explicitly chosen stored sessions through a qualified read-only interface.
 
 The intended MCP tools are `threadline_recall`, `threadline_source`, `threadline_record` and `threadline_handoff`. Native version, event coverage and session identity must pass qualification before those capabilities are advertised. Unqualified identity keeps model mutations unavailable.
+
+What is reachable today is the read-only half: `threadline mcp` serves
+`threadline_memory_query`, `threadline_memory_inspect`, `threadline_task_inspect`,
+`threadline_task_requirements`, `threadline_source_inspect` and a bounded
+`threadline_source_read`, bound to one explicitly configured project and
+credential. There is no proposal, acceptance, correction or requirement-binding
+tool; memory is changed by a human through the CLI. MCP tool-call identity is
+still unqualified, which is one reason writes stay human-only.
 
 Each simultaneous root agent uses its own project-bound enrollment. A coordination claim governs memory updates; it does not lock native files or stop another process from editing them.
 
@@ -135,7 +143,7 @@ npm run serve    # runs the loopback memory service
 npm run status   # prints health, component readiness and storage state using the local credential
 ```
 
-See [docs/local-development.md](docs/local-development.md) for configuration and the full command surface. The agent work sequence, current status and completion criteria are in [the development checklist](docs/development-checklist.md). Parallel assignments follow [the worktree and PR rulebook](docs/parallel-work-rulebook.md).
+See [docs/local-development.md](docs/local-development.md) for configuration and the full command surface, and [docs/cli-memory-and-mcp.md](docs/cli-memory-and-mcp.md) for one complete human memory workflow and the read-only MCP server. The agent work sequence, current status and completion criteria are in [the development checklist](docs/development-checklist.md). Parallel assignments follow [the worktree and PR rulebook](docs/parallel-work-rulebook.md).
 
 ## Hackathon demonstration
 

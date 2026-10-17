@@ -108,6 +108,313 @@ Run `npm run build`. Use focused temporary/manual checks outside the repository.
 
 Stop feature implementation at this checkpoint. Do not begin hooks, native capture, session enrollment, context preparation, model-written memory, coordination claims or handoffs in this worktree. Complete the rulebook's commit/push/PR gates and open one PR; use draft status if acceptance is incomplete. Update the result record with cleanup outcomes, implementation, dependency and version decisions, exact commands and results, limits and resources. The coordinator updates the shared checklist after integration; do not mark it independently.
 
-## Result record — owner fills during the assignment
+## Result record — filled by Agent B for b-mcp-read-02
 
-_Filled at the end of this assignment; see the record below the prompt._
+- **Status:** COMPLETE for this checkpoint. The human memory/task CLI, the
+  project-bound read-only stdio MCP server and the executable configuration
+  preview are implemented, verified against a real isolated baseline backend and
+  documented. Hooks, native capture, session enrollment, context preparation,
+  model-written memory, coordination claims and handoffs were not started and
+  stay unavailable. N03 is not complete.
+
+### Retirement of the previous assignment (delegated)
+
+All gates passed before cleanup; nothing unexplained was removed.
+
+- Merge containment: PR #9 head `fa91da80268abcb525495482ea51a8efc33d045f` is
+  an ancestor of `origin/main`, merged by `ff9787c` as a true merge (its second
+  parent is that head, not a squash). PR #10 head
+  `ac3ca865271cd59258b04977de46f26356847a2e` is likewise contained by `f1b168f`.
+- Worktree state: no staged, unstaged or untracked tracked-source changes and no
+  local commits ahead of `main`. The only ignored content was disposable
+  generated output (`node_modules`, three `dist/` trees, two `tsbuildinfo`
+  files).
+- Processes: `ps` found no process referencing the old assignment paths and no
+  owned probe still running.
+- Evidence: findings, digests and module results remain reviewable in tracked
+  `docs/native-integration-contract.md` and `assets/codex/compatibility.json`.
+  The three schema digests recorded in `compatibility.json` were recomputed from
+  the generated schema bundle and matched exactly (3 checked, 0 mismatches)
+  before the bundle was deleted.
+- Preserved before removal, into
+  `/tmp/threadline-b-mcp-read-02-checks/preserved-from-b-codex-qualification-01/`:
+  `verify-codex-modules.mjs`
+  (`sha256:62f73a672d05232e3a900d9de5ac74a6e5b9a0408075fe7f049fbb70a61f4121`),
+  `rendered-preview.json`
+  (`sha256:b2b0d16d7895a6af6c4b75aaec4a9fef0cbfbcf59ff3abebfcee3e66715076a9`)
+  and `rendered-profile-digest.txt`
+  (`sha256:7501dd2846ef9f8601d6382c141193a4d4f9beb3bd4a16932c33398ec69ed017`).
+  A token scan of the preserved preview found no token-like string.
+- Removed: the disposable probe root
+  `/tmp/threadline-b-codex-qualification-data-01` (an isolated `CODEX_HOME` with
+  no auth/token/credential/key file, generated schemas, authored probes and
+  logs), the disposable generated dependencies and build output in the old
+  worktree, and then the worktree itself with `git worktree remove` from the
+  coordinator checkout, **without** `--force`.
+- **Retained:** local branch `threadline/b-codex-qualification-01` and remote
+  branch `origin/threadline/b-codex-qualification-01`, both at `fa91da8`. Remote
+  deletion is a separate coordinator decision.
+
+### Baseline, branch and worktree
+
+- Resolved `origin/main` after fetching:
+  `f1b168f65fd5e0e44f3f78e290ed68e3038a3490` (merge of PR #10), equal to the
+  coordinator's local `main`, and clean.
+- Branch `threadline/b-mcp-read-02`, worktree `/tmp/threadline-b-mcp-read-02`
+  (canonical `/private/tmp/threadline-b-mcp-read-02`), created from that literal
+  SHA. Verified: `pwd`, toplevel, branch, HEAD, clean status, and no upstream
+  before the first push. `npm ci` installed 101 packages into this worktree
+  only. The coordinator checkout and Agent A's worktree were not edited.
+- Node.js v23.11.0, npm 11.4.1.
+
+### Verification resources created (all outside the repository)
+
+- Containers: `threadline-b-mcp-read-02-postgres` (`postgres:18-alpine`, host
+  port `55443`) and `threadline-b-mcp-read-02-falkordb`
+  (`falkordb/falkordb:6.0.2`, host port `56443`, append-only with
+  `appendfsync always`).
+- Volumes: `threadline-b-mcp-read-02-pg-data` and
+  `threadline-b-mcp-read-02-falkordb-data`.
+- `/tmp/threadline-b-mcp-read-data-02` (mode `0700`): `home/`
+  (`THREADLINE_HOME`), `logs/serve.log`, a generated `pg.env`, per-run
+  `mcp-reader-*.token` files, an isolated `CODEX_HOME` for offline binary
+  inspection, and authored probe roots. Generated throwaway database passwords
+  live only in `pg.env`, the owner token only in `home/credential.json`; none
+  were printed into the repository, into a log, or into argv.
+- Service: `threadline serve` on `127.0.0.1:47833`, running the unchanged merged
+  backend from this worktree.
+- Migrations 1–4 applied through the normal setup path (`threadline init`):
+  schema version 4 applied, restricted role verified, graph reachable, source
+  root writable, local owner identity created.
+- Two isolated project identities per acceptance run, in one tenant, so a project
+  override attempt is provable.
+- Restricted application role `threadline_b02_app` created as LOGIN /
+  NOSUPERUSER / NOBYPASSRLS.
+- Untouched: the baseline service on `47822`, the `threadline-local-*` containers
+  and volumes, Agent A's `threadline-a-n02b-evidence-02-*` containers, and every
+  pre-existing resource.
+
+### Implemented behavior and changed paths
+
+New CLI commands, all reusing one core implementation
+(`packages/cli/src/memory-surface.ts`) that is also used by the MCP server:
+
+- `task:create`, `task:inspect`, `task:require`, `task:requirements`
+- `memory:propose`, `memory:accept`, `memory:correct`, `memory:inspect`,
+  `memory:query`
+- `operation:inspect`
+- `mcp`, `codex:preview`
+
+Two rules are enforced in code rather than by convention: an expected version
+and an idempotency key are always supplied by the caller (the CLI never derives
+an expected head, never invents a key, never auto-accepts a proposal and never
+auto-corrects an expected-head conflict), and content-bearing input arrives as
+one bounded JSON document (at most 256 KiB, from a file or `--input -`) validated
+by the shared input contract. Exit status is `0` for a successful read or a
+committed operation, `1` for a refusal or failure, `2` for a usage error and `3`
+when the operation still has no durable outcome. `--json` emits exactly one
+machine-readable result and `--wait` follows an operation to a settled state
+without ever turning a refusal into a pass. Malformed input is reported as a
+bounded typed error with a field path, never as a raw validator dump, and no
+credential or submitted body reaches diagnostics.
+
+`packages/cli/src/mcp/server.ts` — the read-only stdio MCP server, built on the
+official `@modelcontextprotocol/server` SDK. Six tools
+(`threadline_memory_query`, `threadline_memory_inspect`,
+`threadline_task_inspect`, `threadline_task_requirements`,
+`threadline_source_inspect`, `threadline_source_read`) map onto existing GET
+routes. The server verifies its project binding against the credential before
+opening the transport and refuses to start otherwise, uses strict input schemas
+(`additionalProperties: false`), bounds concurrency and request time, shuts down
+on stdin close / `SIGINT` / `SIGTERM`, writes protocol output to stdout only and
+diagnostics to stderr, never starts a backend and never reads SQL or source files
+directly.
+
+`packages/cli/src/codex/mcp-preview.ts` — the MCP-only configuration renderer
+behind `codex:preview`. It reuses the qualification's quoting, ownership marker
+and `checkPreviewOwnership` classification, renders the same
+`$CODEX_HOME/threadline.config.toml` profile selected with
+`codex --profile threadline`, and renders **no** hook entry because
+`threadline codex-hook` does not exist in this build. It writes nothing and
+renders no credential.
+
+Changed paths, all inside the writable set: `packages/cli/src/memory-surface.ts`
+(new), `packages/cli/src/mcp/server.ts` (new),
+`packages/cli/src/codex/mcp-preview.ts` (new), `packages/cli/src/index.ts`,
+`packages/cli/src/options.ts`, `packages/cli/package.json`, `package-lock.json`,
+`assets/codex/README.md`,
+`assets/codex/preview/mcp-only/threadline.config.toml` and
+`assets/codex/preview/mcp-only/threadline-codex.manifest.json` (new, generated
+from the renderer), `README.md`, `docs/local-development.md`,
+`docs/cli-memory-and-mcp.md` (new), `docs/native-integration-contract.md` and
+this record. `packages/backend/**`, `packages/shared/**`, `CONTEXT.md`,
+`docs/development-checklist.md`, `docs/parallel-work-rulebook.md`, the root
+`package.json`, `compose.yaml` and `.gitignore` are unchanged.
+
+### Dependency decision
+
+One dependency added, pinned exactly: `@modelcontextprotocol/server@2.3.1`
+(Apache-2.0, official Model Context Protocol TypeScript SDK, current stable v2
+line, Node >=20, `zod ^4.2.0`). The legacy v1 line
+`@modelcontextprotocol/sdk@1.32.1` was considered and rejected. The repository
+already uses `zod 4.6.7` and Node >=22, so both are compatible;
+`package-lock.json` gained 26 lines and nothing else. Adopting the official SDK
+avoided a second custom general-purpose protocol stack.
+
+### Exact verification and results
+
+`npm run build` (`tsc -b`) passes with no errors on the final source.
+
+- **CLI — 45 checks, 45 passed, 0 failed** (temporary script outside the
+  repository). Authored Source -> task -> proposal -> it does not govern
+  (`current: null`, the version appears under `candidates`) -> human acceptance
+  with a graph receipt -> requirement binding reports `missing_current` before
+  acceptance and `current` after -> current-authority reads -> correction from
+  600 to 60 seconds with `supersedesVersionId` set and the new source cited ->
+  the 600-second evidence still `available` and still in `history` -> an exact
+  retry returns the same operation -> the same key with a changed payload refuses
+  `idempotency_mismatch` (exit 1) -> a stale `expectedCurrentVersionId` refuses
+  `expected_head_conflict` and current authority does not move -> re-binding
+  refuses `requirement_already_bound` -> an unbound memory under a stale task
+  revision refuses `task_revision_conflict` -> a bounded query with explicit
+  `hasMore` -> an unknown memory exits 1, an unknown command and an excessive
+  `--limit` exit 2, and a committed operation inspect exits 0.
+- **MCP — 24 checks, 24 passed, 0 failed** (authored raw JSON-RPC client, not
+  Codex). `initialize` negotiated `2025-06-18`, `notifications/initialized` was
+  accepted, `tools/list` returned exactly the six read-only tools with no
+  mutation or acceptance tool, a mutation-shaped tool name was refused as an
+  unknown tool, and a real backend read succeeded through each tool. Refusals:
+  invalid identifier, `limit: 5000`, an unknown `tenantId` argument, a project
+  override argument, a tenant override argument, `maxBytes: 1000000`, and a
+  memory that exists only in another project in the same tenant (answered
+  `not_found` with no content). Eight concurrent reads over one process produced
+  no cross-request leakage. Standard output carried JSON-RPC only (29,995 bytes)
+  and both diagnostics went to stderr.
+- **Resilience — 13 checks, 13 passed.** Mid-session backend outage (the
+  service this assignment owns, stopped by pid while the session was live): the
+  next `tools/call` answered `isError` with `service_unavailable`, without driver
+  or stack detail and without falling back to another storage path. Graph
+  outage (the assignment-owned FalkorDB container stopped): a memory read
+  answered `storage_unavailable` and served no version content from SQL or
+  files. Authorization failure (a reader credential pointed at a project it
+  cannot see): the server never opened a transport, no protocol message was
+  written, and the refusal named `scope_denied`. Restart and reconnect: two
+  fresh processes each completed the handshake and each re-verified its binding
+  at startup. A consolidated run of every suite passed 113 checks with 0
+  failures.
+- **Preview — 21 checks, 21 passed.** Deterministic bytes across two runs; the
+  target Codex home stayed empty; the rendered command is this worktree's real
+  `dist/index.js mcp` with `--home` and `--project`; no `hooks.` entry is
+  rendered; the ownership manifest is rendered; the reader token, the owner
+  token and any bearer pattern are absent from the output; targets classify as
+  `absent`, `owned` (identical bytes), `edited` and `foreign`, with a foreign
+  file left byte-identical; an executable path containing a space is quoted; and
+  `--json` reports `mcp-only`, the server command line and two file digests.
+- **Installed-binary offline inspection — 10 checks, 10 passed.**
+  `codex-cli 0.163.0` with an isolated `CODEX_HOME` accepted the rendered
+  MCP-only profile: `codex -p threadline mcp list --json` reported the server
+  with `transport.type: "stdio"`, the exact node executable and argument vector
+  (`.../dist/index.js mcp --home ... --project ...`), `required` absent (so
+  optional) and `env` carrying only `THREADLINE_HOME`, with no credential
+  anywhere. The real native home was not modified (identical entry count before
+  and after), no credential was written into the isolated home, and no login,
+  trust change or inference was performed.
+
+Two defects were found and fixed rather than left in place: the operation-poll
+timer was `unref`'d, which let Node exit between polls with no output and a
+success exit code, so an unfinished operation could be reported as a finished
+one; and caller-supplied request documents were validated with a throwing
+`parse`, which dumped a raw validator error to stderr instead of a bounded typed
+error.
+
+### Runtime observations versus authored checks, and what stays unqualified
+
+- **Observed on the installed binary:** the profile route parses; `mcp list`
+  reports the rendered stdio server with its exact command, args and env; the
+  server is optional; no credential appears in the listing or the rendered file.
+- **Observed negative, recorded precisely:** in this isolated home,
+  `codex -p threadline debug prompt-input` completed offline but did **not**
+  start the optional MCP server. The earlier qualification observed a spawn on
+  that command with a profile that also carried hook entries. The difference is
+  not isolated here, so the installed binary's optional-server startup timing on
+  0.163.0 is an open observation and is now listed in the integration contract
+  as a fourth, smaller qualified-pending item.
+- **Authored checks establish** Threadline's transport only: the handshake, the
+  tool surface, the refusals, the bounds and the concurrency behaviour.
+- **Still unqualified and unchanged:** native hook stdin/stdout runtime
+  execution; `additionalContext` delivery and spill; MCP `tools/call` host
+  metadata identifying a conversation; fork and subagent identity correlation.
+  An authored `tools/call` is **not** evidence that Codex generates tool-call
+  metadata or that a model reads or uses the result. No native session was
+  registered or fabricated, and no model-issued write path exists.
+
+### Proposed checklist updates (coordinator applies after integration)
+
+- Under N03, note that a project-bound read-only stdio MCP server and the human
+  CLI memory workflow are implemented and verified, and that the shipped Codex
+  preview is MCP-only because `threadline codex-hook` is unimplemented.
+- Keep N03 unchecked and keep the three unqualified native runtime gates listed.
+- Add the fourth, smaller pending item: a qualified-pending observation of when
+  the installed 0.163.0 binary starts a `required = false` stdio MCP server.
+- Record that a reader-grant credential has no supported issuance path in this
+  build; a later assignment must add one before the MCP path can be operated
+  without out-of-band setup.
+- Leave open: `memory.episode.record`, procedures, `context.prepare`,
+  `context.occurrence`, `claim.status`, `session.register`, `job.import`,
+  deletion and export.
+
+### Resources still running (for coordinator retirement)
+
+Containers `threadline-b-mcp-read-02-postgres` and
+`threadline-b-mcp-read-02-falkordb`, volumes
+`threadline-b-mcp-read-02-pg-data` and
+`threadline-b-mcp-read-02-falkordb-data`, the `threadline serve` process on
+`127.0.0.1:47833`, and the directories `/tmp/threadline-b-mcp-read-data-02`
+(removing it also destroys the generated credentials) and
+`/tmp/threadline-b-mcp-read-02-checks`. Nothing outside those names is
+assignment-owned.
+
+### Backend defect reported to the coordinator (not fixed here)
+
+While running the graph-outage check, the unchanged merged backend **aborted
+the whole process** when the assignment-owned FalkorDB container was stopped:
+
+```text
+node:events:485
+      throw er; // Unhandled 'error' event
+SocketClosedUnexpectedlyError: Socket closed unexpectedly
+    at Socket.<anonymous> (node_modules/@redis/client/dist/lib/client/socket.js:250:33)
+Emitted 'error' event on FalkorDB instance at:
+    at node_modules/falkordb/dist/src/falkordb.js:49:42
+```
+
+Two "FalkorDB connection reported an error" warnings are logged first, so the
+`live.on('error', …)` handler in `packages/backend/src/storage/graph.ts` does
+fire for one emission path; a second path re-emits `'error'` on a FalkorDB
+instance that has no listener, and Node then aborts.
+
+Impact: a lost graph connection can take the memory service down, so a client
+read in flight during a graph outage may get no answer at all instead of the
+`storage_unavailable` this checkpoint verifies. The N02A claim that "a lost
+FalkorDB socket no longer aborts the process" therefore holds only for the
+emission path the single listener covers.
+
+This is in `packages/backend/src/storage/graph.ts`, which is owner A's module
+and read-only for this assignment, so it was reported rather than fixed.
+Reproduction is reliable: stop the container while the service holds a live
+connection. Twelve deliberate read attempts against a stopped container did
+**not** reproduce the abort, so the trigger depends on connection state; the
+graph-outage check therefore restarts the service while the graph is down, which
+keeps this checkpoint's MCP results about the MCP surface rather than about that
+backend defect.
+
+### Recovery and artifact paths
+
+The complete assignment prompt and contract are in the first half of this file.
+The verification scripts live outside the repository, in
+`/tmp/threadline-b-mcp-read-02-checks/` (`cli-acceptance.sh`,
+`mcp-acceptance.sh`, `mcp-client.mjs`, `mcp-resilience.mjs`, `outage-driver.sh`,
+`graphoutage-driver.sh`, `preview-checks.sh`, `offline-binary.sh`). They are
+reproducible but disposable: no permanent package test suite was added, by
+instruction, so a later batch that changes these paths must reproduce equivalent
+checks.

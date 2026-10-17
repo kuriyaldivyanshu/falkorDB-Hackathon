@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { basename, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import {
   PROTOCOL_VERSION,
@@ -17,6 +19,9 @@ import {
   type SourceKind,
   type SourceRange,
   type SourceView,
+  type CorrectMemoryInput,
+  type MemoryKind,
+  type ProposeMemoryInput,
 } from '@threadline/shared';
 import {
   createJsonLogger,
@@ -30,7 +35,25 @@ import {
 } from '@threadline/backend';
 
 import { createApiClient, type ApiClient } from './client.js';
-import { DEFAULT_REQUEST_TIMEOUT_MS, HELP_TEXT, UsageError, parseCliArgs, type CliInvocation } from './options.js';
+import {
+  DEFAULT_OPERATION_WAIT_MS,
+  DEFAULT_REQUEST_TIMEOUT_MS,
+  HELP_TEXT,
+  MAX_INPUT_DOCUMENT_BYTES,
+  UsageError,
+  parseCliArgs,
+  type CliInvocation,
+} from './options.js';
+import {
+  createMemorySurface,
+  isInFlight,
+  isInFlightState,
+  waitForOperation,
+  type MemorySurface,
+} from './memory-surface.js';
+import { startStdioMcpServer, verifyProjectBinding } from './mcp/server.js';
+import { classifyPreviewTargets, renderCodexMcpPreview } from './codex/mcp-preview.js';
+import { shellQuote } from './codex/config-preview.js';
 
 /**
  * Process entry point.
@@ -43,6 +66,8 @@ import { DEFAULT_REQUEST_TIMEOUT_MS, HELP_TEXT, UsageError, parseCliArgs, type C
 const EXIT_OK = 0;
 const EXIT_FAILURE = 1;
 const EXIT_USAGE = 2;
+/** The operation exists but has no durable outcome yet. */
+const EXIT_PENDING = 3;
 
 const write = (line: string): void => {
   process.stdout.write(`${line}\n`);
@@ -50,6 +75,11 @@ const write = (line: string): void => {
 
 const writeJson = (value: unknown): void => {
   write(JSON.stringify(value, null, 2));
+};
+
+/** Diagnostics never share a stream with machine-readable or protocol output. */
+const note = (line: string): void => {
+  process.stderr.write(`${line}\n`);
 };
 
 async function main(argv: readonly string[]): Promise<number> {
@@ -80,6 +110,10 @@ async function main(argv: readonly string[]): Promise<number> {
       return runInit(invocation);
     case 'serve':
       return runServe(invocation);
+    case 'mcp':
+      return runMcp(invocation);
+    case 'codex:preview':
+      return runCodexPreview(invocation);
     default:
       return runClientCommand(invocation);
   }
@@ -162,9 +196,460 @@ async function runClientCommand(invocation: CliInvocation): Promise<number> {
     case 'history':
       return showHistory(client, invocation);
     default:
-      write(HELP_TEXT);
-      return EXIT_OK;
+      return runMemoryCommand(client, invocation);
   }
+}
+
+/**
+ * The human memory/task surface.
+ *
+ * Every command here is one typed call into the same core implementation the
+ * read-only MCP server uses, so the CLI and the server cannot drift on a route,
+ * a bound or a validator. Human mutations use the service's own human
+ * authorization; the CLI adds no authority of its own.
+ */
+async function runMemoryCommand(client: ApiClient, invocation: CliInvocation): Promise<number> {
+  const surface = createMemorySurface(client);
+  const projectId = invocation.projectId ?? '';
+
+  switch (invocation.command) {
+    case 'task:create': {
+      const result = await surface.createTask({
+        projectId,
+        title: invocation.title ?? '',
+        ...(invocation.family === null ? {} : { taskFamily: invocation.family }),
+        idempotencyKey: invocation.idempotencyKey ?? '',
+      });
+      return reportOperation(surface, invocation, { ...result, versionId: null }, 'task.create', projectId);
+    }
+    case 'task:inspect': {
+      const view = await surface.inspectTask(projectId, invocation.sourceId ?? '');
+      if (invocation.json) {
+        writeJson(view);
+        return EXIT_OK;
+      }
+      write(`Task ${view.taskId} (${view.state}${view.taskFamily === null ? '' : `, family ${view.taskFamily}`})`);
+      write(`  title: ${view.title}`);
+      write(`  revision: ${view.revision}`);
+      write(`  required memories: ${view.requiredMemoryIds.length === 0 ? '(none)' : view.requiredMemoryIds.join(', ')}`);
+      note('The revision is an opaque equality guard. Pass it to task:require as --expect-revision.');
+      return EXIT_OK;
+    }
+    case 'task:requirements': {
+      const view = await surface.inspectTaskRequirements(projectId, invocation.sourceId ?? '');
+      if (invocation.json) {
+        writeJson(view);
+        return EXIT_OK;
+      }
+      write(`Requirements for task ${view.taskId} (revision ${view.revision})`);
+      if (view.requirements.length === 0) {
+        write('  (no requirement is bound to this task)');
+      }
+      for (const requirement of view.requirements) {
+        if (requirement.state === 'current' && requirement.current !== null) {
+          write(
+            `  current   ${requirement.memoryId}  ${requirement.current.content.kind}: ${describeContent(requirement.current.content)}`,
+          );
+          write(`           accepted version ${requirement.current.versionId}; sources ${requirement.current.sourceIds.join(', ')}`);
+        } else if (requirement.state === 'missing_current') {
+          write(`  UNBOUND   ${requirement.memoryId}  no accepted version governs this requirement yet`);
+        } else {
+          write(`  CONFLICT  ${requirement.memoryId}  more than one current version; authority is ambiguous`);
+        }
+      }
+      note('missing_current means a proposal exists but no human has accepted it, so it governs nothing.');
+      return EXIT_OK;
+    }
+    case 'task:require': {
+      const result = await surface.bindTaskRequirement({
+        projectId,
+        taskId: invocation.sourceId ?? '',
+        memoryId: invocation.memoryId ?? '',
+        expectedTaskRevision: invocation.expectedTaskRevision ?? '',
+        idempotencyKey: invocation.idempotencyKey ?? '',
+      });
+      return reportOperation(surface, invocation, { ...result, versionId: null }, 'task.require', projectId);
+    }
+    case 'memory:propose': {
+      const document = readInputDocument<ProposeMemoryInput>(invocation.input);
+      const result = await surface.proposeMemory(document);
+      return reportOperation(
+        surface,
+        invocation,
+        { ...result },
+        'memory.propose',
+        requireDocumentProject(document),
+      );
+    }
+    case 'memory:accept': {
+      const result = await surface.acceptMemory({
+        projectId,
+        memoryId: invocation.sourceId ?? '',
+        versionId: invocation.versionId ?? '',
+        expectedCurrentVersionId:
+          invocation.expectCurrentVersionId === 'none'
+            ? null
+            : (invocation.expectCurrentVersionId ?? null),
+        ...(invocation.reason === null ? {} : { reason: invocation.reason }),
+        idempotencyKey: invocation.idempotencyKey ?? '',
+      });
+      return reportOperation(surface, invocation, { ...result }, 'memory:accept', projectId);
+    }
+    case 'memory:correct': {
+      const document = readInputDocument<CorrectMemoryInput>(invocation.input);
+      const result = await surface.correctMemory(document);
+      return reportOperation(
+        surface,
+        invocation,
+        { ...result },
+        'memory:correct',
+        requireDocumentProject(document),
+      );
+    }
+    case 'memory:inspect': {
+      const view = await surface.inspectMemory(projectId, invocation.sourceId ?? '');
+      if (invocation.json) {
+        writeJson(view);
+        return EXIT_OK;
+      }
+      write(`Memory ${view.memoryId} (${view.kind})`);
+      if (view.current === null) {
+        write('  CURRENT: none — nothing is authoritative for this memory yet.');
+      } else {
+        write(`  CURRENT version ${view.current.versionId} (${view.current.acceptance})`);
+        write(`    ${describeContent(view.current.content)}`);
+        write(`    sources: ${view.current.sourceIds.join(', ')}`);
+        if (view.current.supersedesVersionId !== null) {
+          write(`    supersedes: ${view.current.supersedesVersionId}`);
+        }
+        if (view.current.acceptedByPrincipalId !== null) {
+          write(`    accepted by human principal: ${view.current.acceptedByPrincipalId}`);
+        }
+      }
+      if (view.candidates.length === 0) {
+        write('  candidates: none');
+      } else {
+        write(`  candidates (${String(view.candidates.length)}): proposed, not authoritative`);
+        for (const candidate of view.candidates) {
+          write(`    ${candidate.versionId}  ${describeContent(candidate.content)}`);
+        }
+      }
+      return EXIT_OK;
+    }
+    case 'memory:query': {
+      if (invocation.kind !== null && !(MEMORY_QUERY_KINDS as readonly string[]).includes(invocation.kind)) {
+        throw new UsageError(`--kind must be one of: ${MEMORY_QUERY_KINDS.join(', ')}.`);
+      }
+      const result = await surface.queryMemory({
+        projectId,
+        limit: invocation.limit === null ? 20 : Math.min(invocation.limit, 50),
+        ...(invocation.taskId === null ? {} : { taskId: invocation.taskId }),
+        ...(invocation.kind === null ? {} : { kind: invocation.kind as MemoryKind }),
+        ...(invocation.focus === null ? {} : { focus: invocation.focus }),
+      });
+      if (invocation.json) {
+        writeJson(result);
+        return EXIT_OK;
+      }
+      write(`Current memory in project ${projectId}: ${String(result.memories.length)} shown`);
+      for (const view of result.memories) {
+        const head =
+          view.current === null ? 'no accepted version' : `v ${view.current.versionId} ${describeContent(view.current.content)}`;
+        write(`  ${view.memoryId}  ${view.kind.padEnd(10)} ${head}`);
+      }
+      if (result.memories.length === 0) {
+        write('  (nothing accepted yet — proposals do not appear as current memory)');
+      }
+      note(result.hasMore ? 'hasMore: the bounded scan stopped early; raise --limit or narrow --focus.' : 'This set is complete for the query.');
+      return EXIT_OK;
+    }
+    case 'operation:inspect': {
+      const view = await surface.inspectOperation(projectId, invocation.sourceId ?? '');
+      if (invocation.json) {
+        writeJson(view);
+        return operationExit(view.state);
+      }
+      write(`Operation ${view.operationId} (${view.kind})`);
+      write(`  state: ${view.state}${view.errorCode === null ? '' : ` — ${view.errorCode}`}`);
+      write(`  attempts: ${String(view.attempts)}   settled: ${view.settledAtMs === null ? 'no' : new Date(view.settledAtMs).toISOString()}`);
+      if (view.receipt !== null) {
+        write(`  receipt: event ${view.receipt.eventSeq} in graph epoch ${view.receipt.graphEpoch} (${view.receipt.outcome})`);
+      }
+      if (isInFlight(view)) {
+        note('The operation has no durable outcome yet. Run this command again, or retry with --wait.');
+      }
+      return operationExit(view.state);
+    }
+    default:
+      write(HELP_TEXT);
+      return EXIT_USAGE;
+  }
+}
+
+const MEMORY_QUERY_KINDS = ['semantic', 'episodic', 'procedural', 'handoff'] as const;
+
+/** The common shape of every mutation result this CLI reports. */
+interface OperationReport {
+  readonly operationId: string;
+  readonly state: string;
+  readonly memoryId: string | null;
+  readonly versionId: string | null;
+  readonly errorCode: string | null;
+}
+
+/** The project a content-bearing input document named, for the `--wait` follow-up. */
+function requireDocumentProject(document: Record<string, unknown>): string {
+  const projectId = document['projectId'];
+  if (typeof projectId !== 'string' || projectId.length === 0) {
+    throw new UsageError('The input document must name the project it targets.');
+  }
+  return projectId;
+}
+
+/** A one-line rendering of any memory content kind. */
+function describeContent(content: { readonly kind: string } & Record<string, unknown>): string {
+  if (content['kind'] === 'semantic') {
+    return `${String(content['subtype'])}: ${String(content['statement'])}`;
+  }
+  return `${String(content['kind'])} version`;
+}
+
+function operationExit(state: string): number {
+  if (state === 'committed') {
+    return EXIT_OK;
+  }
+  if (state === 'pending' || state === 'leased') {
+    return EXIT_PENDING;
+  }
+  return EXIT_FAILURE;
+}
+
+/**
+ * Reads one bounded JSON input document.
+ *
+ * `-` reads standard input. The byte ceiling applies before parsing, so an
+ * oversized document is refused rather than buffered.
+ */
+function readInputDocument<T>(input: string | null): T {
+  if (input === null) {
+    throw new UsageError('--input is required.');
+  }
+  let text: string;
+  if (input === '-') {
+    try {
+      text = readFileSync(0, 'utf8');
+    } catch {
+      throw new UsageError('Standard input could not be read for --input.');
+    }
+  } else {
+    const path = resolve(input);
+    let bytes: number;
+    try {
+      bytes = readFileSync(path).byteLength;
+    } catch {
+      throw new UsageError(`--input file could not be read: ${path}`);
+    }
+    if (bytes > MAX_INPUT_DOCUMENT_BYTES) {
+      throw new UsageError(`--input must be at most ${String(MAX_INPUT_DOCUMENT_BYTES)} bytes.`);
+    }
+    text = readFileSync(path, 'utf8');
+  }
+  if (Buffer.byteLength(text, 'utf8') > MAX_INPUT_DOCUMENT_BYTES) {
+    throw new UsageError(`--input must be at most ${String(MAX_INPUT_DOCUMENT_BYTES)} bytes.`);
+  }
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    throw new UsageError('--input is not valid JSON.');
+  }
+}
+
+/**
+ * Follows a mutation to a settled state and reports one machine-readable result.
+ *
+ * The JSON body is always the shared operation result; the settled state is
+ * reported by the exit status and, with --wait, by the operation receipt shown
+ * in human mode. A pending outcome is never printed as a success.
+ */
+async function reportOperation(
+  surface: MemorySurface,
+  invocation: CliInvocation,
+  result: OperationReport,
+  headline: string,
+  waitProjectId: string,
+): Promise<number> {
+  let settled = result;
+  let exit = operationExit(result.state);
+
+  if (invocation.wait) {
+    const view = await waitForOperation(surface, result.operationId, {
+      projectId: waitProjectId,
+      timeoutMs: invocation.waitTimeoutMs ?? DEFAULT_OPERATION_WAIT_MS,
+    });
+    settled = { ...result, state: view.state, errorCode: view.errorCode };
+    exit = operationExit(view.state);
+    if (invocation.json) {
+      writeJson({ ...result, state: view.state, errorCode: view.errorCode, receipt: view.receipt });
+    } else if (view.receipt !== null) {
+      note(`graph receipt: event ${view.receipt.eventSeq} in epoch ${view.receipt.graphEpoch} (${view.receipt.outcome})`);
+    }
+  } else if (invocation.json) {
+    writeJson(result);
+  }
+
+  if (!invocation.json) {
+    const subject =
+      result.versionId === null ? result.operationId : `${result.operationId} → version ${result.versionId}`;
+    write(`${headline} ${subject}: ${settled.state}${settled.errorCode === null ? '' : ` (${settled.errorCode})`}`);
+    if (isInFlightState(settled.state)) {
+      note('The operation has no durable outcome yet. Re-run with --wait, or inspect it with operation:inspect.');
+    }
+    if (settled.state === 'committed' && headline === 'memory.propose') {
+      note('A proposal is not authoritative. A human must run memory:accept before it governs anything.');
+    }
+  }
+
+  return exit;
+}
+
+/**
+ * The project-bound, read-only stdio MCP server.
+ *
+ * The binding is resolved before the transport starts: the configured
+ * credential must be able to see the configured project, or the process exits
+ * rather than answering every later call with an authorization failure.
+ */
+async function runMcp(invocation: CliInvocation): Promise<number> {
+  const home = resolveHomeDirectory(invocation.home);
+  const config = loadServiceConfig(home).config;
+  const paths = installationPaths(home);
+  const token = readServerCredential(invocation, paths.credentialFile);
+  const host = config.host === '::1' ? '[::1]' : config.host;
+  const client = createApiClient({
+    baseUrl: `http://${host}:${String(config.port)}`,
+    token,
+    timeoutMs: invocation.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+  });
+
+  const projectId = invocation.projectId ?? '';
+  const binding = await verifyProjectBinding(client, projectId);
+  note(
+    `threadline mcp: project ${binding.projectId} (role ${binding.role}) at ${client.baseUrl}; ` +
+      'read-only surface, no native session identity is asserted',
+  );
+
+  const server = await startStdioMcpServer({
+    client,
+    projectId: binding.projectId,
+    threadlineHome: home,
+    requestTimeoutMs: invocation.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+    ...(invocation.concurrency === null ? {} : { maxConcurrentRequests: invocation.concurrency }),
+    logger: note,
+  });
+  await server.finished;
+  return EXIT_OK;
+}
+
+/**
+ * Resolves the MCP credential.
+ *
+ * The local owner credential is used when no file is named. A reader credential
+ * is preferred wherever one exists: `--token-file` (or THREADLINE_MCP_TOKEN_FILE)
+ * names a file containing only the token. This build has no command that issues
+ * a non-owner grant, so that path is documented as a limitation rather than
+ * implemented here. The token never appears in argv, output or diagnostics.
+ */
+function readServerCredential(invocation: CliInvocation, credentialFile: string): string | null {
+  const explicit = invocation.tokenFile ?? process.env['THREADLINE_MCP_TOKEN_FILE'] ?? null;
+  if (explicit !== null) {
+    let raw: string;
+    try {
+      raw = readFileSync(explicit, 'utf8');
+    } catch {
+      throw new UsageError(`The credential file could not be read: ${explicit}`);
+    }
+    const token = raw.trim();
+    if (token.length === 0) {
+      throw new UsageError(`The credential file is empty: ${explicit}`);
+    }
+    return token;
+  }
+  return readCredentialFile(credentialFile)?.token ?? null;
+}
+
+/**
+ * Renders the Codex profile that starts `mcp`.
+ *
+ * The command writes nothing: it prints the exact file bytes a human would
+ * install, their digests, the ownership classification of anything already at
+ * those paths, and the command a reviewer can run by hand. No credential is
+ * rendered — the server reads it from the Threadline home at startup.
+ */
+function runCodexPreview(invocation: CliInvocation): Promise<number> {
+  const home = resolveHomeDirectory(invocation.home);
+  const preview = renderCodexMcpPreview({
+    codexHome: invocation.codexHome ?? defaultCodexHome(),
+    executable: invocation.executable ?? process.execPath,
+    entryScript: invocation.entryScript ?? fileURLToPath(new URL('./index.js', import.meta.url)),
+    threadlineHome: home,
+    projectId: invocation.projectId ?? '',
+  });
+
+  const existing = new Map<string, string>();
+  for (const file of preview.files) {
+    try {
+      existing.set(file.path, readFileSync(file.path, 'utf8'));
+    } catch {
+      // Absent is a normal, installable state; checkPreviewOwnership reports it.
+    }
+  }
+  const ownership = classifyPreviewTargets(preview, existing);
+  const commandLine = [preview.serverCommand.executable, ...preview.serverCommand.args]
+    .map((part) => shellQuote(part))
+    .join(' ');
+
+  if (invocation.json) {
+    writeJson({
+      mode: preview.mode,
+      profileName: preview.profileName,
+      mcpServerId: preview.mcpServerId,
+      serverCommand: preview.serverCommand,
+      serverCommandLine: commandLine,
+      files: preview.files.map((file) => ({ path: file.path, role: file.role, digest: file.digest })),
+      ownership,
+      notes: preview.notes,
+    });
+    return Promise.resolve(EXIT_OK);
+  }
+
+  write(`Codex configuration preview (${preview.mode}) — nothing is written.`);
+  write(`  Select with: codex --profile ${preview.profileName}`);
+  write(`  Threadline home: ${home}`);
+  for (const file of preview.files) {
+    write('');
+    write(`--- ${file.role}: ${file.path}`);
+    write(`    digest ${file.digest}`);
+    process.stdout.write(file.content);
+  }
+  write('');
+  write('Ownership of anything already at those paths:');
+  for (const entry of ownership) {
+    write(`  ${entry.role.padEnd(8)} ${entry.state.padEnd(8)} ${entry.detail}`);
+  }
+  write('');
+  write('Run the server by hand:');
+  write(`  ${commandLine}`);
+  write('');
+  for (const line of preview.notes) {
+    write(`  - ${line}`);
+  }
+  return Promise.resolve(EXIT_OK);
+}
+
+/** The Codex home a preview targets; it is only read, never written. */
+function defaultCodexHome(): string {
+  const configured = process.env['CODEX_HOME'];
+  return configured !== undefined && configured.length > 0 ? configured : resolve(homedir(), '.codex');
 }
 
 async function showStatus(client: ApiClient, invocation: CliInvocation): Promise<number> {

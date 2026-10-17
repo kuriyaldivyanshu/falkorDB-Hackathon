@@ -7,9 +7,24 @@ import { parseArgs, type ParseArgsOptionsConfig } from 'node:util';
  * no provider setup, no run control and no fixture admission; a command that
  * does not exist is a usage error, and an operation that is not implemented in
  * this build is answered by the service as an explicit unsupported capability.
+ *
+ * Spelling follows one rule: a namespaced noun is written `noun:verb`
+ * (`source:append`, `memory:correct`), a whole-object read repeats the noun
+ * (`task:requirements`), and a process command is a bare word (`serve`, `mcp`).
+ *
+ * Two rules govern every mutation command. An expected version and an
+ * idempotency key are always supplied by the caller — the CLI never derives an
+ * expected head, never invents an idempotency key and never retries a guarded
+ * mutation on its own. Content-bearing input arrives as one bounded JSON
+ * document validated by the shared contract, rather than as a wide set of
+ * loosely related flags.
  */
 
 export const DEFAULT_REQUEST_TIMEOUT_MS = 10_000;
+/** A JSON input document is bounded so a command can never buffer a large file. */
+export const MAX_INPUT_DOCUMENT_BYTES = 256 * 1024;
+export const DEFAULT_OPERATION_WAIT_MS = 15_000;
+export const MCP_DEFAULT_CONCURRENCY = 8;
 
 export type CliCommand =
   | 'init'
@@ -23,6 +38,18 @@ export type CliCommand =
   | 'source:inspect'
   | 'source:read'
   | 'history'
+  | 'task:create'
+  | 'task:inspect'
+  | 'task:require'
+  | 'task:requirements'
+  | 'memory:propose'
+  | 'memory:accept'
+  | 'memory:correct'
+  | 'memory:inspect'
+  | 'memory:query'
+  | 'operation:inspect'
+  | 'mcp'
+  | 'codex:preview'
   | 'version'
   | 'help';
 
@@ -46,6 +73,25 @@ const OPTION_SPEC = {
   kinds: { type: 'string' },
   session: { type: 'string' },
   cursor: { type: 'string' },
+  title: { type: 'string' },
+  family: { type: 'string' },
+  memory: { type: 'string' },
+  task: { type: 'string' },
+  focus: { type: 'string' },
+  version: { type: 'string' },
+  'expect-current': { type: 'string' },
+  'expect-revision': { type: 'string' },
+  reason: { type: 'string' },
+  'idempotency-key': { type: 'string' },
+  input: { type: 'string' },
+  wait: { type: 'boolean', default: false },
+  'wait-timeout': { type: 'string' },
+  'token-file': { type: 'string' },
+  'codex-home': { type: 'string' },
+  executable: { type: 'string' },
+  entry: { type: 'string' },
+  'timeout-ms': { type: 'string' },
+  concurrency: { type: 'string' },
   json: { type: 'boolean', default: false },
   help: { type: 'boolean', short: 'h', default: false },
 } satisfies ParseArgsOptionsConfig;
@@ -73,6 +119,31 @@ export interface CliInvocation {
   readonly kinds: readonly string[] | null;
   readonly nativeSessionId: string | null;
   readonly cursor: string | null;
+
+  /* Semantic memory and tasks. */
+  readonly title: string | null;
+  readonly family: string | null;
+  readonly memoryId: string | null;
+  readonly taskId: string | null;
+  readonly focus: string | null;
+  readonly versionId: string | null;
+  /** `none` is the explicit "this memory has no head yet" expectation. */
+  readonly expectCurrentVersionId: string | 'none' | null;
+  readonly expectedTaskRevision: string | null;
+  readonly reason: string | null;
+  readonly idempotencyKey: string | null;
+  readonly input: string | null;
+  readonly wait: boolean;
+  readonly waitTimeoutMs: number | null;
+
+  /* Read-only MCP server and configuration preview. */
+  readonly tokenFile: string | null;
+  readonly codexHome: string | null;
+  readonly executable: string | null;
+  readonly entryScript: string | null;
+  readonly timeoutMs: number | null;
+  readonly concurrency: number | null;
+
   readonly help: boolean;
 }
 
@@ -95,6 +166,18 @@ export const SHELL_COMMANDS: readonly CliCommand[] = [
   'source:inspect',
   'source:read',
   'history',
+  'task:create',
+  'task:inspect',
+  'task:require',
+  'task:requirements',
+  'memory:propose',
+  'memory:accept',
+  'memory:correct',
+  'memory:inspect',
+  'memory:query',
+  'operation:inspect',
+  'mcp',
+  'codex:preview',
   'version',
   'help',
 ];
@@ -135,6 +218,58 @@ Sources and history:
                        Page through ingested sources in project order. The cursor
                        is opaque; changing filters starts a new page.
 
+Tasks:
+  task:create --project <id> --title <text> --idempotency-key <key>
+                       Create a task. Options: --family <text>, --wait.
+  task:inspect --project <id> <taskId>
+                       Read one task with its requirement ids and opaque revision.
+  task:require --project <id> <taskId> --memory <id> --expect-revision <token>
+               --idempotency-key <key>
+                       Bind one required memory to a task under the task revision
+                       the caller last read.
+  task:requirements --project <id> <taskId>
+                       Resolve every required memory to its exact current version,
+                       or report missing_current / duplicate_current explicitly.
+
+Semantic memory:
+  memory:propose --input <file|-> [--wait]
+                       Propose a sourced candidate version. The JSON document is the
+                       shared proposeMemoryInput contract and must cite at least one
+                       source. A proposal governs nothing until a human accepts it.
+  memory:accept --project <id> <memoryId> --version <versionId>
+                --idempotency-key <key> [--expect-current <versionId>|none]
+                [--reason <text>] [--wait]
+                       Explicit human acceptance of one proposed version. This is the
+                       only step that makes a proposal authoritative.
+  memory:correct --project <id> --input <file|-> [--wait]
+                       Supersede the current version with a new sourced one under the
+                       expected head named in the document.
+  memory:inspect --project <id> <memoryId>
+                       Read one memory: its current version plus remaining candidates.
+  memory:query --project <id> [--task <id>] [--kind <kind>] [--focus <text>]
+               [--limit <n>]
+                       Bounded current-memory read. hasMore is reported when the
+                       bounded scan stopped early.
+
+Operations:
+  operation:inspect --project <id> <operationId>
+                       Read one durable operation: pending, leased, ambiguous,
+                       committed, rejected or cancelled, with its receipt.
+
+Read-only MCP server:
+  mcp --project <id> [--token-file <path>] [--timeout-ms <n>] [--concurrency <n>]
+                       Serve the project's memory over stdio for an MCP client.
+                       Read-only: no proposal, acceptance, correction or binding
+                       tool exists. Writes stay human CLI actions. Protocol output
+                       goes to stdout; diagnostics go to stderr.
+
+Codex configuration:
+  codex:preview --project <id> [--codex-home <path>] [--executable <path>]
+                [--entry <path>]
+                       Render the Codex profile that starts \`mcp\`. Writes nothing
+                       and contains no credential. Options default to the isolated
+                       Codex home, the running Node.js and this CLI's entry script.
+
   version              Print client and protocol versions.
   help                 Show this help.
 
@@ -142,7 +277,19 @@ Options:
   --home <dir>         Installation root (default: $THREADLINE_HOME or ~/.threadline).
   --port <n>           Override the service port for "serve".
   --json               Print machine-readable JSON instead of text.
+  --wait               Follow a mutation to a settled operation state.
+  --wait-timeout <ms>  Bound for --wait (default 15000).
   -h, --help           Show this help.
+
+Exit status:
+  0  success, or a committed operation
+  1  refused, rejected or failed
+  2  usage error
+  3  the operation has no durable outcome yet (still pending or leased)
+
+Idempotency:
+  Retry a mutation with the same --idempotency-key and the same payload to read
+  the first admission back. Changing the payload under one key refuses.
 
 The service is loopback-only. Credentials live in the installation root; nothing
 here reads a coding repository's .env file.`;
@@ -188,6 +335,11 @@ export function parseCliArgs(argv: readonly string[]): CliInvocation {
     throw new UsageError('--visibility must be "project" or "principal".');
   }
 
+  const expectCurrentRaw = values['expect-current'];
+  if (expectCurrentRaw !== undefined && expectCurrentRaw !== 'none' && expectCurrentRaw.length === 0) {
+    throw new UsageError('--expect-current needs a version id, or the literal "none".');
+  }
+
   const base: CliInvocation = {
     command,
     home: values.home,
@@ -217,8 +369,32 @@ export function parseCliArgs(argv: readonly string[]): CliInvocation {
             .filter((item) => item.length > 0),
     nativeSessionId: values.session ?? null,
     cursor: values.cursor ?? null,
+
+    title: values.title ?? null,
+    family: values.family ?? null,
+    memoryId: values.memory ?? null,
+    taskId: values.task ?? null,
+    focus: values.focus ?? null,
+    versionId: values.version ?? null,
+    expectCurrentVersionId: expectCurrentRaw ?? null,
+    expectedTaskRevision: values['expect-revision'] ?? null,
+    reason: values.reason ?? null,
+    idempotencyKey: values['idempotency-key'] ?? null,
+    input: values.input ?? null,
+    wait: values.wait,
+    waitTimeoutMs: readInteger('--wait-timeout', values['wait-timeout'], 0, 600_000),
+
+    tokenFile: values['token-file'] ?? null,
+    codexHome: values['codex-home'] ?? null,
+    executable: values.executable ?? null,
+    entryScript: values.entry ?? null,
+    timeoutMs: readInteger('--timeout-ms', values['timeout-ms'], 100, 120_000),
+    concurrency: readInteger('--concurrency', values.concurrency, 1, 32),
+
     help: values.help,
   };
+
+  requireSingleTarget(command, base);
 
   switch (command) {
     case 'project:add':
@@ -235,21 +411,114 @@ export function parseCliArgs(argv: readonly string[]): CliInvocation {
     case 'source:inspect':
     case 'source:read':
       requireOption('--project', values.project);
-      if (positionals[1] === undefined || positionals[1].length === 0) {
-        throw new UsageError(`"${command}" needs the source id, for example: threadline ${command} --project <uuid> <sourceId>`);
-      }
-      if (positionals.length > 2) {
-        throw new UsageError(`"${command}" takes one source id.`);
-      }
+      requirePositionalId(command, positionals, 'sourceId');
       break;
     case 'history':
       requireOption('--project', values.project);
       break;
+
+    case 'task:create':
+      requireOption('--project', values.project);
+      requireOption('--title', values.title);
+      requireOption('--idempotency-key', values['idempotency-key']);
+      break;
+    case 'task:inspect':
+    case 'task:requirements':
+      requireOption('--project', values.project);
+      requirePositionalId(command, positionals, 'taskId');
+      break;
+    case 'task:require':
+      requireOption('--project', values.project);
+      requirePositionalId(command, positionals, 'taskId');
+      requireOption('--memory', values.memory);
+      requireOption('--expect-revision', values['expect-revision']);
+      requireOption('--idempotency-key', values['idempotency-key']);
+      break;
+
+    case 'memory:propose':
+    case 'memory:correct':
+      requireOption('--input', values.input);
+      break;
+    case 'memory:accept':
+      requireOption('--project', values.project);
+      requirePositionalId(command, positionals, 'memoryId');
+      requireOption('--version', values.version);
+      requireOption('--idempotency-key', values['idempotency-key']);
+      break;
+    case 'memory:inspect':
+      requireOption('--project', values.project);
+      requirePositionalId(command, positionals, 'memoryId');
+      break;
+    case 'memory:query':
+      requireOption('--project', values.project);
+      break;
+    case 'operation:inspect':
+      requireOption('--project', values.project);
+      requirePositionalId(command, positionals, 'operationId');
+      break;
+
+    case 'mcp':
+      requireOption('--project', values.project);
+      break;
+    case 'codex:preview':
+      requireOption('--project', values.project);
+      break;
+
     default:
       if (positionals.length > 1) {
         throw new UsageError(`"${command}" takes no positional arguments, received ${String(positionals.length - 1)}.`);
       }
   }
 
+  if (base.focus !== null && Buffer.byteLength(base.focus, 'utf8') > 1024) {
+    throw new UsageError('--focus must be at most 1024 UTF-8 bytes.');
+  }
+  if (base.idempotencyKey !== null && Buffer.byteLength(base.idempotencyKey, 'utf8') > 200) {
+    throw new UsageError('--idempotency-key must be at most 200 UTF-8 bytes.');
+  }
+
   return base;
 }
+
+/** Commands that name exactly one identity positionally, and nothing else. */
+function requirePositionalId(command: string, positionals: readonly string[], label: string): void {
+  const value = positionals[1];
+  if (value === undefined || value.length === 0) {
+    throw new UsageError(
+      `"${command}" needs the ${label}, for example: threadline ${command} --project <uuid> <${label}>`,
+    );
+  }
+  if (positionals.length > 2) {
+    throw new UsageError(`"${command}" takes one ${label}.`);
+  }
+}
+
+/** Guards the one target each new command is allowed to carry. */
+function requireSingleTarget(command: CliCommand, base: CliInvocation): void {
+  if (base.wait && !MUTATING_COMMANDS.includes(command)) {
+    throw new UsageError(`--wait applies to a mutation; "${command}" does not create one.`);
+  }
+  if (base.waitTimeoutMs !== null && !base.wait) {
+    throw new UsageError('--wait-timeout needs --wait.');
+  }
+  if (base.input !== null && command !== 'memory:propose' && command !== 'memory:correct') {
+    throw new UsageError(`--input is only used by the content-bearing commands; "${command}" takes flags.`);
+  }
+  if (base.expectCurrentVersionId !== null && command !== 'memory:accept') {
+    throw new UsageError('--expect-current belongs to memory:accept.');
+  }
+  if (base.expectedTaskRevision !== null && command !== 'task:require') {
+    throw new UsageError('--expect-revision belongs to task:require.');
+  }
+  if (base.tokenFile !== null && command !== 'mcp') {
+    throw new UsageError('--token-file belongs to the mcp server. A rendered preview never contains a credential.');
+  }
+}
+
+const MUTATING_COMMANDS: readonly CliCommand[] = [
+  'task:create',
+  'task:require',
+  'memory:propose',
+  'memory:accept',
+  'memory:correct',
+];

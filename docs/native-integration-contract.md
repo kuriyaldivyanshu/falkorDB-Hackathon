@@ -5,10 +5,15 @@ This document is the tracked handoff from the Codex qualification checkpoint
 may use, how each boundary was established, what remains unqualified, and the
 exact checks required before a later assignment may enable more.
 
-Status: **qualification and preparation only.** The native adapter stays
-unavailable in public capabilities, and N03 (session-to-session memory) is not
-complete. No Threadline command installs native configuration, starts inference
-or writes memory in this build.
+Status: **qualification and preparation, plus a reachable read-only MCP server.**
+The native adapter stays unavailable in public capabilities, and N03
+(session-to-session memory) is not complete. No Threadline command installs
+native configuration, starts inference or writes memory in this build.
+
+Updated by `b-mcp-read-02`: the stdio MCP server and the MCP-only configuration
+preview are now implemented and reachable (`threadline mcp`,
+`threadline codex:preview`). The three unqualified native runtime gates below are
+unchanged; nothing in this checkpoint promotes them.
 
 ## Evidence classes
 
@@ -202,6 +207,45 @@ to use `additionalContext` on events that do not support it.
 binary and `codex -p threadline mcp list --json` reported the server with the
 exact rendered `command`, `args` and `env`.
 
+**Observed again on `b-mcp-read-02` (installed 0.163.0, isolated `CODEX_HOME`):**
+the MCP-only preview produced by `threadline codex:preview` — which points at the
+real implemented entry point, `packages/cli/dist/index.js mcp --home <home>
+--project <uuid>` — was accepted by `codex -p threadline mcp list --json`, which
+reported `transport.type: "stdio"`, the exact node executable and argument
+vector, `required` absent (optional), and `env` containing only
+`THREADLINE_HOME`. No credential appeared in the listing or in the rendered file.
+This confirms the configuration route for a *reachable* server; it says nothing
+about a model using it.
+
+### The read-only stdio server
+
+**Implemented:** `threadline mcp --project <uuid>` (see
+[cli-memory-and-mcp.md](cli-memory-and-mcp.md)) binds one explicitly configured
+project and credential at startup and serves six read-only tools over stdio,
+using the official `@modelcontextprotocol/server` SDK. Project, tenant, service
+destination and credential are configuration, never tool arguments; a strict
+input schema refuses unknown routing fields, and every backend request is
+re-authorized by the service.
+
+**Observed on the protocol (authored client, not Codex):** `initialize`
+negotiated `2025-06-18`, followed by `notifications/initialized`, `tools/list`
+and `tools/call`. A mutation-shaped tool name is refused as an unknown tool. A
+tool call during a backend outage answers with a bounded `service_unavailable`
+error and one during a graph outage with `storage_unavailable`; neither falls
+back to reading SQL or source files. Standard output carried protocol messages
+only, with every diagnostic on stderr.
+
+**Observed negative, recorded precisely:** in this isolated `CODEX_HOME`,
+`codex -p threadline debug prompt-input` completed offline but did **not** start
+the optional (`required = false`) MCP server. The earlier qualification
+observed a spawn on that command with a profile that also carried hook entries.
+The difference is not isolated here, so the installed binary's MCP startup
+timing on 0.163.0 remains an open observation rather than a qualified fact.
+
+An authored `tools/call` proves Threadline's transport. It is **not** evidence
+that Codex generates `tools/call` metadata, that a model reads or uses the
+result, or that any conversation identity is correlatable.
+
 ### Startup handshake
 
 **Observed** (installed binary spawning an authored stdio server during
@@ -296,9 +340,20 @@ path depends on it. The smallest probe that would qualify it is listed below.
 - `packages/cli/src/codex/config-preview.ts` — deterministic, non-secret
   profile and ownership-manifest rendering with TOML/shell-safe quoting and
   ownership classification.
+- `packages/cli/src/codex/mcp-preview.ts` (`b-mcp-read-02`) — the same route
+  rendered with the stdio MCP server alone and **no** hook entries, reusing the
+  markers, digests and `checkPreviewOwnership` classification above. Pure: it
+  writes nothing and renders no credential.
+- `packages/cli/src/memory-surface.ts` (`b-mcp-read-02`) — one implementation of
+  the memory/task/source routes and their shared validators, shared by the human
+  CLI and the MCP server so the two cannot drift.
+- `packages/cli/src/mcp/server.ts` (`b-mcp-read-02`) — the project-bound,
+  read-only stdio MCP server. Reachable as `threadline mcp`.
 
-None of these modules perform I/O, call the backend or read credentials. They
-are not reachable from any public command in this build.
+`events.ts`, `hook-output.ts` and `config-preview.ts` still perform no I/O, call
+no backend and read no credential. The first two remain unreachable from any
+public command, because `threadline codex-hook` does not exist in this build and
+the shipped preview installs no hook entry that would call it.
 
 ## Future integration requests
 
@@ -310,20 +365,24 @@ Backend (owner A, later assignment):
   completeness values already match `sourceAppendRecordSchema`);
 - context preparation plus occurrence recording at the `UserPromptSubmit` and
   `SessionStart` boundaries;
-- a decision on whether a provisional-identity session may read memory.
+- a decision on whether a provisional-identity session may read memory;
+- a supported way to issue a non-owner project grant, so the read-only MCP path
+  can use a reader credential without out-of-band setup.
 
 CLI/adapter (later assignment):
 
 - `threadline codex-hook <Event> --home <path>` — stdin normalization, context
-  rendering, exit `0` always;
-- `threadline mcp --home <path>` — the stdio MCP server (local stdio process,
-  stdio-only transport);
-- `threadline codex config-preview` — prints the preview without writing.
+  rendering, exit `0` always. Delivered as modules; the command is still
+  missing, which is why the shipped preview installs no hook entry.
+- `threadline codex:preview` — delivered by `b-mcp-read-02` (spelling chosen to
+  match the `noun:verb` convention of the existing CLI; it replaced the
+  provisional `threadline codex config-preview` form recorded above).
+- `threadline mcp` — delivered by `b-mcp-read-02`, read-only and project-bound.
 
-Dependencies: no MCP SDK is installed. The stdio server can start with
-Node built-ins; adopting an official SDK is a separate, justified dependency
-request, not a silent addition. No shared-contract changes are requested; the
-adapter maps onto the existing source, identity and context contracts.
+Dependencies: `@modelcontextprotocol/server` 2.3.1 (Apache-2.0, official SDK,
+current stable v2 line) is the only added dependency. No shared-contract changes
+were requested or made; the adapter maps onto the existing source, memory and
+task contracts.
 
 ## Remaining authorized runtime checks
 
@@ -343,7 +402,16 @@ adapter maps onto the existing source, identity and context contracts.
 Each check requires explicit authorization for that action. None is implied by
 this document or by this checkpoint's probes.
 
+A fourth, smaller item was added by `b-mcp-read-02` and is **not** yet
+qualified: when the installed 0.163.0 binary starts a `required = false` stdio
+MCP server. `codex -p threadline mcp list --json` registers the server, but
+`debug prompt-input` did not start it in an isolated home. The smallest probe is
+one authorized interactive session with the previewed profile, observing the
+server's own startup line on stderr.
+
 ## Verification performed
+
+Qualification checkpoint (`b-codex-qualification-01`):
 
 - `npm run build` (`tsc -b`) passes on the checkpoint worktree.
 - 109 authored module checks pass (temporary script outside the repository):
@@ -361,3 +429,35 @@ this document or by this checkpoint's probes.
 - These checks establish module and protocol handling only. They do not prove
   native runtime hook execution, identity correlation, memory injection or
   model comprehension.
+
+Client-surface checkpoint (`b-mcp-read-02`), against a real isolated
+PostgreSQL/FalkorDB stack running the unchanged merged backend:
+
+- `npm run build` (`tsc -b`) passes.
+- 45 CLI checks: task and source creation, a proposal that does not govern,
+  human acceptance under an expected-head guard, requirement binding, current
+  reads, a 600 → 60 second correction with the superseded version and its
+  evidence retained, exact-retry and mismatched-retry behaviour, stale-head and
+  stale-task-revision refusals, and the `0/1/2/3` exit statuses.
+- 24 MCP checks through an authored JSON-RPC client: handshake, the exact
+  six-tool read-only surface, a real backend read through each tool, refusal of
+  a mutation-shaped tool name, refusal of unknown/project/tenant override
+  arguments, invalid-identifier and excessive-limit refusals, bounded source
+  reads, an out-of-project memory refused, and 8 concurrent reads without
+  cross-request leakage.
+- Resilience: 5 mid-session outage checks (`service_unavailable`, no fallback),
+  3 graph-outage checks (`storage_unavailable`, no memory served from SQL or
+  files), 3 authorization-failure checks (no transport opened for an
+  unauthorized binding) and 3 restart/reconnect checks.
+- Preview: 21 checks covering determinism, the real entry point, no rendered
+  hook entry, absence of any credential, `absent`/`owned`/`edited`/`foreign`
+  ownership classification with a foreign file left byte-identical, safe
+  quoting, JSON mode, and no write into the target Codex home.
+- Installed-binary offline inspection: `codex -p threadline mcp list --json`
+  reported the rendered stdio server with its exact command, args and env and no
+  credential; `debug prompt-input` completed offline without starting the
+  optional server. The real native home was neither read nor written.
+- An authored MCP `tools/call` proves Threadline's transport only. It is not
+  evidence that Codex generates tool-call metadata, that a model reads or uses
+  the result, or that native runtime hook execution or identity correlation
+  works. Those remain unqualified.

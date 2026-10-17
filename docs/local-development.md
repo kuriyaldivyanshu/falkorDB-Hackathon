@@ -45,6 +45,52 @@ threadline version                    # client, protocol and service versions
 threadline help                       # the authoritative command surface
 ```
 
+Tasks and semantic memory, added by `b-mcp-read-02`:
+
+```sh
+threadline task:create --project <uuid> --title <text> --idempotency-key <key>
+threadline task:inspect --project <uuid> <taskId>
+threadline task:require --project <uuid> <taskId> --memory <id> \
+        --expect-revision <token> --idempotency-key <key>
+threadline task:requirements --project <uuid> <taskId>
+
+threadline memory:propose --input <file|-> [--wait]
+threadline memory:accept --project <uuid> <memoryId> --version <versionId> \
+        --idempotency-key <key> [--expect-current <versionId>|none] [--reason <text>]
+threadline memory:correct --input <file|-> [--wait]
+threadline memory:inspect --project <uuid> <memoryId>
+threadline memory:query --project <uuid> [--task <id>] [--kind <kind>] [--focus <text>] [--limit <n>]
+
+threadline operation:inspect --project <uuid> <operationId>
+```
+
+Two rules hold across the mutations. An expected version and an idempotency key
+are always supplied by the caller: the CLI never derives an expected head, never
+invents a key and never retries a guarded mutation on its own. Content-bearing
+input (`memory:propose`, `memory:correct`) arrives as one bounded JSON document
+of at most 256 KiB, read from a file or from standard input, and is validated by
+the shared input contract rather than by a wide set of flags.
+
+Exit status is `0` for a successful read or a committed operation, `1` for a
+refusal or failure, `2` for a usage error, and `3` when the operation still has
+no durable outcome. `--json` prints exactly one machine-readable result;
+`--wait` follows an operation to a settled state and still reports a refusal as a
+refusal.
+
+Two more commands added by the same assignment:
+
+```sh
+threadline mcp --project <uuid> [--token-file <path>] [--timeout-ms <n>] [--concurrency <n>]
+threadline codex:preview --project <uuid> [--codex-home <path>] [--executable <path>] [--entry <path>]
+```
+
+`mcp` serves the configured project read-only over stdio; it exposes no write,
+acceptance or generic proxy tool, refuses to start if the credential cannot see
+the configured project, and never falls back to reading SQL or source files
+during an outage. `codex:preview` renders the Codex profile that starts `mcp`,
+writes nothing and contains no credential. See
+[docs/cli-memory-and-mcp.md](cli-memory-and-mcp.md) for the full workflow.
+
 ### Privilege model
 
 Forced row-level security applies to a table's owner as well as to other roles, so the three `SECURITY DEFINER` functions that must cross the tenant fence — `token_lookup`, `claim_operations` and `operation_backlog` — only see rows when their owner can bypass that fence. A definer function whose owner cannot bypass it matches nothing, which would make authentication, claiming and the backlog count fail silently.
@@ -104,6 +150,14 @@ Observed episodes, reusable procedures, bounded context preparation, claims and 
 Readiness checks inspect the installed Codex version without reading native authentication or starting inference. Installation writes only explicitly approved, manifest-owned native configuration. Authored live inference is a separately authorized acceptance step.
 
 Qualify hooks, bounded context output and MCP identity before claiming compatible capture or model mutations. No native GUI/cloud support is inferred from CLI behavior.
+
+One step is now reachable: `threadline codex:preview` renders the MCP-only
+profile, and the installed `codex-cli 0.163.0` binary parses it and reports the
+exact rendered command, args and env through `codex -p threadline mcp list
+--json`. That is evidence about the configuration route and stdio registration
+only. Hook runtime execution, `additionalContext` delivery and MCP `tools/call`
+identity remain unqualified — see
+[docs/native-integration-contract.md](native-integration-contract.md).
 
 ## Demo assets
 
