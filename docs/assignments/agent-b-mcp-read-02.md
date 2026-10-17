@@ -49,6 +49,21 @@ Agent A owns core/shared contracts and SQL migration sequencing. Work against th
 
 ## Isolated runtime allocation
 
+### Coordinator review correction (18 October 2026)
+
+The user requested resolution of the remaining status-wording defect while
+PR #13 is under review. The coordinator owns the narrow correction to
+`packages/backend/src/index.ts` (the durable Guarantees note and adjacent
+comment), plus this result record, on this existing branch. Agent B's broader
+backend exclusion remains in effect. This is a review fix for the same
+checkpoint; no new feature, contract, migration or dependency is assigned.
+
+Verification may use a temporary loopback listener on reserved port 47834 with
+the existing B synthetic stores and explicit B installation root. Stop that
+listener afterwards; preserve B's existing service, containers and evidence.
+
+### Reserved assignment resources
+
 - HTTP: `127.0.0.1:47833`.
 - Verification PostgreSQL host port: `55443`.
 - Verification FalkorDB host port: `56443`.
@@ -553,62 +568,50 @@ Post-merge, the same established-connection sequence does not abort the service
 and the process recovers on its own. That is a client-observed result, not a
 claim about every failover path.
 
-### Narrow backend observation after the merge (reported, not fixed)
+### Backend Guarantees wording: resolved by the coordinator
 
-`threadline status` still prints, in its `Guarantees` line, that "Episodes,
-procedures, context and native integration are not implemented and are stated
-unavailable in capabilities". The capability table now reports
-`memory.episode.record` as supported, so that prose is stale relative to the
-table it summarises. It is a `healthGuarantees.note` string in the backend and
-this assignment does not edit backend source; reported for the backend owner.
+Agent B reported that `threadline status` still described episodes and procedures
+as unimplemented after their backend support merged. That observation was valid
+at the B handoff head `c4f1806`; B correctly left backend source to its owner.
 
-### Open backend documentation defect: exact location and required wording
+On 18 October 2026, the user requested resolution during PR #13 review. Under
+the coordinator scope reservation above, this branch now corrects the durable
+`guarantees.note` and adjacent comment in `packages/backend/src/index.ts`.
+The note names episode admission and human-reviewed procedural candidates as
+implemented, preserves acceptance versus validation, and states validated
+procedural reuse, bounded context/occurrences, agent claims, handoffs and native
+capture as unavailable. No contract, migration or capability changed.
 
-Still open on this branch and on `main`. Backend source is outside this
-assignment's ownership, so this records the exact edit for the coordinator
-instead of making it.
+Coordinator verification on this correction:
 
-**File:** `packages/backend/src/index.ts`
-**Location:** the `guarantees.note` ternary in `createMemoryService`'s liveness
-handler — the `durableReady() ? '<text A>' : '<text B>'` expression at line 481
-on this branch. The stale sentence is the tail of text A:
+- `npm run build`: passed.
+- Assignment H1, heading hierarchy, labelled fences and local links: passed;
+  `git diff --check`: passed.
+- Temporary verifier:
+  `/tmp/threadline-b-mcp-read-02-checks/coordinator-status-wording.mjs`.
+  It used the explicit B installation root and assigned synthetic stores, with
+  a temporary listener on `127.0.0.1:47834`. Authenticated `/v2/status` returned
+  `state: ready` and the corrected note; the full health report passed the
+  shared schema. The note is 648 UTF-8 bytes, within the 1024-character limit.
+- Authenticated `/v2/capabilities` passed its shared schema:
+  `memory.episode.record` supported; `memory.procedure.validate`,
+  `context.prepare`, `context.occurrence`, `claim.acquire`, `handoff.offer`
+  and `session.register` unavailable.
+- The temporary service stopped cleanly. B's existing service on 47833 was not
+  restarted and retains its already-loaded wording until restart; this is
+  validation of the corrected build on the temporary listener.
+- Two initial verifier attempts failed before successful HTTP verification:
+  an incorrect backend build-output import path, then a port-zero URL that
+  this service address helper does not resolve to the assigned port. The
+  verifier now uses the actual package entry point and reserved port 47834.
+- The earlier 128 checks remain evidence for the integrated client/transport
+  code at `13112cf`; they were not repeated for this note/comment-only source
+  correction. Native runtime gates remain unqualified and N03 incomplete.
 
-> Episodes, procedures, context and native integration are not implemented and
-> are stated unavailable in capabilities.
+The correction is included in this PR rather than waiting for a separate main
+change and another merge. Review and integration remain coordinator actions.
 
-**Why it is wrong now:** `threadline capabilities` reports
-`memory.episode.record` as **supported** and serves
-`POST /v2/memories/episodes`, and a procedure can be proposed, human-accepted
-and read back with a server-resolved `procedureState`. `GET /v2/status` is
-served to any authenticated caller, so a client is told the opposite of the
-capability table on the same service.
-
-**Required wording.** Replace text A with the following, which keeps the
-durable-store and receipt claims, names what is implemented, and names what is
-not:
-
-```text
-Source history is durable in SQL plus immutable files. Semantic memory proposals, explicit human acceptance, corrections and task requirements are admitted in SQL and committed to the project graph through the leased worker with graph receipts; accepted-memory reads resolve the current version from that graph. Episode admission and procedural candidates with human review are admitted and committed the same way; a human-accepted procedure stays a candidate. Validated procedural reuse, bounded context preparation and occurrence recording, coordination, handoffs and native capture are not implemented and are stated unavailable in capabilities.
-```
-
-That replacement is 648 UTF-8 bytes, inside the 1024-byte
-`backendGuaranteesSchema.note` limit in `packages/shared/src/health.ts`, so no
-schema change is required. The comment immediately above the ternary
-("Episodes, procedures, context and native integration are still absent…") needs
-the same correction; it is documentation inside the same backend file.
-
-**Verification for the coordinator after the correction lands on main:** merge
-`main` into this branch normally, run `npm run build`, start the service against
-an isolated store and confirm `threadline status` reports the new wording with
-`state: ready`, and `GET /v2/capabilities` still reports `memory.episode.record`
-supported and `memory.procedure.validate` unavailable. No MCP, preview or
-offline-binary check depends on this string, so the 128-check suite does not
-need re-running for it.
-
-Until that correction is on `main`, this sentence is the one place where the
-product documentation and the running service disagree.
-
-### Documentation consistency check (final, `13112cf`)
+### Documentation consistency check (Agent B handoff, `13112cf`)
 
 Checked that `README.md`, `docs/local-development.md`, `docs/cli-memory-and-mcp.md`,
 `docs/native-integration-contract.md` and this record all say the same thing about
@@ -624,17 +627,18 @@ what is implemented, what is unavailable, and what is unqualified.
 | N03 not complete | yes | yes | yes | yes | yes |
 | Authored MCP checks are not installed-binary evidence | — | — | yes | yes | yes |
 
-Every local Markdown link in the four documents resolves; every fence is
-language-labelled; each file has one H1 and hierarchical headings. The only
-sentence that disagrees with the capability table is the backend's own
-`Guarantees` string, which is outside this branch's ownership and is described
-immediately below.
+At Agent B's handoff, every local Markdown link in the four documents resolved;
+every fence was language-labelled; each file had one H1 and hierarchical
+headings. The backend Guarantees discrepancy identified then is resolved in the
+coordinator correction above.
 
-No source, dependency or integrated behaviour changed after the verified head
-`13112cf`, so the build and the 128 checks were not re-run; the transcript at
+Before the coordinator correction, the commits after verified head `13112cf`
+were documentation-only, so Agent B did not repeat its build or 128 checks. The
+coordinator build and focused status verification are recorded above. The
+original transcript at
 `/tmp/threadline-b-mcp-read-data-02/logs/verification-merged.txt`
 (`sha256:a93eaf6308764a69c568f964b8db0afefcc4c5307cd6a9d710276b732a97da84`)
-still describes the checked tree.
+records those earlier 128 checks, before the coordinator wording correction.
 
 ### Recovery and artifact paths
 
