@@ -183,20 +183,24 @@ Stop at this checkpoint. Production MCP dependency installation, CLI dispatch, e
   unqualified list; optionally add a line under section 6/7 noting that the
   native adapter stays absent from public capabilities until the live probes
   and backend work land.
-- Final commit/remote confirmation/PR URL: commit
+- Final commit/remote confirmation/PR URL: initial deliverables commit
   `2651d65c5127039e4625889166e14ff304ab807b` on
   `threadline/b-codex-qualification-01`, pushed with
-  `git push -u origin HEAD:refs/heads/threadline/b-codex-qualification-01`;
-  `git ls-remote origin refs/heads/threadline/b-codex-qualification-01` returned
-  the same SHA (verified). **PR not created:** no supported authenticated
-  GitHub route exists in this environment (`gh`, `hub` and `glab` are absent,
-  and installing tools or borrowing credentials is outside this assignment).
-  Existing PRs were inspected with `git ls-remote origin 'refs/pull/*'`
-  (only refs/pull/1..8 exist, none matching this branch); the push output
-  offered the create link, so no PR exists for this branch yet. Open it with
-  base `main` and head `threadline/b-codex-qualification-01`:
-  `https://github.com/kuriyaldivyanshu/falkorDB-Hackathon/pull/new/threadline/b-codex-qualification-01`
-  (a create link, not a claim that a PR exists).
+  `git push -u origin HEAD:refs/heads/threadline/b-codex-qualification-01`.
+  No authenticated GitHub route exists in this environment (`gh`, `hub` and
+  `glab` are absent, and installing tools or borrowing credentials is outside
+  this assignment), so this assignment did not create the PR; the owner created
+  it as `https://github.com/kuriyaldivyanshu/falkorDB-Hackathon/pull/9`
+  (base `main`, head `threadline/b-codex-qualification-01`). Existence and head
+  were verified with `git ls-remote origin refs/pull/9/head`. Review fixes stay
+  with that PR: commit
+  `e00d76d9eda3ad97a4e37ee47690e884cb396913` ("Fix review findings in ownership
+  check and correlation gaps") addressed the three findings — stale-but-owned
+  files recognized by the recorded manifest digest, role-aware ownership-marker
+  detection (JSON `kind`/`marker` for the manifest), and unusable tool/agent
+  references reported as correlation gaps. It was pushed to the same branch;
+  `git ls-remote origin refs/heads/threadline/b-codex-qualification-01
+  refs/pull/9/head` returned this SHA for both (verified).
 - Retirement handoff: the worktree may be retired after merge; the temporary
   probe root is disposable once the PR is reviewed, and `archive/codex` was used
   read-only as a hypothesis source.
