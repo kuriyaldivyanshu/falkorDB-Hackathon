@@ -110,7 +110,7 @@ All rulebook gates were re-verified before anything was removed.
 3. The old service was re-identified by port, command, working directory and data root rather than a remembered pid: `node packages/cli/dist/index.js serve`, listening on `127.0.0.1:47831`, cwd `/private/tmp/threadline-a-n02b-semantic-01`, `THREADLINE_HOME=/tmp/threadline-a-n02b-semantic-data-01/home`. It was stopped with `SIGTERM` and logged `Operation worker stopped.` then `Memory service stopped.`
 4. Both containers were inspected before stopping: `threadline-a-n02b-semantic-01-postgres` (`postgres:18-alpine`, `127.0.0.1:55441`, volume `threadline-a-n02b-semantic-01-pg-data`) and `threadline-a-n02b-semantic-01-falkordb` (`falkordb/falkordb:6.0.2`, `127.0.0.1:56441`, volume `threadline-a-n02b-semantic-01-falkordb-data`, append-only with `appendfsync always`). Only those two containers and those two named volumes were stopped, removed and deleted. No prune ran; the `threadline-local-*` containers and volumes and every other pre-existing store were verified untouched afterwards.
 5. Useful verification material was preserved **before** disposal: the twelve check scripts and the 128-line transcript (sha256 `985c325f313e7f60e8fa386d45a95049ef63f3d82398c2e86a7ae83cc97d9248`, matching the digest in the previous record) are at `/tmp/threadline-a-n02b-evidence-02-checks/carried-over/a-n02b-semantic-01/` with a `SHA256SUMS.txt`. The transcript was scanned for credentials first and contains none.
-6. The temporary roots `/tmp/threadline-a-n02b-evidence-data-01` and `/tmp/threadline-a-n02b-semantic-01-checks` were then removed, which destroyed the generated throwaway passwords, `secrets.json`, `credential.json`, `tokens.env` and `credentials.sql`. Nothing was copied out of them.
+6. The temporary roots `/tmp/threadline-a-n02b-semantic-data-01` and `/tmp/threadline-a-n02b-semantic-01-checks` were then removed, which destroyed the generated throwaway passwords, `secrets.json`, `credential.json`, `tokens.env` and `credentials.sql`. Nothing was copied out of them.
 7. `git worktree remove /private/tmp/threadline-a-n02b-semantic-01` succeeded without `--force`, after the disposable generated output had been deleted explicitly.
 8. Historical branches were kept recoverable: local `threadline/a-n02b-semantic-01` still exists and `refs/heads/threadline/a-n02b-semantic-01` remains on the remote at `ac3ca86`.
 
@@ -146,7 +146,7 @@ Existing routes `POST /v2/memories/proposals`, `POST /v2/memories/:memoryId/acce
 
 #### Evidence classification (server-resolved, never caller-granted)
 
-`evidencePrecision` in a request is a request. `observed` is granted only when **every** cited source is (1) in project scope, project-visible and available, (2) catalogued as outcome evidence (`procedure_outcome`, `tool_result`, `permission_outcome`), (3) `complete`, (4) **recorded by a human principal**, and (5) itself admitted to project memory. `source.append` always stamps the acting principal, so a producer or model principal cannot mint observed-grade evidence by declaring a kind: its own records fail (4). A request for `observed` that does not qualify is **refused** with `unsupported`, never silently downgraded. An absent or `authored` request always resolves to `authored` and is admitted through the human-reviewed path.
+`evidencePrecision` in a request is a request. `observed` is granted only when **every** cited source is (1) in project scope, project-visible and available, (2) catalogued as outcome evidence (`procedure_outcome`, `tool_result`, `permission_outcome`), (3) `complete`, (4) **recorded by the acting human principal**, and (5) itself admitted to project memory. `source.append` always stamps the acting principal, so a producer or model principal cannot mint observed-grade evidence by declaring a kind: its own records fail (4). A request for `observed` that does not qualify is **refused** with `unsupported`, never silently downgraded. An absent or `authored` request always resolves to `authored` and is admitted through the human-reviewed path.
 
 The worker re-derives all five conditions at delivery, so a document cannot assert a precision its evidence no longer supports (`episode_evidence_unsupported`, `evidence_precision_conflict`).
 
@@ -229,8 +229,8 @@ node .../phase3.mjs      # 22 checks
 
 ### Integration requirements and retirement handoff
 
-- Merge serially on `main`. This PR touches only `packages/backend/src/**`, `packages/shared/src/**`, `CONTEXT.md`, `docs/memory-kinds.md`, this record and nothing else, so **no frozen-file change is required**.
-- No manifest, lockfile, build, Compose, `.gitignore`, `fixtures/` or CLI change is needed, and no dependency was added.
+- Merge serially on `main`. This PR touches `packages/backend/src/**`, `packages/shared/src/**`, `CONTEXT.md`, `docs/memory-kinds.md`, this record and the coordinator-authorized `packages/backend/package.json`, `package-lock.json` and `docs/storage-recovery.md`.
+- The backend manifest and lockfile add the direct dependency `@redis/client` at `5.12.1`; integrate these edits serially with Agent B's lockfile changes. No build, Compose, `.gitignore`, `fixtures/` or CLI change is needed.
 - The coordinator owns `docs/development-checklist.md`, `README.md` and `docs/local-development.md`.
 ### Final commits, remote confirmation and PR
 

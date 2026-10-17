@@ -61,7 +61,7 @@ An outcome is a statement about **this action under the recorded
 successful step is not a successful task: no episode is ever read as a claim
 about the task it was performed under.
 
-### Evidence precision is server-resigned, never caller-granted
+### Evidence precision is server-resolved, never caller-granted
 
 | precision | meaning | acceptance |
 | --- | --- | --- |
@@ -78,7 +78,7 @@ an observation must not be handed back a weaker record without being told.
 2. its catalogued kind is outcome evidence in this contract —
    `procedure_outcome`, `tool_result` or `permission_outcome`;
 3. its completeness is `complete` (not `partial`, `unknown` or `gap`);
-4. **the principal that recorded it is a human**;
+4. **the principal that recorded it is the acting human principal**;
 5. its own admission has committed, so it exists in project memory.
 
 Condition 4 is what makes this honest in a build with no native capture.
@@ -244,9 +244,30 @@ curl -sS -X POST http://127.0.0.1:47832/v2/memories/episodes \
        "evidencePrecision":"authored","idempotencyKey":"ep-1"}'
 ```
 
+First admission returns a pending operation (excerpt). No commit timestamp is
+available yet (`committedAtMs` is `null` in the full response).
+
 ```json
-{"ok":true,"data":{"operationId":"…","state":"committed","memoryId":"…","versionId":"…",
- "committedAtMs":1792261328296,"errorCode":null,"errorDetail":null}}
+{"ok":true,"data":{"operationId":"…","state":"pending","memoryId":"…","versionId":"…",
+ "errorCode":null,"errorDetail":null}}
+```
+
+After the worker commits, inspect the same operation:
+
+```sh
+curl -sS "http://127.0.0.1:47832/v2/operations/…?projectId=…" \
+  -H "authorization: Bearer $PRODUCER_TOKEN"
+```
+
+The later `GET /v2/operations/:operationId` response includes the commit timestamp
+in its receipt:
+
+```json
+{"ok":true,"data":{"operationId":"…","kind":"memory.episode.record","state":"committed",
+ "requestDigest":"…","attempts":1,"createdAtMs":1792261328000,
+ "settledAtMs":1792261328296,"errorCode":null,
+ "receipt":{"graphEpoch":"…","eventSeq":"1","outcome":"committed",
+ "committedAtMs":1792261328296}}}
 ```
 
 ```sh

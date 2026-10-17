@@ -202,7 +202,8 @@ export const proceduralContentSchema = z.object({
   procedureState: z.enum(PROCEDURE_STATES),
   /** Review that allowed validation; null until that gate exists. */
   reviewRef: z.string().max(256).nullable(),
-  supportedBy: z.array(uuidSchema).max(MEMORY_LIMITS.maxProcedureSupports),
+  supportedBy: z.array(uuidSchema).max(MEMORY_LIMITS.maxProcedureSupports)
+    .refine((ids) => new Set(ids).size === ids.length, 'Supporting episode versions must be unique.'),
 });
 export type ProceduralContent = z.infer<typeof proceduralContentSchema>;
 
@@ -228,7 +229,8 @@ export const procedureAuthoringSchema = z.strictObject({
     value: byteBoundedText(512),
   })).max(MEMORY_LIMITS.maxProcedureParameters),
   /** Episode versions this proposal claims as support. Checked, never trusted. */
-  supportedBy: z.array(uuidSchema).max(MEMORY_LIMITS.maxProcedureSupports),
+  supportedBy: z.array(uuidSchema).max(MEMORY_LIMITS.maxProcedureSupports)
+    .refine((ids) => new Set(ids).size === ids.length, 'Supporting episode versions must be unique.'),
 });
 export type ProcedureAuthoring = z.infer<typeof procedureAuthoringSchema>;
 
@@ -611,7 +613,7 @@ export const memoryDocumentSchema = z.object({
    * exact retry matches. The precision the server actually granted is recorded
    * in `content.evidencePrecision` and is resolved from eligibility, not input.
    */
-  requestedEvidencePrecision: z.enum(EPISODE_EVIDENCE_PRECISIONS).nullable(),
+  requestedEvidencePrecision: z.enum(EPISODE_EVIDENCE_PRECISIONS).nullable().optional(),
 });
 export type MemoryDocument = z.infer<typeof memoryDocumentSchema>;
 

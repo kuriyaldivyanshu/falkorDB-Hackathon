@@ -23,7 +23,7 @@ import type { SqlDatabase } from '../storage/pg.js';
  *    (`procedure_outcome`, `tool_result`, `permission_outcome`);
  * 3. it is `complete`: a partial, unknown or explicitly gapped record is not an
  *    established outcome, however well-formed its kind;
- * 4. its recording principal is a **human** principal — a producer or model
+ * 4. its recording principal is the **acting human** principal — a producer or model
  *    principal cannot mint observed-grade evidence, because `source.append`
  *    always stamps the acting principal, so this is a fact about who recorded
  *    the evidence rather than a claim in a request;
@@ -67,6 +67,7 @@ interface EvidenceEligibilityRow {
   readonly availability: string;
   readonly visibility: string;
   readonly producer_kind: string;
+  readonly producer_principal_id: string;
   readonly anchor_state: string | null;
 }
 
@@ -89,7 +90,7 @@ export async function classifyEpisodeEvidence(
   const rows = await deps.db.withTenantTransaction(query.tenantId, (tx) =>
     tx.rows<EvidenceEligibilityRow>(
       `SELECT s.id, s.kind, s.completeness, s.availability, s.visibility,
-              p.kind AS producer_kind,
+              s.producer_principal_id, p.kind AS producer_kind,
               o.state AS anchor_state
          FROM threadline_memory.sources s
          JOIN threadline_memory.principals p ON p.tenant_id = s.tenant_id AND p.id = s.producer_principal_id
@@ -142,6 +143,9 @@ export async function classifyEpisodeEvidence(
         'A cited source was recorded by a non-human principal; a producer assertion stays authored evidence.',
       );
     }
+    if (row.producer_principal_id !== query.principalId) {
+      return refuseUnsupported('A cited source was not recorded by the acting human principal.');
+    }
     if (row.anchor_state !== 'committed') {
       return refuseUnsupported(
         'A cited source has not been admitted to project memory yet, so it cannot establish an outcome.',
@@ -152,7 +156,7 @@ export async function classifyEpisodeEvidence(
     precision: 'observed',
     class: 'eligible',
     reason:
-      'Every cited source is complete, project-visible, available, admitted, and was recorded by a human principal.',
+      'Every cited source is complete, project-visible, available, admitted, and was recorded by the acting human principal.',
   };
 }
 

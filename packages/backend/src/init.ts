@@ -209,8 +209,8 @@ function identityDifferences(
  * - **`config.json` bound to the same storage identity.** This is the same
  *   installation. Re-running setup is legitimate and stays legitimate:
  *   migrations are idempotent, the application role's password is never
- *   rewritten by the migration runner, and the configuration file is left as it
- *   is rather than rewritten with identical content.
+ *   rewritten by the migration runner, and config.json and secrets are rewritten
+ *   from the incoming values after setup succeeds.
  * - **Anything else.** The root holds an installation this setup was not aimed
  *   at, or one whose configuration cannot be read. Refuse, naming both targets.
  *   Writing here would repoint someone else's installation and lose their

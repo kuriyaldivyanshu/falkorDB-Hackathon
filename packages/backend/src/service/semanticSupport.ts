@@ -133,7 +133,7 @@ export function memoryRequestDigest(facts: MemoryRequestFacts): string {
     originTaskId: facts.originTaskId,
     expectedHead: facts.expectedHead,
     reason: facts.reason,
-    requestedEvidencePrecision: facts.requestedEvidencePrecision,
+    requestedEvidencePrecision: facts.requestedEvidencePrecision ?? undefined,
   });
 }
 

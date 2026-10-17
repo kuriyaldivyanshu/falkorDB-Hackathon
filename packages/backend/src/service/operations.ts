@@ -927,6 +927,7 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
   const verifyEpisodeEvidence = async (
     row: ClaimedOperationRow,
     document: MemoryDocument,
+    actorPrincipalId: string,
   ): Promise<PlanOutcomeRefuse | null> => {
     if (document.content.kind !== 'episodic') {
       return refuseIntent('invalid_intent', 'An episode intent must carry episodic content.');
@@ -954,7 +955,7 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
             'The captured episode claims an observation its admission never granted.',
           );
     }
-    const ineligible = episodeEvidenceIneligibility(facts, document.sourceIds);
+    const ineligible = episodeEvidenceIneligibility(facts, document.sourceIds, actorPrincipalId);
     if (ineligible !== null) {
       return refuseIntent('episode_evidence_unsupported', ineligible);
     }
@@ -977,6 +978,7 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
   const episodeEvidenceIneligibility = (
     facts: readonly EpisodeEvidenceRow[],
     sourceIds: readonly string[],
+    actorPrincipalId: string,
   ): string | null => {
     const byId = new Map(facts.map((entry) => [entry.id, entry]));
     const observedKinds: ReadonlySet<string> = new Set(OBSERVED_EVIDENCE_SOURCE_KINDS);
@@ -994,6 +996,9 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
       if (entry.producer_kind !== 'human') {
         return 'A cited source was recorded by a non-human principal; a producer assertion stays authored evidence.';
       }
+      if (entry.producer_principal_id !== actorPrincipalId) {
+        return 'A cited source was not recorded by the acting human principal.';
+      }
       if (entry.anchor_state !== 'committed') {
         return 'A cited source has not been admitted to project memory.';
       }
@@ -1009,7 +1014,7 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
     deps.db.withTenantTransaction(row.tenant_id, (tx) =>
       tx.rows<EpisodeEvidenceRow>(
         `SELECT s.id, s.kind, s.completeness, s.availability, s.visibility,
-                p.kind AS producer_kind, o.state AS anchor_state
+                s.producer_principal_id, p.kind AS producer_kind, o.state AS anchor_state
            FROM threadline_memory.sources s
            JOIN threadline_memory.principals p ON p.tenant_id = s.tenant_id AND p.id = s.producer_principal_id
            LEFT JOIN threadline_memory.operations o
@@ -1829,7 +1834,7 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
     if (evidenceOutcome !== null) {
       return { prepared: 'outcome', outcome: evidenceOutcome };
     }
-    const precision = await verifyEpisodeEvidence(row, document);
+    const precision = await verifyEpisodeEvidence(row, document, base.actorPrincipalId);
     if (precision !== null) {
       return { prepared: 'outcome', outcome: precision };
     }
@@ -2419,6 +2424,7 @@ interface EpisodeEvidenceRow {
   readonly availability: string;
   readonly visibility: string;
   readonly producer_kind: string;
+  readonly producer_principal_id: string;
   readonly anchor_state: string | null;
 }
 

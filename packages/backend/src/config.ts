@@ -115,7 +115,7 @@ interface ConfigFileShape {
     readonly applicationRole?: unknown;
     readonly ssl?: unknown;
   };
-  readonly falkordb?: { readonly host?: unknown; readonly port?: unknown };
+  readonly falkordb?: { readonly host?: unknown; readonly port?: unknown; readonly username?: unknown };
   readonly ownerLabel?: unknown;
 }
 
@@ -250,7 +250,7 @@ export function loadServiceConfig(home: string, env: EnvironmentMap = process.en
       { min: 1, max: 65_535 },
       issues,
     ),
-    username: pick(ENV_KEYS.graphUsername, undefined, ''),
+    username: pick(ENV_KEYS.graphUsername, readString(file?.falkordb?.username), ''),
     password: pick(ENV_KEYS.graphPassword, secrets.falkordbPassword, ''),
     connectTimeoutMs: 5_000,
   };
