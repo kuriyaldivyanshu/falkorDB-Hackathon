@@ -5,22 +5,22 @@ import { ThreadlineError } from '@threadline/shared';
 import type { FalkorDbConfig } from '../config.js';
 import type { Logger } from '../log.js';
 import { silentLogger } from '../log.js';
+import { MEMORY_GRAPH_SCHEMA_VERSION } from '../version.js';
 
 /**
- * FalkorDB adapter.
+ * FalkorDB adapter for project memory graphs.
  *
  * Responsibilities kept deliberately narrow: connect, select a graph by a key
- * that the trusted backend resolved (never by caller input), run parameterized
- * Cypher, and prove that the declared constraints are actually in force.
- *
- * No connection is opened at import time, and a graph key is never accepted
- * from a request body.
+ * the trusted backend resolved from SQL (never from a request body), run
+ * parameterized Cypher, and prove that the declared constraints are actually in
+ * force. A failed or pending constraint means the graph is not ready, and
+ * readiness is never inferred from a successful process start.
  */
 
 export interface GraphStore {
   /** Returns the named graph. The caller must have resolved `graphKey` from SQL. */
   graph(graphKey: string): Graph;
-  /** Creates the indexes and constraints the authority contract depends on. */
+  /** Creates and verifies the constraints and indexes the memory contract needs. */
   ensureSchema(graphKey: string): Promise<GraphSchemaReport>;
   /** Cheap liveness probe. Throws `storage_unavailable` when unreachable. */
   ping(): Promise<void>;
@@ -42,23 +42,24 @@ export interface GraphSchemaReport {
 }
 
 /**
- * Constraints M01 actually relies on. The reference catalog also declares
- * Observation/Message/TaskState uniqueness; those labels gain nodes in later
- * milestones, so only the M01 subset is required here. A missing constraint is
- * never assumed: `ensureSchema` reports the real state instead.
+ * Constraints the memory contract actually relies on:
+ *
+ * - one `Entity` id per project graph, so a ProjectRoot/SourceAnchor/Memory
+ *   identity cannot silently duplicate;
+ * - one `Event` per (graph epoch, sequence), so an event stream cannot fork;
+ * - one `OperationReceipt` per (graph epoch, operation), so a replay cannot
+ *   commit the same operation twice.
  */
 const REQUIRED_CONSTRAINTS: readonly { label: string; properties: string[] }[] = [
   { label: 'Entity', properties: ['id'] },
   { label: 'Event', properties: ['graph_epoch', 'seq'] },
-  { label: 'RequestReceipt', properties: ['graph_epoch', 'request_id'] },
-  { label: 'TaskState', properties: ['task_id', 'revision'] },
+  { label: 'OperationReceipt', properties: ['graph_epoch', 'operation_id'] },
 ];
 
 const REQUIRED_INDEXES: readonly { label: string; properties: string[] }[] = [
   { label: 'Entity', properties: ['id'] },
-  { label: 'RequestReceipt', properties: ['graph_epoch', 'request_id'] },
   { label: 'Event', properties: ['graph_epoch', 'seq'] },
-  { label: 'TaskState', properties: ['task_id', 'revision'] },
+  { label: 'OperationReceipt', properties: ['graph_epoch', 'operation_id'] },
 ];
 
 const READINESS_TIMEOUT_MS = 30_000;
@@ -77,14 +78,29 @@ export function createGraphStore(deps: GraphStoreDeps): GraphStore {
       return client;
     }
     try {
-      client = await FalkorDB.connect({
+      const live = await FalkorDB.connect({
         host: deps.config.host,
         port: deps.config.port,
         ...(deps.config.username.length > 0 ? { username: deps.config.username } : {}),
         ...(deps.config.password.length > 0 ? { password: deps.config.password } : {}),
         socket: { connectTimeout: deps.config.connectTimeoutMs },
       });
-      return client;
+      // The Redis client behind FalkorDB emits `error` when its socket dies.
+      // Without a listener that aborts the whole process, so the event is
+      // contained here: log it, drop the dead client, and let the next call
+      // reconnect instead of reusing a closed connection.
+      live.on('error', (error: unknown) => {
+        if (client === live) {
+          client = null;
+        }
+        logger.log({
+          level: 'warn',
+          message: 'FalkorDB connection reported an error; the store will reconnect on the next call.',
+          fields: { errorName: error instanceof Error ? error.name : typeof error },
+        });
+      });
+      client = live;
+      return live;
     } catch (error) {
       client = null;
       throw new ThreadlineError('storage_unavailable', 'Could not connect to FalkorDB.', {
@@ -104,7 +120,7 @@ export function createGraphStore(deps: GraphStoreDeps): GraphStore {
       if (live === null) {
         throw new ThreadlineError(
           'storage_unavailable',
-          'The graph store is not connected; call start() before using it.',
+          'The graph store is not connected; call start before using it.',
         );
       }
       return live.selectGraph(graphKey);
@@ -116,8 +132,8 @@ export function createGraphStore(deps: GraphStoreDeps): GraphStore {
         try {
           await graph.createTypedIndex('', 'NODE', index.label, index.properties);
         } catch (error) {
-          // An existing index is reported as an error by the server. Treat the
-          // "already exists" case as success; everything else must surface.
+          // An existing index is reported as an error by the server. Treat only
+          // the "already exists" case as success; everything else must surface.
           if (!isAlreadyExists(error)) {
             throw new ThreadlineError(
               'storage_unavailable',
@@ -151,7 +167,7 @@ export function createGraphStore(deps: GraphStoreDeps): GraphStore {
         message: report.ready
           ? 'Graph constraints are OPERATIONAL.'
           : 'Graph constraints are not yet OPERATIONAL.',
-        fields: { graphKey, waitedMs: report.waitedMs },
+        fields: { graphKey, waitedMs: report.waitedMs, graphSchemaVersion: MEMORY_GRAPH_SCHEMA_VERSION },
       });
       return report;
     },
@@ -198,7 +214,7 @@ async function waitForConstraints(graph: Graph): Promise<GraphSchemaReport> {
 
   while (Date.now() - startedAt < READINESS_TIMEOUT_MS) {
     state = await readConstraintState(graph);
-    if (REQUIRED_CONSTRAINTS.every((c) => state[c.label] === 'OPERATIONAL')) {
+    if (REQUIRED_CONSTRAINTS.every((constraint) => state[constraint.label] === 'OPERATIONAL')) {
       return { ready: true, state, waitedMs: Date.now() - startedAt };
     }
     await new Promise((resolve) => setTimeout(resolve, READINESS_POLL_MS));
@@ -209,8 +225,6 @@ async function waitForConstraints(graph: Graph): Promise<GraphSchemaReport> {
 async function readConstraintState(
   graph: Graph,
 ): Promise<Readonly<Record<string, ConstraintState>>> {
-  // Observed on FalkorDB 6.0.2: rows are
-  // { type, label, properties: string[], entitytype, status }.
   const reply = await graph.roQuery<{
     type?: unknown;
     label?: unknown;
@@ -238,8 +252,6 @@ async function readConstraintState(
       continue;
     }
     const status: ConstraintState = row.status === 'OPERATIONAL' ? 'OPERATIONAL' : 'PENDING';
-    // A single pending constraint must never mask one that is already
-    // operational, but an observed non-operational row does mean not ready.
     if (observed[required.label] !== 'OPERATIONAL') {
       observed[required.label] = status;
     }

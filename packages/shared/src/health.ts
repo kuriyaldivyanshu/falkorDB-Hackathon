@@ -1,88 +1,82 @@
-import { PROTOCOL_VERSION } from './protocol.js';
-import { BACKEND_STATES, type BackendState } from './events.js';
+import { z } from 'zod';
 
 /**
- * Component names reported by health. Names are fixed here so a client can
- * distinguish "not implemented yet" from "configured but failing".
+ * Health and readiness reporting.
+ *
+ * Presence and readiness are separate facts, and readiness is reported per
+ * component. An unconfigured or unavailable store is reported as unavailable;
+ * no component is ever reported ready on the strength of a successful process
+ * start or a cached earlier result.
  */
+
 export const COMPONENT_NAMES = [
   'api',
-  'eventPublisher',
   'postgres',
+  'privilegedSql',
   'falkordb',
-  'provider',
-  'checker',
+  'sources',
+  'operations',
+  'nativeAdapter',
 ] as const;
-
 export type ComponentName = (typeof COMPONENT_NAMES)[number];
 
-export interface ComponentStatus {
-  readonly name: ComponentName;
-  /** Whether this process actually contains the component. */
-  readonly present: boolean;
-  /** Whether the component is usable right now. Never inferred from presence. */
-  readonly ready: boolean;
-  readonly detail: string;
-}
+export const SERVICE_STATES = ['created', 'starting', 'ready', 'degraded', 'stopped'] as const;
+export type ServiceState = (typeof SERVICE_STATES)[number];
+
+export const componentStatusSchema = z.object({
+  name: z.enum(COMPONENT_NAMES),
+  /** Configured or constructed at all. */
+  present: z.boolean(),
+  /** Usable for the operations it claims to support. */
+  ready: z.boolean(),
+  /** Honest detail: what is missing, or what was actually verified. */
+  detail: z.string().max(512),
+});
+export type ComponentStatus = z.infer<typeof componentStatusSchema>;
 
 /**
- * Explicit statements about what the running process does and does not promise.
- * At M00 every durable capability is false.
+ * Minimal unauthenticated liveness.
+ *
+ * Served without a credential, so it states only that the process is up and
+ * which build answers. Component readiness, storage detail and cross-tenant
+ * backlog counts are deliberately absent: those are operational detail and are
+ * served from the authorized status route instead.
  */
-export interface BackendGuarantees {
-  readonly durable: boolean;
-  readonly replayable: boolean;
-  readonly multiSession: boolean;
-  readonly note: string;
-}
+export const livenessReportSchema = z.object({
+  protocolVersion: z.number().int().nonnegative(),
+  backendVersion: z.string().max(64),
+  state: z.enum(SERVICE_STATES),
+  uptimeMs: z.number().int().nonnegative(),
+});
+export type LivenessReport = z.infer<typeof livenessReportSchema>;
 
-export interface HealthReport {
-  readonly protocolVersion: number;
-  readonly backendVersion: string;
-  readonly state: BackendState;
-  readonly uptimeMs: number;
-  readonly components: readonly ComponentStatus[];
-  readonly guarantees: BackendGuarantees;
-}
+export const backendGuaranteesSchema = z.object({
+  /**
+   * Accepted memory survives restarts in FalkorDB. Only true once the memory
+   * write/read services exist and their commit path is running; connectivity
+   * alone never sets it (N02B onward).
+   */
+  durableMemory: z.boolean(),
+  /**
+   * Source-backed graph admission commits are durable: SQL is applied, the
+   * narrow cross-tenant functions are usable, FalkorDB is reachable and the
+   * leased worker is running. Connectivity alone never sets it.
+   */
+  graphAdmission: z.boolean(),
+  /** Authorized source history is readable from SQL plus immutable files. */
+  sourceHistory: z.boolean(),
+  /** Process-local status notifications exist; there is no durable replay. */
+  replayable: z.literal(false),
+  note: z.string().max(1024),
+});
+export type BackendGuarantees = z.infer<typeof backendGuaranteesSchema>;
 
-function isComponentStatus(value: unknown): value is ComponentStatus {
-  if (typeof value !== 'object' || value === null) {
-    return false;
-  }
-  const component = value as {
-    name?: unknown;
-    present?: unknown;
-    ready?: unknown;
-    detail?: unknown;
-  };
-  return (
-    COMPONENT_NAMES.some((name) => name === component.name) &&
-    typeof component.present === 'boolean' &&
-    typeof component.ready === 'boolean' &&
-    typeof component.detail === 'string'
-  );
-}
-
-export function isHealthReport(value: unknown): value is HealthReport {
-  if (typeof value !== 'object' || value === null) {
-    return false;
-  }
-  const candidate = value as {
-    protocolVersion?: unknown;
-    backendVersion?: unknown;
-    state?: unknown;
-    uptimeMs?: unknown;
-    components?: unknown;
-    guarantees?: unknown;
-  };
-  return (
-    candidate.protocolVersion === PROTOCOL_VERSION &&
-    typeof candidate.backendVersion === 'string' &&
-    BACKEND_STATES.some((state) => state === candidate.state) &&
-    typeof candidate.uptimeMs === 'number' &&
-    Array.isArray(candidate.components) &&
-    candidate.components.every(isComponentStatus) &&
-    typeof candidate.guarantees === 'object' &&
-    candidate.guarantees !== null
-  );
-}
+export const healthReportSchema = z.object({
+  protocolVersion: z.number().int().nonnegative(),
+  backendVersion: z.string().max(64),
+  state: z.enum(SERVICE_STATES),
+  uptimeMs: z.number().int().nonnegative(),
+  components: z.array(componentStatusSchema),
+  guarantees: backendGuaranteesSchema,
+});
+export type HealthReport = z.infer<typeof healthReportSchema>;

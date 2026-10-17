@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Threadline local backend — authority, events and the loopback HTTP transport",
+  "description": "Threadline memory service — identity, sources, operations and the loopback HTTP transport",
   "license": "UNLICENSED",
   "main": "./dist/src/index.js",
   "types": "./dist/src/index.d.ts",

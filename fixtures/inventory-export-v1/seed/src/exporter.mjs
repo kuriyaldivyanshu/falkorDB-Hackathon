@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Authored imperfect seed: deliberately preserves input timestamp offsets.
-// It is not a generated model failure. A later Builder must normalize UTC.
+// It is not a generated model failure. The native-agent demo task asks for UTC normalization.
 import { readFileSync } from 'node:fs';
 
 function fail(code) {

@@ -3,18 +3,10 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Threadline terminal client — command entry point and plain Ink interface",
+  "description": "Threadline client — plain memory-service commands and service startup",
   "license": "UNLICENSED",
   "bin": {
     "threadline": "./dist/index.js"
-  },
-  "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
-  "exports": {
-    ".": {
-      "types": "./dist/index.d.ts",
-      "default": "./dist/index.js"
-    }
   },
   "files": [
     "dist"
@@ -24,17 +16,10 @@
   },
   "scripts": {
     "build": "tsc -b",
-    "clean": "tsc -b --clean",
-    "start": "node dist/index.js",
-    "typecheck": "tsc -b"
+    "clean": "tsc -b --clean"
   },
   "dependencies": {
-    "@threadline/shared": "0.0.0",
-    "ink": "^8.0.0",
-    "ink-text-input": "^6.0.0",
-    "react": "^19.3.1"
-  },
-  "devDependencies": {
-    "@types/react": "^19.3.0"
+    "@threadline/backend": "0.0.0",
+    "@threadline/shared": "0.0.0"
   }
 }

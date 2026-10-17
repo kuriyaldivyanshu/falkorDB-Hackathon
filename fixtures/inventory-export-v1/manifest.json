@@ -1,0 +1,228 @@
+{
+  "schema_version": 2,
+  "status": "authored-public-demo-data",
+  "fixture_id": "inventory-export-v1",
+  "task_kind": "inventory-export",
+  "input_schema_version": 1,
+  "project_input_visibility": "project",
+  "reference_time": "2026-10-15T12:00:00Z",
+  "entrypoint": "src/exporter.mjs",
+  "invocation": {
+    "executable": "node",
+    "args": [
+      "src/exporter.mjs",
+      "--as-of",
+      "<reference_time>",
+      "--max-age-seconds",
+      "<current-max-age>"
+    ],
+    "stdin": "JSON array of public case records",
+    "stdout": "UTF-8 CSV",
+    "stderr": "JSON diagnostic on invalid input",
+    "execution_owner": "native coding agent or explicit human command in a separate demo worktree"
+  },
+  "initial_requirement": {
+    "revision": "1",
+    "max_age_seconds": 600
+  },
+  "changed_requirement": {
+    "revision": "2",
+    "max_age_seconds": 60
+  },
+  "allowed_human_change": {
+    "field": "max_age_seconds",
+    "type": "integer",
+    "minimum": 0,
+    "maximum": 3600,
+    "admission": "explicit human acceptance of the current semantic requirement; no automatic fixture admission"
+  },
+  "rules": [
+    "Accept records with unique nonempty printable ASCII SKU of at most 64 characters, integer qty from 0 through 1000000000, and valid supported RFC3339 timestamp.",
+    "Compute age from parsed instants, never lexical timestamp comparison.",
+    "Keep rows if 0 <= reference_time - updatedAt <= max_age_seconds * 1000.",
+    "Exclude future and too-old rows.",
+    "Order by ASCII SKU comparison; emit header sku,qty,updated_at_utc and LF-terminated rows.",
+    "Normalize timestamps to ISO UTC with millisecond precision.",
+    "CSV uses comma delimiters; quote fields containing comma or quote and double embedded quotes.",
+    "Reject invalid record/duplicate/timestamp with exit 2, empty stdout and stable error code; never silently skip invalid records."
+  ],
+  "authored_seed": {
+    "status": "authored-seed-present",
+    "required_observable_defect": "preserves timestamp text rather than normalized UTC; the public mixed-offset case exposes this deliberately authored defect",
+    "disclosure": "authored deliberately imperfect starting implementation; not a forced mistake by the model"
+  },
+  "incompatible_procedure_case": {
+    "fixture_id": "inventory-json-v2",
+    "reason": "different output contract; inventory-export-v1 procedure must not auto-apply"
+  },
+  "requirement_change_note": "A generic implementation may support the changed threshold unchanged. Check the observed output under the current requirement; do not force a code change or invent a failure.",
+  "cases": [
+    {
+      "id": "initial-mixed-offsets",
+      "phase": "initial",
+      "max_age_seconds": 600,
+      "input": [
+        {
+          "sku": "SKU-B",
+          "qty": 3,
+          "updatedAt": "2026-10-15T11:58:00Z"
+        },
+        {
+          "sku": "SKU-A",
+          "qty": 2,
+          "updatedAt": "2026-10-15T11:59:10Z"
+        },
+        {
+          "sku": "SKU-C",
+          "qty": 4,
+          "updatedAt": "2026-10-15T11:59:00Z"
+        },
+        {
+          "sku": "SKU-D",
+          "qty": 5,
+          "updatedAt": "2026-10-15T14:00:00+02:00"
+        },
+        {
+          "sku": "SKU-E",
+          "qty": 6,
+          "updatedAt": "2026-10-15T12:00:01Z"
+        }
+      ],
+      "expected_exit": 0,
+      "expected_stdout": "sku,qty,updated_at_utc\nSKU-A,2,2026-10-15T11:59:10.000Z\nSKU-B,3,2026-10-15T11:58:00.000Z\nSKU-C,4,2026-10-15T11:59:00.000Z\nSKU-D,5,2026-10-15T12:00:00.000Z\n"
+    },
+    {
+      "id": "changed-freshness",
+      "phase": "changed",
+      "max_age_seconds": 60,
+      "input": [
+        {
+          "sku": "SKU-B",
+          "qty": 3,
+          "updatedAt": "2026-10-15T11:58:00Z"
+        },
+        {
+          "sku": "SKU-A",
+          "qty": 2,
+          "updatedAt": "2026-10-15T11:59:10Z"
+        },
+        {
+          "sku": "SKU-C",
+          "qty": 4,
+          "updatedAt": "2026-10-15T11:59:00Z"
+        },
+        {
+          "sku": "SKU-D",
+          "qty": 5,
+          "updatedAt": "2026-10-15T14:00:00+02:00"
+        },
+        {
+          "sku": "SKU-E",
+          "qty": 6,
+          "updatedAt": "2026-10-15T12:00:01Z"
+        }
+      ],
+      "expected_exit": 0,
+      "expected_stdout": "sku,qty,updated_at_utc\nSKU-A,2,2026-10-15T11:59:10.000Z\nSKU-C,4,2026-10-15T11:59:00.000Z\nSKU-D,5,2026-10-15T12:00:00.000Z\n"
+    },
+    {
+      "id": "empty-input",
+      "phase": "both",
+      "input": [],
+      "expected_exit": 0,
+      "expected_stdout": "sku,qty,updated_at_utc\n"
+    },
+    {
+      "id": "csv-escaping",
+      "phase": "both",
+      "input": [
+        {
+          "sku": "Q,\"R",
+          "qty": 0,
+          "updatedAt": "2026-10-15T12:00:00Z"
+        }
+      ],
+      "expected_exit": 0,
+      "expected_stdout": "sku,qty,updated_at_utc\n\"Q,\"\"R\",0,2026-10-15T12:00:00.000Z\n"
+    },
+    {
+      "id": "negative-quantity",
+      "phase": "both",
+      "input": [
+        {
+          "sku": "BAD",
+          "qty": -1,
+          "updatedAt": "2026-10-15T12:00:00Z"
+        }
+      ],
+      "expected_exit": 2,
+      "expected_stdout": "",
+      "expected_error_code": "INVALID_QUANTITY"
+    },
+    {
+      "id": "duplicate-sku",
+      "phase": "both",
+      "input": [
+        {
+          "sku": "DUP",
+          "qty": 1,
+          "updatedAt": "2026-10-15T12:00:00Z"
+        },
+        {
+          "sku": "DUP",
+          "qty": 2,
+          "updatedAt": "2026-10-15T12:00:00Z"
+        }
+      ],
+      "expected_exit": 2,
+      "expected_stdout": "",
+      "expected_error_code": "DUPLICATE_SKU"
+    },
+    {
+      "id": "invalid-timestamp",
+      "phase": "both",
+      "input": [
+        {
+          "sku": "BAD",
+          "qty": 1,
+          "updatedAt": "not-a-date"
+        }
+      ],
+      "expected_exit": 2,
+      "expected_stdout": "",
+      "expected_error_code": "INVALID_TIMESTAMP"
+    }
+  ],
+  "compatible_reuse": {
+    "id": "held-out-compatible-v1",
+    "phase": "distinct-compatible-task",
+    "input": [
+      {
+        "sku": "H-3",
+        "qty": 1,
+        "updatedAt": "2026-10-15T11:59:01Z"
+      },
+      {
+        "sku": "H-1",
+        "qty": 9,
+        "updatedAt": "2026-10-15T06:30:00-05:30"
+      },
+      {
+        "sku": "H-2",
+        "qty": 7,
+        "updatedAt": "2026-10-15T11:58:59Z"
+      }
+    ],
+    "max_age_seconds": 60,
+    "expected_exit": 0,
+    "expected_stdout": "sku,qty,updated_at_utc\nH-1,9,2026-10-15T12:00:00.000Z\nH-3,1,2026-10-15T11:59:01.000Z\n",
+    "disclosure": "publicly authored compatible reuse example; not sealed, statistically independent or previously observed agent behavior"
+  },
+  "evaluation": {
+    "owner": "human or separate temporary verification script",
+    "assertions": "compare observed stdout, exit status and diagnostic code with the public case data",
+    "evidence": "record actual observed outcomes as sources; expected outputs are a specification, never evidence of an executed check",
+    "scope": "demo evaluation only; Threadline does not execute code, own a checker or certify protected completion"
+  },
+  "goal": "Produce deterministic CSV for valid fresh inventory rows, sorted by SKU, with UTC timestamps and correctly escaped fields. Reject invalid input without partial output."
+}

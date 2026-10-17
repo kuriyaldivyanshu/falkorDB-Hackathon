@@ -1,10 +1,14 @@
 /**
- * Minimal structured logger for the M00 scaffold.
+ * Minimal structured logger for the memory service.
  *
  * It is deliberately not a logging framework: one JSON line per record on
  * stderr, primitive fields only. Callers pass already-sanitised values; this
  * module never reads the environment and never accepts a secret-bearing field
  * name.
+ *
+ * Source text never reaches a log record. Callers log identifiers, digests,
+ * counts, statuses and timings; a transcript body, tool result or rendered
+ * context packet would be private content even when it is perfectly ordinary.
  */
 
 export const LOG_LEVELS = ['debug', 'info', 'warn', 'error'] as const;
@@ -40,8 +44,6 @@ const FORBIDDEN_FIELD_PATTERN = /(secret|token|password|authorization|api[_-]?ke
  * with a credential-like name is refused.
  */
 const SAFE_METADATA_SUFFIX = /(?:Configured|Present)$/;
-// Exact numeric model-usage fields, never arbitrary bearer-token fields.
-const SAFE_USAGE_COUNTERS = new Set(['reservedTokens', 'estimatedInputTokens']);
 
 export class RedactedLogFieldError extends Error {
   constructor(field: string) {
@@ -69,9 +71,7 @@ function assertLoggable(
   for (const [name, value] of Object.entries(fields)) {
     const isSafeMetadata =
       typeof value === 'boolean' && SAFE_METADATA_SUFFIX.test(name) && !/^password$/i.test(name);
-    const isUsageCounter = SAFE_USAGE_COUNTERS.has(name) &&
-      typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
-    if (FORBIDDEN_FIELD_PATTERN.test(name) && !isSafeMetadata && !isUsageCounter) {
+    if (FORBIDDEN_FIELD_PATTERN.test(name) && !isSafeMetadata) {
       throw new RedactedLogFieldError(name);
     }
     if (value === null || typeof value !== 'object') {

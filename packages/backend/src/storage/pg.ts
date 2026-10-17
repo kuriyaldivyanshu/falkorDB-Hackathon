@@ -290,52 +290,23 @@ function describeError(error: unknown): string {
   return error instanceof Error ? error.name : typeof error;
 }
 /**
- * Serializes a human command admission against a worker release.
+ * A transaction-scoped advisory lock that serializes the short writes of one
+ * project.
  *
- * Both paths take the same transaction-scoped advisory lock for the project, so
- * an accepted human change cannot land between a worker's authority recheck and
- * its dependent effect. This is deliberately narrow: it is a release barrier,
- * not the M07 requirement-change pipeline.
+ * Source-sequence allocation, privacy-revision changes and operation admission
+ * take the same key, so an accepted change cannot land between another writer's
+ * authority recheck and its commit. It is deliberately narrow: a release
+ * barrier for one project's short SQL work, not a global mutex, and it is
+ * transaction-scoped so it is always released — including on rollback.
  *
- * The lock is transaction-scoped, so it is always released — including on
- * rollback — and can never strand a connection.
+ * The key is derived from tenant and project so two projects never serialize
+ * against each other.
  */
-/**
- * The one key both human admission and worker release must hold.
- *
- * Exported so the human-command path and the worker-release path cannot drift
- * onto different keys and silently stop serializing against each other.
- */
-export function projectAdmissionLockKey(tenantId: string, projectId: string): string {
-  return `threadline:project-admission:${tenantId}:${projectId}`;
+export function projectWriteLockKey(tenantId: string, projectId: string): string {
+  return `threadline:memory-project-write:${tenantId}:${projectId}`;
 }
 
-/**
- * Serializes checkpoint publication and claim release on one reserved connection.
- * A session lock survives the short SQL transactions: staging must commit before
- * graph publication so a lost graph acknowledgement can still be reconciled.
- * Every SQL-backed dependency in work must use the supplied database.
- */
-export async function withTaskCheckpointLock<TResult>(
-  db: SqlDatabase,
-  tenantId: string,
-  projectId: string,
-  taskId: string,
-  work: (db: SqlDatabase) => Promise<TResult>,
-  policy: 'checkpoint' | 'release' = 'checkpoint',
-): Promise<TResult> {
-  return db.withConnection(async (connection) => {
-    await connection.withTenantTransaction(tenantId, async (tx) => {
-      await tx.rows(policy === 'release' ? "SET LOCAL lock_timeout = '0'" : "SET LOCAL lock_timeout = '2s'");
-      await tx.rows('SELECT pg_advisory_lock(hashtextextended($1, 0))', [
-        `threadline:task-checkpoint:${tenantId}:${projectId}:${taskId}`,
-      ]);
-    });
-    return work(connection);
-  });
-}
-
-export async function withProjectAdmissionLock<TResult>(
+export async function withProjectWriteLock<TResult>(
   db: SqlDatabase,
   tenantId: string,
   projectId: string,
@@ -343,7 +314,7 @@ export async function withProjectAdmissionLock<TResult>(
 ): Promise<TResult> {
   return db.withTenantTransaction(tenantId, async (tx) => {
     await tx.rows('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [
-      projectAdmissionLockKey(tenantId, projectId),
+      projectWriteLockKey(tenantId, projectId),
     ]);
     return work(tx);
   });

@@ -1,135 +1,146 @@
-# FalkorDB Track 2 architecture notes
+# Threadline
 
-Snapshot: 17 October 2026. M00–M04 are merged. M05 bounded graph context, explicit model/profile selection and terminal controls are committed on the M05 PR branch and locally verified; see [M05 workflow and evidence](archive/plans/review/m05-integration-verification.md). Verification used real PostgreSQL/FalkorDB and an injected provider with no external inference. The separately authorized M02 OpenCode Go / Space Bunny acceptance remains recorded in [M02 evidence](docs/m02-live-acceptance.md). Contained edits, fresh-successor continuity and protected completion remain later milestones.
+**Persistent, sourced memory and coordination for coding agents. Codex first.**
 
-## Run the local backend and client
+Coding agents lose useful context between sessions: a requirement changed, a previous approach failed, a decision had a reason, or another agent already investigated the problem. Threadline keeps that knowledge available to the next session and the other agents working on the project.
+
+Threadline is being built as a local npm package for **FalkorDB Track 2: Agent Memory and Coordination**. It connects to an existing coding agent, records permitted evidence, and supplies a small, current, source-backed memory packet when the agent needs it.
+
+> **Development status:** the repository is migrating to this product. The storage foundation (SQL catalog, restricted-role row-level security, immutable source files) and the source-backed graph admission worker are verified against local PostgreSQL and FalkorDB. Accepted memory, bounded context and native Codex integration are not yet implemented; capability output reports each of them as unavailable. The retired owned-execution code has been removed.
+
+## What we are building
+
+Threadline provides six connected capabilities:
+
+- **Episodic memory:** what was attempted, what actually happened, and the evidence behind it. Failed, denied, interrupted and unknown outcomes remain distinct.
+- **Semantic memory:** accepted requirements, decisions and scoped facts. Corrections create new versions, so an obsolete requirement does not govern the next session.
+- **Procedural memory:** reusable steps with explicit prerequisites and supporting outcomes. A workflow is applicable only when the new task meets its conditions.
+- **Persistent history:** permitted visible conversation and tool evidence that survives session and service restarts, with capture gaps labelled.
+- **Shared state and handoffs:** current task memory, coordination claims and source-backed handoffs between independently running agents.
+- **Concurrent, isolated access:** several agents can read and append evidence while guarded updates protect accepted state; users and tenants have separate project access.
+
+An agent's proposal remains a proposal until its acceptance policy is satisfied. Repeating a claim does not make it true. Every reusable memory points to available authorized sources.
+
+## The first integration: native Codex CLI
+
+Codex owns the coding experience: authentication, model selection, reasoning, filesystem tools, approvals and cancellation. Threadline supplies memory through supported native integration surfaces:
+
+1. **Hooks** capture supported visible events and request current memory at qualified session/prompt boundaries.
+2. **Local MCP tools** retrieve memory, inspect evidence, propose sourced updates and exchange handoffs.
+3. **Selected history import** reads explicitly chosen stored sessions through a qualified read-only interface.
+
+The intended MCP tools are `threadline_recall`, `threadline_source`, `threadline_record` and `threadline_handoff`. Native version, event coverage and session identity must pass qualification before those capabilities are advertised. Unqualified identity keeps model mutations unavailable.
+
+Each simultaneous root agent uses its own project-bound enrollment. A coordination claim governs memory updates; it does not lock native files or stop another process from editing them.
+
+## How the memory works
+
+Consider an inventory exporter:
+
+1. Session A encounters a timestamp-offset bug. Threadline retains the observed failure and its source.
+2. The user changes the accepted freshness requirement from **600 seconds to 60 seconds**.
+3. Session A ends. A new Codex session B starts without a manually written recap.
+4. Threadline supplies the **current 60-second requirement** and the earlier UTC-normalization lesson, whose applicability is independent of the freshness change.
+5. B can inspect the evidence, use a compatible procedure and publish a sourced handoff.
+
+Expected outputs in a demo fixture are specification data. Only actually observed outputs and checks become evidence. A passing example does not establish that a procedure works for an incompatible schema or environment.
+
+## Architecture
+
+One local TypeScript service owns authorization, evidence, accepted memory, context selection and coordination. Thin CLI, hook and MCP adapters use that same core.
+
+```text
+Native Codex CLI
+    │ supported hooks + local MCP
+    ▼
+Threadline CLI / adapter
+    │ authenticated loopback API
+    ▼
+Threadline memory service
+    ├── PostgreSQL: identity, grants, sessions, sources, operations, jobs
+    ├── FalkorDB: memory versions, current authority, provenance, coordination
+    └── Local source files: permitted immutable evidence bytes
+```
+
+**PostgreSQL** owns access, enrollment, source history and durable operation progress. **FalkorDB** owns accepted memory and its relationships. **Local files** hold retained evidence bytes. The graph stores short curated memory and source references rather than a second copy of every transcript.
+
+FalkorDB does central work: resolving current requirements, finding applicable experiences and procedures, validating provenance, guarding concurrent memory changes, and accepting handoffs. Without it, connected current-memory and coordination operations are unavailable.
+
+### Graph model
+
+The target graph has nine node families: `ProjectRoot`, `Task`, `SessionAnchor`, `SourceAnchor`, `Memory`, `MemoryVersion`, `Claim`, `Event` and `OperationReceipt`.
+
+The important relationships are:
+
+```text
+Task ──REQUIRES──► Memory ──CURRENT──► MemoryVersion
+                                         │
+                                    SOURCED_FROM
+                                         ▼
+                                    SourceAnchor
+
+Procedure version ──SUPPORTED_BY──► Observed episode
+New version ──SUPERSEDES──► Earlier version
+Claim ──FOR_TASK──► Task
+Handoff version ──FROM_SESSION / TO_SESSION──► SessionAnchor
+```
+
+Current authority is the accepted `CURRENT` version. `observed_under` records the conditions of an observation; `applies_when` records when its advice is reusable. An unrelated requirement change need not invalidate every earlier lesson.
+
+### Retrieval and concurrency
+
+Memory selection starts from an authorized task/project, retrieves exact current obligations, then adds a bounded set of applicable failures, procedures and handoffs. A packet explains its sources and omissions. The initial target is a 4 KiB body with an 8 KiB hard limit; mandatory overflow is explicit.
+
+Reads use a small catalog of indexed, bounded graph queries. Writes use expected-version guards and stable operation IDs. A graph mutation commits its state change, Event and receipt atomically; retries reconcile the same operation instead of creating duplicate effects. SQL and graph changes have explicit pending states because they do not share a distributed transaction.
+
+## Privacy and separation
+
+Capture is opt-in and project-bound. Historical import selects exact sessions and categories; it does not scan all native history. Hidden reasoning, native credentials and unselected records are excluded.
+
+Tenant/project grants, scoped tokens, SQL row-level security and separate project graphs enforce access. Retrieved memory cannot reveal text from an unreadable source. The first release supports project-safe shared memory; personal work uses a separately authorized private project.
+
+Deletion first blocks future releases, then removes managed source copies and dependent memory. Diagnostics, persistence logs and backups have explicit retention status. Already supplied context may remain in the native client's history; Threadline cannot recall it.
+
+The hackathon demo uses authored synthetic data. The intended seven-day raw-history default, pinned evidence policy and erasure protocol must be implemented and verified before personal-history import is enabled.
+
+## Intended user workflow
+
+After the package is built and qualified, a user will:
+
+1. Initialize local storage and a Threadline identity.
+2. Associate a repository/worktree with a project.
+3. Review and install an opt-in Codex profile with Threadline hooks and MCP tools.
+4. Launch native Codex and use the project across sessions.
+5. Inspect history, sources, current memory and handoffs through the plain CLI.
+6. Correct, export or delete retained memory explicitly.
+
+The package will include a `threadline` command. It will not need a separate provider account setup or a Threadline coding UI. Package publication and exact supported native versions remain release gates.
+
+## Developing this repository
+
+Use **Node.js 22 or later** and npm from the repository root:
 
 ```sh
+npm ci
 npm run build
-npm run start --workspace @threadline/backend
-# In another terminal:
-node packages/cli/dist/index.js tui
-# Scriptable checks:
-node packages/cli/dist/index.js health
-node packages/cli/dist/index.js echo "hello"
 ```
 
-Permanent package test suites and npm test scripts were removed at the user's request. Build all three packages with `npm run build`; use the CLI checks below for the local runtime. Earlier verification reports retain their historical results.
+The workspace contains `packages/shared`, `packages/backend` and `packages/cli`. These packages are changed in place. The inventory fixture is authored demo data under `fixtures/inventory-export-v1/`; it is not a backend startup requirement.
 
-The default endpoint is `http://127.0.0.1:47821`; `--backend <url>` selects another configured local endpoint. For durable M01 work, follow [local setup](docs/local-development.md): configure `.env`, start Compose, run `npm run db:setup`, then start the backend. The backend loads root `.env`; the CLI does not.
+The owned execution, provider integration and coding TUI have been removed. The current build serves source capture, project association, history and capability reporting; accepted memory, bounded context, native capture and coordination are reported as unavailable with their batch. Setup and status commands are:
 
 ```sh
-node packages/cli/dist/index.js init
-node packages/cli/dist/index.js fixture
-node packages/cli/dist/index.js admit
-node packages/cli/dist/index.js inspect
+npm run setup    # applies schema threadline_memory, verifies the privilege model, creates the local owner credential
+npm run serve    # runs the loopback memory service
+npm run status   # prints health, component readiness and storage state using the local credential
 ```
 
-`admit` requires explicit consent and retains a durable request record for retries. The TUI shows current accepted task/criteria/source authority. Echo and `/events` remain process-local (`replayable=false`); M03 adds a separate durable project-history stream. See [M01 integration evidence](archive/plans/review/m01-integration-verification.md), [the implemented contract](docs/m01-contract-agreement.md) and [the master checklist](archive/plans/track2-implementation-checklist.md). Verification used Node v23.11.0; Node 24 remains untested.
+See [docs/local-development.md](docs/local-development.md) for configuration and the full command surface. The agent work sequence, current status and completion criteria are in [the development checklist](docs/development-checklist.md).
 
-For masked provider-first setup, use `provider:setup` or `/connect` in the TUI. OpenAI, Anthropic (Claude API), OpenRouter and OpenCode Go are available. See [key validation and secure local storage](docs/provider-setup.md).
+## Hackathon demonstration
 
-For legacy environment configuration, including OpenCode Go, see [provider configuration and smoke-test evidence](docs/provider-configuration.md).
+The target demonstration shows a failure remembered across two genuinely distinct Codex sessions, a changed requirement, a reusable procedure and a source-backed handoff. Supporting checks cover restart, stale-update rejection, concurrent protocol clients and two synthetic tenants. Measured client traffic is reported separately from live model agents.
 
-For explicit preparation/start/inspect/cancel commands, see [the current runtime workflow](docs/m02-development.md) and [M02 integration evidence](archive/plans/review/m02-integration-verification.md). Configuration and preparation never infer; an explicitly started production run can incur API charges.
+Submission will include complete local setup, the consequential Cypher queries, graph model, working video, supported-version evidence and AI-assistance disclosure. Native integration and performance results will be recorded only after they are observed.
 
-The [incremental terminal command plan](archive/plans/track2-terminal-command-contract.md) now assigns backend and CLI/TUI controls to M05–M09, including model selection, context compaction, recovery and fresh/resume behavior. M05 commands are implemented locally; fresh/resume and protected completion retain their M07/M08 gates. M10 consolidates the interface.
-
-## Hackathon and selected track
-
-- [Hackathon overview](https://www.wemakedevs.org/hackathons/falkordb)
-- [Tracks](https://www.wemakedevs.org/hackathons/falkordb#tracks)
-- [Official rules](https://www.wemakedevs.org/hackathons/falkordb/rules)
-- [FalkorDB source repository](https://github.com/FalkorDB/FalkorDB)
-
-**Selected track: Track 2 — Agent Memory and Coordination.** The statement shared in this conversation is:
-
-> Build agents that remember across sessions and share state with each other. Memory should persist, update over time, and be available to every agent that needs it.
-
-Its focus areas are:
-
-- Episodic, semantic, and procedural memory.
-- Persistent conversation history.
-- Shared state and handoffs between agents.
-- High-concurrency reads and writes.
-- Separate memory per user or tenant.
-
-## The problem we want to address
-
-The user identified loss of working context during long coding sessions, compaction and replacement with a fresh session: the main goal, current constraints, earlier decisions and failed attempts may need to be reconstructed manually. Multiple workers also need to share applicable findings without copying every conversation into every context window.
-
-## Our basic product idea
-
-**Threadline (working name)** is a proposed local npm package with a TUI, a compact TypeScript model/tool harness, and FalkorDB-backed memory and coordination. The latest user direction is to build our own small harness, using the archived Codex, Pi and Prime Agent projects for inspiration. One explicit API provider exercises our own loop first. Optional Codex/Claude native adapters preserve the official clients' authentication and execution routes after their integration gates pass.
-
-FalkorDB stores connected goals, constraints, decisions, tasks, attempts, procedures, conversation history and verification evidence. The coordinator selects current task context for a fresh session, shares sourced findings with affected workers, coordinates handoffs and rejects completion evidence tied to obsolete requirements. Native authentication routes and actual capture/recovery behaviour must be tested; documented support is not an implemented integration.
-
-The [development blueprint](archive/plans/track2-development-blueprint.md) selects a two-person MVP: one BYOK provider, one declared OS/Docker target, one logical Builder and a protected deterministic service checker. Interrupt Builder, restore a genuinely fresh successor with current graph context and finish with applicable checked evidence. No RLM or summarization API is included. Child investigations and model reviewers are deferred.
-
-The MVP harness owns eleven bounded tools, lifecycle, durable capture, context preparation and coordination. The broader catalog contains fourteen tools, with polling, decision proposal and model-review submission deferred. See the [domain glossary](CONTEXT.md) and [fresh critique/resolutions](archive/plans/review/track2-development-readiness-resolutions.md).
-
-Start implementation with the [code-first master checklist](archive/plans/track2-implementation-checklist.md), split into [Agent A: Memory/Coordinator](archive/plans/track2-agent-a-checklist.md) and [Agent B: Harness/Frontend](archive/plans/track2-agent-b-checklist.md). Write the small runnable backend/TUI first; each milestone combines both lanes into one reviewed branch/commit after integration. Verification, fault evidence and packaging follow the working flow.
-
-M00 and M01 are merged; M01 is PR #2 at `067f842`. M02 is implemented and verified with a real Space Bunny model/read-tool/next-turn/final-response flow. See [the executable workflow](docs/m02-development.md), [live acceptance](docs/m02-live-acceptance.md) and [provider setup](docs/provider-setup.md). M03 and M04 are merged. M05 bounded context retrieval and terminal controls are committed on the M05 PR branch and locally verified. Fresh-session continuity remains a later milestone.
-
-**Current recommendation:** TypeScript/Node for the owned harness and local TUI/backend, PostgreSQL for identity and session operations, FalkorDB for connected memory and coordination. Native subscription adapters and investigator spawning are post-hackathon milestones. See [the complete plan](archive/plans/README.md), [harness scope](archive/plans/track2-harness-scope.md).
-
-Read the four background files below to understand the earlier local delivery/authentication decisions, then use the plans for the current implementation direction. The owned-loop proposal supersedes their native-wrapper-first scope. Historical notes retain their evidence dates. Provider authentication is route-specific, not universal OAuth compatibility.
-
-The original collection contains **22 architecture notes** and **1 linked supporting file**. Their contents and filenames are preserved. The detailed plans, reference schemas and diagrams are indexed separately in [plans/README.md](archive/plans/README.md). All three archive folders remain reference material.
-
-## Start here: four background decisions
-
-- [track2-package-and-requirements-decision.md](archive/notes/track2-package-and-requirements-decision.md) — Consolidated local TUI architecture, memory model, coordination and Track 2 coverage.
-- [track2-local-tui-delivery-decision.md](archive/notes/track2-local-tui-delivery-decision.md) — Local package/TUI delivery, interaction, integration gates and team ownership.
-- [track2-codex-subscription-local-adapter.md](archive/notes/track2-codex-subscription-local-adapter.md) — Codex subscription authentication, app-server integration and capture/recovery seams.
-- [track2-claude-subscription-local-adapter.md](archive/notes/track2-claude-subscription-local-adapter.md) — Native Claude Code subscription route, SDK distinction and adapter requirements.
-
-## Core architecture and technical references
-
-- [track2-architecture-core-contract.md](archive/notes/track2-architecture-core-contract.md) — Logical module boundaries, identity routing, graph authority and state transitions.
-- [track2-continuity-architecture.md](archive/notes/track2-continuity-architecture.md) — Context selection, applicability, handoffs, evidence revisions and tenant separation.
-- [falkordb-technical-dossier.md](archive/notes/falkordb-technical-dossier.md) — Database design, Cypher, indexes, concurrency, persistence and version caveats.
-- [agentic-rag-memory-evaluation.md](archive/notes/agentic-rag-memory-evaluation.md) — Agent memory, graph retrieval, coordination frameworks and evaluation methods.
-- [falkordb-agent-capability-map.md](archive/notes/falkordb-agent-capability-map.md) — How graph capabilities influence actual agent decisions and actions.
-- [track2-agent-tools-and-execution-plan.md](archive/notes/track2-agent-tools-and-execution-plan.md) — Proposed typed memory/tool operations, authority boundaries and evidence checks; includes an earlier SDK option.
-- [track2-portable-core-and-team-plan.md](archive/notes/track2-portable-core-and-team-plan.md) — Reusable core, adapter contracts, packaging and team split; earlier delivery assumptions are historical.
-- [track2-portability-adapters.md](archive/notes/track2-portability-adapters.md) — Host integration surfaces and limits of automatic capture, restoration and lifecycle control.
-
-## Problem scope and alternatives
-
-- [track2-investigation-and-product-scope.md](archive/notes/track2-investigation-and-product-scope.md) — Continuity problem, proposed graph mechanism, bounded scope and validation.
-- [track2-harness-and-alternatives.md](archive/notes/track2-harness-and-alternatives.md) — Existing memory/handoff tools and native harness capabilities to compare against.
-
-## Optional spawning and swarm extensions
-
-- [track2-bounded-swarm-product-extension.md](archive/notes/track2-bounded-swarm-product-extension.md) — Child investigations, scoped findings, resource limits and adoption gates.
-- [track2-swarm-memory-reliability.md](archive/notes/track2-swarm-memory-reliability.md) — Atomic publication, cursors, acknowledgements, recovery and sharing/load probes.
-
-## Earlier options: reference rather than current delivery
-
-- [Original recursive-model research](archive/notes/track2-recursive-language-models-and-swarms.md) — historical investigation; removed from the current architecture and schemas.
-
-- [track2-packaging-decision-review.md](archive/notes/track2-packaging-decision-review.md) — Earlier attachable-service assessment, competitors and decision gates.
-- [track2-delivery-feasibility-check.md](archive/notes/track2-delivery-feasibility-check.md) — Earlier controlled SDK/browser application feasibility.
-- [track2-user-experience-and-delivery.md](archive/notes/track2-user-experience-and-delivery.md) — Earlier browser journey; useful controls and evidence views for adaptation to the TUI.
-- [track2-presentation-and-team-decision.md](archive/notes/track2-presentation-and-team-decision.md) — Earlier web-first presentation and four-person ownership.
-- [track2-railway-deployment-plan.md](archive/notes/track2-railway-deployment-plan.md) — Optional future hosting topology, persistence and deployment probes.
-
-## Linked supporting files
-
-These are included to preserve the notes’ existing relative links:
-
-- [track2-context-social-signals.md](archive/notes/track2-context-social-signals.md)
-
-Historical research lives in archive/notes/; active architecture and checklists live in archive/plans/. Reference source-code archives remain ignored.
-
-## Adversarial architecture review
-
-- [Critic report](archive/plans/review/track2-critic-report.md): 14 findings against the baseline.
-- [Independent evaluation](archive/plans/review/track2-critic-evaluation.md): accepted and qualified findings.
-- [Resolution register](archive/plans/review/track2-review-resolutions.md): corrected design contracts and unexecuted implementation gates.
-
-## M03 durable evidence
-
-[Current capture/source/replay workflow](docs/m03-development.md) covers immutable original bytes, transactional capture/outbox, FalkorDB provenance, receipt reconciliation and authorized TUI cursor reconnect. [Executed M03 integration evidence](archive/plans/review/m03-integration-verification.md) distinguishes this working slice from later checkpoints and continuity.
+[Hackathon and Track 2](https://www.wemakedevs.org/hackathons/falkordb) · [Official resources](https://www.wemakedevs.org/hackathons/falkordb/resources) · [FalkorDB documentation](https://docs.falkordb.com/)

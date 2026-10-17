@@ -1,158 +1,356 @@
-import { registerContextRoutes } from './context-routes.js';
-import { ThreadlineError } from '@threadline/shared';
+import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 
-import { registerCheckpointRoutes } from './checkpoint-routes.js';
-import Fastify, { type FastifyInstance } from 'fastify';
+import {
+  API_PREFIX,
+  ROUTES,
+  ThreadlineError,
+  errorPayload,
+  type ThreadlineErrorCode,
+} from '@threadline/shared';
 
-import type { HealthReport } from '@threadline/shared';
-
-import type { BackendConfig } from '../config.js';
-import type { CommandDispatcher } from '../domain/dispatcher.js';
-import type { EventPublisher } from '../events/publisher.js';
-import type { ApplicationServices } from '../domain/services.js';
+import { unsupportedOperation } from '../capabilities.js';
+import type { ServiceConfig } from '../config.js';
+import type { MemoryService } from '../index.js';
 import type { Logger } from '../log.js';
-import { silentLogger } from '../log.js';
-import { createEventStreamManager, type EventStreamManager } from './events-stream.js';
-import type { ManagedRuntime } from '../runtime/managed.js';
-import { registerProviderRoutes } from './provider-routes.js';
-import { registerSourceRoutes } from './source-routes.js';
-import { registerCapabilityRoutes } from './capability-routes.js';
-import { registerProvisioningRoutes } from './provisioning-routes.js';
-import type { ProviderSettings } from '../provider/settings.js';
-import { registerRoutes, registerRunRoutes } from './routes.js';
 
-export interface BackendAddress {
+/**
+ * Loopback HTTP transport for the memory product, protocol v2.
+ *
+ * Every route answers with the shared success/error envelope, and the error
+ * shape is always the shared payload: a client never parses a driver message.
+ *
+ * Not every path in `ROUTES` has a handler in this build, and the two cases are
+ * reported differently rather than being blurred into one:
+ *
+ * - a route registered as an unimplemented capability answers `unsupported`
+ *   naming that capability and the batch that will land it;
+ * - any other path under the protocol prefix answers `unsupported` naming the
+ *   path it could not serve — no capability is invented for it;
+ * - a path outside the protocol prefix answers `not_found`.
+ *
+ * No case fabricates a success, and no case guesses at authority.
+ */
+
+export interface ServiceAddress {
   readonly host: string;
   readonly port: number;
   readonly url: string;
 }
 
-export interface HttpServerHandle {
-  readonly instance: FastifyInstance;
-  readonly streams: EventStreamManager;
+export interface ApiServerHandle {
   readonly listening: boolean;
-  readonly address: BackendAddress | null;
-  listen(): Promise<BackendAddress>;
+  readonly address: ServiceAddress | null;
+  listen(): Promise<ServiceAddress>;
   close(): Promise<void>;
 }
 
-export interface HttpServerDeps {
-  readonly providerSettings?: () => ProviderSettings | null;
-  readonly runtime?: () => ManagedRuntime | null;
-  readonly config: BackendConfig;
-  readonly dispatch: CommandDispatcher;
-  readonly publisher: EventPublisher;
-  readonly health: () => HealthReport;
-  readonly services: () => ApplicationServices | null;
-  readonly localBootstrap: () => {
-    tenantId: string;
-    userId: string;
-    projectId: string;
-    projectSlug: string;
-  } | null;
+export interface ApiServerDeps {
+  readonly config: ServiceConfig;
+  readonly service: MemoryService;
   readonly logger?: Logger;
 }
 
-/**
- * Creates the HTTP server without binding it.
- *
- * Importing or calling this function opens no socket; only {@link
- * HttpServerHandle.listen} does. Nothing is started at module import time.
- */
-export function createHttpServer(deps: HttpServerDeps): HttpServerHandle {
-  const logger = deps.logger ?? silentLogger;
-  const app = Fastify({
-    // The backend has its own logger. Turning Fastify's logger off is what
-    // disables its request logging, so no request logging is configured twice.
-    logger: false,
-    bodyLimit: deps.config.limits.maxRequestBodyBytes,
-  });
+const STATUS_BY_CODE: Readonly<Record<ThreadlineErrorCode, number>> = {
+  invalid_request: 400,
+  unknown_command: 404,
+  service_unavailable: 503,
+  internal_error: 500,
+  unauthorized: 401,
+  not_found: 404,
+  storage_unavailable: 503,
+  schema_incompatible: 503,
+  idempotency_mismatch: 409,
+  authority_conflict: 409,
+  authority_unavailable: 503,
+  stale_revision: 409,
+  scope_denied: 403,
+  unsupported: 501,
+  source_unavailable: 410,
+  deleting: 409,
+  overloaded: 429,
+  partial_coverage: 409,
+};
 
-  const streams = createEventStreamManager({
-    publisher: deps.publisher,
-    maxBacklogBytes: deps.config.limits.maxEventBacklogBytes,
-  });
+export function createApiServer(deps: ApiServerDeps): ApiServerHandle {
+  const app = buildApp(deps);
+  let address: ServiceAddress | null = null;
 
-  const routeDeps = {
-    runtime: deps.runtime ?? (() => null),
-    config: deps.config,
-    dispatch: deps.dispatch,
-    streams,
-    health: deps.health,
-    services: deps.services,
-    localBootstrap: deps.localBootstrap,
-  };
-  registerRoutes(app, routeDeps);
-  registerProviderRoutes(app, { ...routeDeps, providerSettings: deps.providerSettings ?? (() => null) });
-  registerRunRoutes(app, routeDeps);
-  registerSourceRoutes(app, routeDeps);
-  registerCheckpointRoutes(app, { services: routeDeps.services });
-  // Registered exactly once, alongside the other operation routes.
-  registerCapabilityRoutes(app, routeDeps);
-  registerContextRoutes(app, routeDeps);
-  registerProvisioningRoutes(app, {
-    services: routeDeps.services,
-    // Resolved through the same service surface every other route uses, so there
-    // is one provisioning implementation rather than a route-local one.
-    provisioning: () => {
-      const current = deps.services?.() ?? null;
-      if (current === null) {
-        throw new ThreadlineError('service_unavailable', 'Storage is not ready.');
-      }
-      return current.provisioning();
-    },
-  });
-
-  let listening = false;
-  let boundAddress: BackendAddress | null = null;
-
-  return {
-    instance: app,
-    streams,
-
+  const handle: ApiServerHandle = {
     get listening() {
-      return listening;
+      return address !== null;
     },
-
     get address() {
-      return boundAddress;
+      return address;
     },
 
-    async listen(): Promise<BackendAddress> {
-      const address = await app.listen({ host: deps.config.host, port: deps.config.port });
-      const host = deps.config.host;
-      const port = readPort(app);
-      listening = true;
-      boundAddress = { host, port, url: address };
-      logger.log({
-        level: 'info',
-        message: 'Backend listening.',
-        fields: { host, port, url: address },
-      });
-      return boundAddress;
+    async listen(): Promise<ServiceAddress> {
+      try {
+        await app.listen({ host: deps.config.host, port: deps.config.port });
+      } catch (error) {
+        throw new ThreadlineError('service_unavailable', 'The HTTP transport could not bind.', {
+          host: deps.config.host,
+          port: deps.config.port,
+          errorName: error instanceof Error ? error.name : typeof error,
+        });
+      }
+      address = {
+        host: deps.config.host,
+        port: deps.config.port,
+        url: `http://${deps.config.host === '::1' ? '[::1]' : deps.config.host}:${String(deps.config.port)}`,
+      };
+      return address;
     },
 
     async close(): Promise<void> {
-      // Long-lived event streams would otherwise hold the close open forever.
-      const endedStreams = streams.closeAll();
-      if (listening) {
-        await app.close();
-        listening = false;
-        boundAddress = null;
-      }
-      logger.log({
-        level: 'info',
-        message: 'Backend HTTP server closed.',
-        fields: { endedStreams },
-      });
+      address = null;
+      await app.close();
     },
+  };
+  return handle;
+}
+
+function buildApp(deps: ApiServerDeps): FastifyInstance {
+  const { service } = deps;
+  const app = Fastify({
+    logger: false,
+    bodyLimit: deps.config.limits.maxRequestBodyBytes,
+    // The service is loopback-only; forwarded headers are never authority.
+    trustProxy: false,
+  });
+
+  app.setErrorHandler((error: unknown, _request: FastifyRequest, reply: FastifyReply) => {
+    const mapped = toSafeError(error);
+    if (mapped.code === 'internal_error') {
+      // The client receives a safe payload; the operator needs the actual cause,
+      // which never becomes part of the response.
+      deps.logger?.log({
+        level: 'error',
+        message: 'Request failed with an internal error.',
+        fields: {
+          errorName: error instanceof Error ? error.name : typeof error,
+          errorMessage: (error instanceof Error ? error.message : String(error)).slice(0, 200),
+        },
+      });
+    }
+    reply.code(STATUS_BY_CODE[mapped.code]).send({ ok: false, error: mapped.payload });
+  });
+
+  app.setNotFoundHandler((request, reply) => {
+    const path = request.url.split('?')[0] ?? request.url;
+    const error = path.startsWith(API_PREFIX)
+      ? errorPayload('unsupported', 'This protocol path is not served by this build.', { path })
+      : errorPayload('not_found', 'No such resource.', { path });
+    reply.code(STATUS_BY_CODE[error.code]).send({ ok: false, error });
+  });
+
+  const ok = <T>(reply: FastifyReply, data: T): void => {
+    void reply.send({ ok: true, data });
+  };
+
+  // Unauthenticated liveness only: it proves the process answers and names the
+  // build. Component readiness, storage detail and the cross-tenant backlog
+  // count stay behind the authorized status route below.
+  app.get(ROUTES.health, (_request, reply) => ok(reply, service.liveness()));
+
+  // Operational detail is authorized: the backlog is a cross-tenant count and
+  // readiness describes the shared stores, which is not public information.
+  app.get(ROUTES.status, async (request, reply) => {
+    await service.auth.authenticate(authorizationOf(request), { allowTenantLevel: true });
+    ok(reply, service.status());
+  });
+
+  app.get(ROUTES.capabilities, async (request, reply) => {
+    await service.auth.authenticate(authorizationOf(request), { allowTenantLevel: true });
+    ok(reply, service.capabilities());
+  });
+
+  app.get(ROUTES.projects, async (request, reply) => {
+    const call = await service.auth.authenticate(authorizationOf(request), { allowTenantLevel: true });
+    ok(reply, await service.projects.list(call));
+  });
+
+  app.post(ROUTES.projects, async (request, reply) => {
+    const call = await service.auth.authenticate(authorizationOf(request), { allowTenantLevel: true });
+    ok(reply, await service.projects.add(call, request.body));
+  });
+
+  app.get<{ Params: { projectId: string } }>(ROUTES.projectGrants(':projectId'), async (request, reply) => {
+    const projectId = request.params.projectId;
+    const call = await service.auth.authenticate(authorizationOf(request), { projectId });
+    ok(reply, await service.projects.listGrants(call, projectId));
+  });
+
+  app.post(ROUTES.appendSources, async (request, reply) => {
+    const body = readObject(request.body, 'source append');
+    const projectId = readStringField(body, 'projectId');
+    const call = await service.auth.authenticate(authorizationOf(request), { projectId });
+    ok(reply, await service.sources.append(call, body));
+  });
+
+  app.get(ROUTES.history, async (request, reply) => {
+    const query = readObject(request.query ?? {}, 'history query');
+    const projectId = readStringField(query, 'projectId');
+    const call = await service.auth.authenticate(authorizationOf(request), { projectId });
+    const kinds = readStringList(query, 'kinds');
+    const limit = readIntegerField(query, 'limit', 50, 1, 100);
+    const historyQuery = {
+      projectId,
+      limit,
+      ...(kinds === undefined ? {} : { kinds }),
+      ...(readOptionalString(query, 'nativeSessionId') === undefined
+        ? {}
+        : { nativeSessionId: readOptionalString(query, 'nativeSessionId') }),
+      ...(readOptionalString(query, 'cursor') === undefined ? {} : { cursor: readOptionalString(query, 'cursor') }),
+    };
+    ok(reply, await service.sources.history(call, historyQuery));
+  });
+
+  app.get<{ Params: { sourceId: string } }>(ROUTES.source(':sourceId'), async (request, reply) => {
+    const query = readObject(request.query ?? {}, 'source query');
+    const projectId = readStringField(query, 'projectId');
+    const call = await service.auth.authenticate(authorizationOf(request), { projectId });
+    ok(reply, await service.sources.view(call, projectId, request.params.sourceId));
+  });
+
+  app.get<{ Params: { sourceId: string } }>(ROUTES.sourceRange(':sourceId'), async (request, reply) => {
+    const query = readObject(request.query ?? {}, 'source range query');
+    const projectId = readStringField(query, 'projectId');
+    const start = readIntegerField(query, 'start', 0, 0, Number.MAX_SAFE_INTEGER);
+    const end = readIntegerField(query, 'end', start + 32_768, start, Number.MAX_SAFE_INTEGER);
+    const call = await service.auth.authenticate(authorizationOf(request), { projectId });
+    ok(reply, await service.sources.range(call, projectId, request.params.sourceId, start, end));
+  });
+
+  app.get<{ Params: { operationId: string } }>(ROUTES.operation(':operationId'), async (request, reply) => {
+    const query = readObject(request.query ?? {}, 'operation query');
+    const projectId = readStringField(query, 'projectId');
+    const call = await service.auth.authenticate(authorizationOf(request), { projectId });
+    ok(reply, await service.operations.inspect(call, projectId, request.params.operationId));
+  });
+
+  // Known product operations that are not in this build answer explicitly
+  // rather than falling through as an anonymous 404.
+  const unavailable: ReadonlyArray<{ readonly operation: Parameters<typeof unsupportedOperation>[0]; readonly path: string }> = [
+    { operation: 'memory.query', path: ROUTES.memories },
+    { operation: 'memory.propose', path: ROUTES.memoryProposals },
+    { operation: 'memory.episode.record', path: ROUTES.memoryEpisodes },
+    { operation: 'task.create', path: ROUTES.tasks },
+    { operation: 'claim.status', path: ROUTES.claimStatus },
+    { operation: 'context.prepare', path: ROUTES.context },
+    { operation: 'context.occurrence', path: ROUTES.contextOccurrences },
+    { operation: 'session.register', path: ROUTES.nativeSessions },
+    { operation: 'job.import', path: ROUTES.jobs },
+  ];
+  for (const entry of unavailable) {
+    app.all(entry.path, () => {
+      throw unsupportedOperation(entry.operation);
+    });
+  }
+
+  return app;
+}
+
+function authorizationOf(request: FastifyRequest): string | undefined {
+  const header = request.headers.authorization;
+  return typeof header === 'string' ? header : undefined;
+}
+
+interface SafeError {
+  readonly code: ThreadlineErrorCode;
+  readonly payload: ReturnType<typeof errorPayload>;
+}
+
+/** Reduces any thrown value to the shared payload; driver messages never escape. */
+function toSafeError(error: unknown): SafeError {
+  if (error instanceof ThreadlineError) {
+    return { code: error.code, payload: error.toPayload() };
+  }
+  if (isFastifyBodyError(error)) {
+    return {
+      code: 'invalid_request',
+      payload: errorPayload('invalid_request', 'The request body could not be accepted.', {
+        limit: 0,
+      }),
+    };
+  }
+  return {
+    code: 'internal_error',
+    payload: errorPayload('internal_error'),
   };
 }
 
-function readPort(app: FastifyInstance): number {
-  const server = app.server.address();
-  if (server === null || typeof server === 'string') {
-    return 0;
+function isFastifyBodyError(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null) {
+    return false;
   }
-  return server.port;
+  const candidate = error as { statusCode?: unknown; code?: unknown };
+  return (
+    candidate.statusCode === 400 ||
+    candidate.code === 'FST_ERR_CTP_BODY_TOO_LARGE' ||
+    candidate.code === 'FST_ERR_CTP_INVALID_MEDIA_TYPE' ||
+    candidate.code === 'FST_ERR_CTP_EMPTY_JSON_BODY' ||
+    candidate.code === 'FST_ERR_CTP_INVALID_JSON_BODY'
+  );
+}
+
+function readObject(value: unknown, label: string): Record<string, unknown> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new ThreadlineError('invalid_request', `The ${label} payload must be an object.`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function readStringField(value: Record<string, unknown>, field: string): string {
+  const raw = value[field];
+  if (typeof raw !== 'string' || raw.length === 0) {
+    throw new ThreadlineError('invalid_request', `The "${field}" field is required.`, { field });
+  }
+  return raw;
+}
+
+function readOptionalString(value: Record<string, unknown>, field: string): string | undefined {
+  const raw = value[field];
+  if (raw === undefined) {
+    return undefined;
+  }
+  if (typeof raw !== 'string' || raw.length === 0) {
+    throw new ThreadlineError('invalid_request', `The "${field}" field must be a non-empty string.`, { field });
+  }
+  return raw;
+}
+
+function readIntegerField(
+  value: Record<string, unknown>,
+  field: string,
+  fallback: number,
+  minimum: number,
+  maximum: number,
+): number {
+  const raw = value[field];
+  if (raw === undefined) {
+    return fallback;
+  }
+  const parsed = typeof raw === 'string' && /^\d+$/.test(raw.trim()) ? Number.parseInt(raw.trim(), 10) : NaN;
+  if (!Number.isSafeInteger(parsed) || parsed < minimum || parsed > maximum) {
+    throw new ThreadlineError('invalid_request', `The "${field}" value is outside its bounds.`, {
+      field,
+      minimum,
+      maximum,
+    });
+  }
+  return parsed;
+}
+
+function readStringList(value: Record<string, unknown>, field: string): string[] | undefined {
+  const raw = value[field];
+  if (raw === undefined) {
+    return undefined;
+  }
+  if (typeof raw === 'string') {
+    return raw.split(',').map((item) => item.trim()).filter((item) => item.length > 0);
+  }
+  if (Array.isArray(raw) && raw.every((item) => typeof item === 'string')) {
+    return raw as string[];
+  }
+  throw new ThreadlineError('invalid_request', `The "${field}" filter must be a list of names.`, { field });
 }

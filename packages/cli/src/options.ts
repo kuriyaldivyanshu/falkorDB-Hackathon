@@ -1,188 +1,79 @@
 import { parseArgs, type ParseArgsOptionsConfig } from 'node:util';
 
 /**
- * Command-line surface of the terminal client.
+ * Command-line surface of the Threadline client.
  *
- * Kept free of Ink, of the transport client and of any backend knowledge so
- * that the accepted commands can be read in one place.
+ * The accepted commands are the memory product's operations. There is no TUI,
+ * no provider setup, no run control and no fixture admission; a command that
+ * does not exist is a usage error, and an operation that is not implemented in
+ * this build is answered by the service as an explicit unsupported capability.
  */
 
-/**
- * Mirrors the backend's default bind address. Only used when `--backend` is
- * absent; it is a convenience, not configuration authority.
- */
-export const DEFAULT_BACKEND_URL = 'http://127.0.0.1:47821';
 export const DEFAULT_REQUEST_TIMEOUT_MS = 10_000;
 
-/**
- * The authored manifest, addressed by a configured development path.
- *
- * `archive/` is a working reference tree rather than a published package, so
- * the path is explicit and overridable instead of assumed.
- */
-export const DEFAULT_FIXTURE_MANIFEST_PATH = 'archive/plans/contracts/fixture-manifest.json';
-
-/** Owner-only local session credential. Never a database or provider secret. */
-export const DEFAULT_CREDENTIAL_PATH = '.threadline/session.json';
+export type CliCommand =
+  | 'init'
+  | 'serve'
+  | 'status'
+  | 'capabilities'
+  | 'project:add'
+  | 'project:list'
+  | 'project:grants'
+  | 'source:append'
+  | 'source:inspect'
+  | 'source:read'
+  | 'history'
+  | 'version'
+  | 'help';
 
 const OPTION_SPEC = {
-  backend: { type:'string' },
-  project: { type:'string' },
-  request: { type:'string' },
-  'request-record': { type:'string' },
-  'accept-fixture': { type:'string' },
-  // Run control (M02). Every identity is supplied explicitly; none is inferred.
-  task: { type: 'string' },
-  profile: { type: 'string' },
-  workspace: { type: 'string' },
-  'context-window': { type: 'string' },
-  'request-id': { type: 'string' },
-  'expect-revision': { type: 'string' },
-  'expect-requirement-revision': { type: 'string' },
-  reason: { type: 'string' },
-  timeout: { type: 'string' },
-  'fixture-manifest': { type: 'string' },
-  credential: { type: 'string' },
-  // Source inspection and durable replay (M03).
+  home: { type: 'string' },
+  port: { type: 'string' },
+  root: { type: 'string' },
+  label: { type: 'string' },
+  join: { type: 'string' },
+  project: { type: 'string' },
+  kind: { type: 'string' },
+  file: { type: 'string' },
+  origin: { type: 'string' },
+  revision: { type: 'string' },
+  delivery: { type: 'string' },
+  'media-type': { type: 'string' },
+  visibility: { type: 'string' },
   offset: { type: 'string' },
   'max-bytes': { type: 'string' },
-  epoch: { type: 'string' },
-  'after-seq': { type: 'string' },
   limit: { type: 'string' },
-  // Checkpoint and plan (M04). `task` already exists for run control.
-  run: { type: 'string' },
-  progress: { type: 'string' },
-  'next-action': { type: 'string' },
-  'base-revision': { type: 'string' },
-  step: { type: 'string', multiple: true },
-  'show-store-readiness': { type: 'boolean', default: false },
+  kinds: { type: 'string' },
+  session: { type: 'string' },
+  cursor: { type: 'string' },
+  json: { type: 'boolean', default: false },
   help: { type: 'boolean', short: 'h', default: false },
 } satisfies ParseArgsOptionsConfig;
 
-export type CliCommand =
-  | 'provider:setup'
-  | 'provider:list'
-  | 'tui'
-  | 'health'
-  | 'echo'
-  | 'fixture'
-  | 'init'
-  | 'admit'
-  | 'inspect'
-  | 'run:prepare'
-  | 'command'
-  | 'run:start'
-  | 'run:inspect'
-  | 'run:cancel'
-  | 'source:inspect'
-  | 'source:read'
-  | 'history:replay'
-  | 'tactical:inspect'
-  | 'tactical:checkpoint'
-  | 'tactical:plan';
-
-/** The full identity needed to start one run. Nothing here is defaulted. */
-export interface StartRunRequest {
-  readonly projectId: string;
-  readonly requestId: string;
-  readonly taskId: string;
-  readonly profileId: string;
-  readonly workspaceId: string;
-  readonly expectedRevision: number;
-  readonly expectedRequirementRevision: number;
-}
-
 export interface CliInvocation {
-  readonly selectedProfileId?: string | null;
-  readonly contextWindowTokens: number | null;
   readonly command: CliCommand;
+  readonly home: string | undefined;
+  readonly port: number | undefined;
+  readonly json: boolean;
+  readonly root: string | null;
+  readonly label: string | null;
+  readonly joinProjectId: string | null;
   readonly projectId: string | null;
-  readonly requestId: string | null;
-  readonly requestRecordPath: string;
-  readonly acceptedFixtureDigest: string | null;
-  readonly backendUrl: string;
-  readonly requestTimeoutMs: number;
-  /** Text for the `echo` command; `null` for every other command. */
-  readonly echoText: string | null;
-  readonly fixtureManifestPath: string;
-  readonly credentialPath: string;
-  /** Prints per-component store readiness after a successful health report. */
-  readonly showStoreReadiness: boolean;
-  readonly start: StartRunRequest | null;
-  /** Run id for `run:inspect` / `run:cancel`. */
-  readonly runId: string | null;
-  readonly cancelReason: string | null;
-  /** Source id for `source:inspect` / `source:read`. */
+  readonly kind: string | null;
+  readonly file: string | null;
+  readonly origin: string | null;
+  readonly revision: string | null;
+  readonly delivery: string | null;
+  readonly mediaType: string | null;
+  readonly visibility: 'project' | 'principal' | null;
   readonly sourceId: string | null;
-  /** Byte range for `source:read`; defaults to the start of the Source. */
-  readonly sourceOffset: number | null;
-  readonly sourceMaxBytes: number | null;
-  /** Durable replay cursor for `history:replay`. */
-  readonly replayEpoch: string | null;
-  readonly replayAfterSeq: number | null;
-  readonly replayLimit: number | null;
-  /** Task id for the `tactical:*` commands. */
-  readonly checkpointTaskId: string | null;
-  /** Run that binds the checkpoint, when one exists. */
-  readonly checkpointRunId: string | null;
-  readonly checkpointProgress: string | null;
-  readonly checkpointNextAction: string | null;
-  /** Repeatable `--step stepId[:status][=text]`. */
-  readonly checkpointSteps: readonly string[] | null;
-  /** Decimal-string revision token. Never parsed as a number. */
-  readonly checkpointBaseRevision: string | null;
+  readonly offset: number | null;
+  readonly maxBytes: number | null;
+  readonly limit: number | null;
+  readonly kinds: readonly string[] | null;
+  readonly nativeSessionId: string | null;
+  readonly cursor: string | null;
   readonly help: boolean;
-}
-
-/** `capture_policy.graph_replay_batch_events` and the shared range ceiling. */
-const REPLAY_MAX_PAGE = 100;
-const SOURCE_ROUTE_MAX_BYTES = 32_768;
-
-function readBoundedInteger(flag: string, raw: string | undefined, minimum: number, maximum: number): number {
-  if (raw === undefined || !/^-?\d+$/.test(raw.trim())) {
-    throw new UsageError(`${flag} needs a whole number.`);
-  }
-  const parsed = Number(raw.trim());
-  if (!Number.isSafeInteger(parsed) || parsed < minimum || parsed > maximum) {
-    throw new UsageError(`${flag} must be between ${minimum} and ${maximum}.`);
-  }
-  return parsed;
-}
-
-function readReplaySeq(raw: string | undefined): number {
-  const value = raw === undefined ? 0 : readBoundedInteger('--after-seq', raw, 0, Number.MAX_SAFE_INTEGER);
-  return value;
-}
-
-function readReplayLimit(raw: string | undefined): number | null {
-  return raw === undefined ? null : readBoundedInteger('--limit', raw, 1, REPLAY_MAX_PAGE);
-}
-
-/**
- * A revision token is carried as a decimal string end to end.
- *
- * It is validated, never converted. Passing `--base-revision 7` is refused so an
- * operator is not left believing a value was carried when it would have rounded.
- */
-function readRevisionToken(raw: string | undefined): string | null {
-  if (raw === undefined) return null;
-  if (!/^[0-9]+$/.test(raw.trim())) {
-    throw new UsageError('--base-revision must be a decimal string such as 7, not a number expression.');
-  }
-  const value = raw.trim();
-  // Canonical form and a length bound only. A decimal string never rounds, so
-  // there is no floating-point threshold here either.
-  if (!/^(0|[1-9][0-9]*)$/.test(value)) {
-    throw new UsageError('--base-revision must be a canonical decimal string with no sign or leading zeros.');
-  }
-  if (value.length > 32) {
-    throw new UsageError('--base-revision exceeds the supported length of 32 digits.');
-  }
-  return value;
-}
-
-function hasAnyCheckpointInput(values: Record<string, unknown>): boolean {
-  return ['progress', 'next-action', 'base-revision', 'step', 'run'].some((key) => values[key] !== undefined);
 }
 
 export class UsageError extends Error {
@@ -192,259 +83,82 @@ export class UsageError extends Error {
   }
 }
 
-export const HELP_TEXT = `Threadline terminal client (M02)
+export const SHELL_COMMANDS: readonly CliCommand[] = [
+  'init',
+  'serve',
+  'status',
+  'capabilities',
+  'project:add',
+  'project:list',
+  'project:grants',
+  'source:append',
+  'source:inspect',
+  'source:read',
+  'history',
+  'version',
+  'help',
+];
+
+export const HELP_TEXT = `Threadline — Codex-first local memory and coordination
 
 Usage:
   threadline [options] <command> [arguments]
 
-Commands:
-  tui                 Terminal interface. Connects, streams events, sends commands.
-  health              Print the backend health report, then exit.
-  provider:setup     Choose a provider, enter a masked key and validate/save it.
-  provider:list      Show saved provider metadata without keys.
-  echo <text...>      Send one development.echo command and print its acknowledgement
-                      and the matching backend event, then exit.
-  fixture             Load the authored fixture manifest and print exactly what a
-                      human would be accepting. No backend is contacted.
-  init                Validate the owner session and list authorized projects.
-  admit               Preview and explicitly accept the initial fixture goal/criteria.
-  inspect             Read current task/criteria/source authority, or a receipt.
-  command "<slash>"   Run one registered terminal command without the TUI.
-  run:prepare         Prepare the selected profile/candidate without inference. Requires
-                      --project and --context-window (declared model capacity).
-  run:start           Ask the backend to start one Builder run. Requires --project,
-                      --task, --profile, --workspace, --request-id and both
-                      expected revisions. Nothing is inferred.
-  source:inspect --project <uuid> <source-id>
-                   Read one captured Source's typed state. Absent, pending and
-                   unreadable are reported separately; no physical path is shown.
-  source:read --project <uuid> <source-id> [--offset <n>] [--max-bytes <n>]
-                   Read one bounded byte range, at most 32768 original bytes.
-  history:replay --project <uuid> --epoch <uuid> --after-seq <n> [--limit <n>]
-                   Request one bounded durable replay page. A gap is reported
-                   with refresh guidance rather than skipped.
+Service:
+  init                 Initialize this installation: apply the memory schema, create
+                       the local owner credential and record configuration.
+  serve                Run the local memory service in this terminal. Codex owns
+                       inference; this process only stores and serves memory.
+  status               Print service health, component readiness and storage state.
+  capabilities         List the operations this build actually supports. Everything
+                       not listed as supported is explicitly unavailable.
 
-  tactical:inspect --project <uuid> --task <uuid>
-                   Read the current checkpoint pointer, manifest, freshness,
-                   coverage and plan. A revision is a decimal string.
-  tactical:checkpoint --project <uuid> --task <uuid> [--run <id>]
-                   [--progress <text>] [--next-action <text>] [--base-revision <n>]
-                   Record progress and the next action. The durable operation
-                   identity is kept in --request-record, so a retry reuses it.
-  tactical:plan --project <uuid> --task <uuid> [--run <id>]
-                   --step <stepId>[:<status>][=<text>] [--base-revision <n>]
-                   Patch plan steps by stable id. Unrelated steps are preserved.
+Projects:
+  project:add --root <path>            Associate a workspace root with a project.
+                                       Options: --label <text>, --join <projectId>.
+  project:list                         List projects this credential can access.
+  project:grants --project <id>        List grants for one project.
 
-  run:inspect <id>   Read the backend's durable run, claim, budget and attempts.
-  run:cancel <id>    Request cancellation. An acknowledgement is not proof that
-                      provider compute stopped.
+Sources and history:
+  source:append --project <id> --kind <kind> --file <path>
+                       Append one authored or captured record. Delivery identity is
+                       derived from the file content unless --delivery is given;
+                       repeating it is stable, changing the bytes refuses.
+                       Options: --origin <key>, --revision <rev>, --media-type <type>,
+                       --visibility project|principal.
+  source:inspect --project <id> <sourceId>
+                       Read one source catalog entry. No bytes are shown.
+  source:read --project <id> <sourceId> [--offset <n>] [--max-bytes <n>]
+                       Read one bounded byte range; default writes the decoded text
+                       to stdout. At most 32768 original bytes per read.
+  history --project <id> [--limit <n>] [--kinds a,b] [--session <id>] [--cursor <c>]
+                       Page through ingested sources in project order. The cursor
+                       is opaque; changing filters starts a new page.
+
+  version              Print client and protocol versions.
+  help                 Show this help.
 
 Options:
-  --backend <url>         Backend base URL (default ${DEFAULT_BACKEND_URL}).
-  --timeout <ms>          Per-request timeout in ms (default ${DEFAULT_REQUEST_TIMEOUT_MS}).
-  --fixture-manifest <p>  Manifest to load (default ${DEFAULT_FIXTURE_MANIFEST_PATH}).
-  --credential <p>        Local owner session credential (default ${DEFAULT_CREDENTIAL_PATH}).
-  --show-store-readiness  Print per-component store readiness with health.
-  --project <id>          Target project for run:start.
-  --task <id>             Accepted task id for run:start.
-  --profile <id>          Selected provider profile for run:prepare/run:start.
-  --workspace <id>        Registered candidate workspace id for run:start.
-  --request-id <uuid>     Durable idempotency key for run:start. Reuse on retry.
-  --expect-revision <n>   Optimistic concurrency against current authority.
-  --expect-requirement-revision <n>  Optimistic concurrency for requirements.
-  --reason <text>         Cancellation reason recorded by the backend.
-  --request <uuid>        With inspect, read this admission receipt.
-  --request-record <p>    Durable retry record (admission.json; checkpoint.json for tactical commands).
-  --accept-fixture <s>    Explicit noninteractive acceptance of these exact bytes.
-  -h, --help              Show this help.
+  --home <dir>         Installation root (default: $THREADLINE_HOME or ~/.threadline).
+  --port <n>           Override the service port for "serve".
+  --json               Print machine-readable JSON instead of text.
+  -h, --help           Show this help.
 
-Starting or inspecting a run requires a local owner session; without one the
-backend refuses. No command on this client performs inference: run control only
-requests that the backend do work it has already authorized.
+The service is loopback-only. Credentials live in the installation root; nothing
+here reads a coding repository's .env file.`;
 
-Durable commands require a private local credential and a storage-ready backend:
-  --project <uuid>            Target an authorized project.
-  --request <uuid>            With inspect, read this admission receipt.
-  --request-record <p>        Durable retry record (admission.json; checkpoint.json for tactical commands).
-  --accept-fixture <sha256>   Explicit noninteractive acceptance of these exact bytes.
-
-"echo" remains process-local and non-durable. Closing the CLI never stops the
-backend or removes persisted data. Manage the backend process in its own terminal.`;
-
-export function parseCliArgs(argv: readonly string[]): CliInvocation {
-  // Wrapped rather than annotated so the literal option keys still infer.
-  // `parseArgs` raises a TypeError for an unknown flag or an ambiguous value
-  // such as `--offset -1`; both are usage problems and exit as one.
-  // Wrapped rather than annotated so the literal option keys still infer.
-  // `parseArgs` raises a TypeError for an unknown flag or an ambiguous value
-  // such as `--offset -1`; both are usage problems and exit as one.
-  const parse = () => parseArgs({ args: [...argv], options: OPTION_SPEC, allowPositionals: true, strict: true });
-  const parsed = (() => {
-    try {
-      return parse();
-    } catch (error) {
-      throw new UsageError(error instanceof Error ? error.message : 'The arguments could not be parsed.');
-    }
-  })();
-
-  const { values, positionals } = parsed;
-  const common = {
-    projectId: values.project ?? null,
-    selectedProfileId: values.profile ?? null,
-    requestId: values.request ?? null,
-    requestRecordPath: values['request-record'] ?? (positionals[0]?.startsWith('tactical:') ? '.threadline/checkpoint.json' : '.threadline/admission.json'),
-    acceptedFixtureDigest: values['accept-fixture'] ?? null,
-    backendUrl: readBackendUrl(values.backend),
-    requestTimeoutMs: readTimeout(values.timeout),
-    fixtureManifestPath: values['fixture-manifest'] ?? DEFAULT_FIXTURE_MANIFEST_PATH,
-    credentialPath: values.credential ?? DEFAULT_CREDENTIAL_PATH,
-    sourceId: null as string | null,
-    sourceOffset: null as number | null,
-    sourceMaxBytes: null as number | null,
-    replayEpoch: null as string | null,
-    replayAfterSeq: null as number | null,
-    replayLimit: null as number | null,
-    checkpointTaskId: null as string | null,
-    checkpointRunId: null as string | null,
-    checkpointProgress: null as string | null,
-    checkpointNextAction: null as string | null,
-    checkpointSteps: null as readonly string[] | null,
-    checkpointBaseRevision: null as string | null,
-    showStoreReadiness: values['show-store-readiness'],
-    contextWindowTokens: values['context-window'] === undefined ? null : readRevision('--context-window', values['context-window']),
-    help: values.help,
-  };
-  const name = positionals[0] ?? 'tui';
-
-  if (name === 'run:prepare') {
-    requireOption('--project', values.project);
-    readRevision('--context-window', values['context-window']);
-    return { ...common, command: name, echoText: null, start: null, runId: null, cancelReason: null };
+function readInteger(flag: string, raw: string | undefined, minimum: number, maximum: number): number | null {
+  if (raw === undefined) {
+    return null;
   }
-
-  if(name==='command'){return {...common,command:'command',echoText:positionals.slice(1).join(' '),start:null,runId:null,cancelReason:null};}
-  if (name === 'run:start') {
-    return {
-      command: name,
-      echoText: null,
-      start: readStartRequest(values),
-      runId: null,
-      cancelReason: null,
-      ...common,
-    };
+  if (!/^\d+$/.test(raw.trim())) {
+    throw new UsageError(`${flag} needs a whole number.`);
   }
-
-  if (name === 'run:inspect' || name === 'run:cancel') {
-    const runId = positionals[1];
-    if (runId === undefined || runId.length === 0) {
-      throw new UsageError(`"${name}" needs the run id, for example: threadline ${name} <run-id>`);
-    }
-    if (positionals.length > 2) {
-      throw new UsageError(`"${name}" takes one run id, received ${positionals.length - 2} extra arguments.`);
-    }
-    return {
-      command: name,
-      echoText: null,
-      start: null,
-      runId,
-      cancelReason: name === 'run:cancel' ? requireOption('--reason', values.reason) : null,
-      ...common,
-    };
+  const parsed = Number.parseInt(raw.trim(), 10);
+  if (!Number.isSafeInteger(parsed) || parsed < minimum || parsed > maximum) {
+    throw new UsageError(`${flag} must be between ${String(minimum)} and ${String(maximum)}.`);
   }
-
-  if (name === 'tactical:inspect' || name === 'tactical:checkpoint' || name === 'tactical:plan') {
-    const projectId = values.project;
-    if (projectId === undefined || projectId.length === 0) {
-      throw new UsageError(`"${name}" needs --project <uuid> and --task <uuid>.`);
-    }
-    const task = values.task;
-    if (task === undefined || task.length === 0) {
-      throw new UsageError(`"${name}" needs --task <uuid> so the backend can resolve scope.`);
-    }
-    if (positionals.length > 1) throw new UsageError(`"${name}" takes no positional arguments.`);
-    const baseRevision = readRevisionToken(values['base-revision']);
-    if (name === 'tactical:inspect' && hasAnyCheckpointInput(values)) {
-      throw new UsageError('"tactical:inspect" reports state only; use tactical:checkpoint or tactical:plan to change it.');
-    }
-    const steps = values.step === undefined ? null : [...values.step];
-    if (name !== 'tactical:plan' && steps !== null) {
-      throw new UsageError(`--step is only valid for "tactical:plan".`);
-    }
-    return {
-      ...common, command: name, echoText: null, start: null, runId: null, cancelReason: null,
-      checkpointTaskId: task,
-      checkpointRunId: values.run ?? null,
-      checkpointProgress: values.progress ?? null,
-      checkpointNextAction: values['next-action'] ?? null,
-      checkpointSteps: steps,
-      checkpointBaseRevision: baseRevision,
-    };
-  }
-
-  if (name === 'source:inspect' || name === 'source:read' || name === 'history:replay') {
-    const projectId = values.project;
-    if (projectId === undefined || projectId.length === 0) {
-      throw new UsageError(`"${name}" needs --project <uuid>, for example: threadline ${name} --project <uuid> <id>`);
-    }
-    // `name` is narrowed to the three M03 commands by the enclosing condition.
-    const base = { command: name as CliCommand, echoText: null, start: null, runId: null, cancelReason: null, ...common };
-    if (name === 'history:replay') {
-      const epoch = values.epoch;
-      if (epoch === undefined || epoch.length === 0) {
-        throw new UsageError('"history:replay" needs --epoch <uuid> from a previously returned cursor.');
-      }
-      const afterSeq = readReplaySeq(values['after-seq']);
-      const limit = readReplayLimit(values.limit);
-      if (positionals.length > 1) throw new UsageError(`"${name}" takes no positional arguments.`);
-      return { ...base, replayEpoch: epoch, replayAfterSeq: afterSeq, replayLimit: limit };
-    }
-    const sourceId = positionals[1];
-    if (sourceId === undefined || sourceId.length === 0) {
-      throw new UsageError(`"${name}" needs the source id, for example: threadline ${name} --project <uuid> <source-id>`);
-    }
-    if (positionals.length > 2) {
-      throw new UsageError(`"${name}" takes one source id, received ${positionals.length - 2} extra arguments.`);
-    }
-    const offset = values.offset === undefined ? null : readBoundedInteger('--offset', values.offset, 0, Number.MAX_SAFE_INTEGER);
-    const maxBytes = values['max-bytes'] === undefined ? null : readBoundedInteger('--max-bytes', values['max-bytes'], 1, SOURCE_ROUTE_MAX_BYTES);
-    if (name === 'source:inspect' && (offset !== null || maxBytes !== null)) {
-      throw new UsageError('"source:inspect" reports state only; use "source:read" for a byte range.');
-    }
-    return { ...base, sourceId, sourceOffset: offset, sourceMaxBytes: maxBytes };
-  }
-
-  if (name === 'provider:setup' || name === 'provider:list' || name === 'tui' || name === 'health' || name === 'fixture' || name === 'init' || name === 'admit' || name === 'inspect') {
-    if (positionals.length > 1) {
-      throw new UsageError(`"${name}" takes no arguments, received ${positionals.length - 1}.`);
-    }
-    return { command: name, echoText: null, start: null, runId: null, cancelReason: null, ...common };
-  }
-
-  if (name === 'echo') {
-    const words = positionals.slice(1);
-    if (words.length === 0) {
-      throw new UsageError('"echo" needs the text to send, for example: threadline echo hello');
-    }
-    return { command: 'echo', echoText: words.join(' '), start: null, runId: null, cancelReason: null, ...common };
-  }
-
-  throw new UsageError(`Unknown command "${name}". Run "threadline --help" for the list.`);
-}
-
-function readBackendUrl(value: string | undefined): string {
-  if (value === undefined) {
-    return DEFAULT_BACKEND_URL;
-  }
-  let parsed: URL;
-  try {
-    parsed = new URL(value);
-  } catch {
-    throw new UsageError(`--backend must be an absolute URL, received "${value}".`);
-  }
-  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-    throw new UsageError(`--backend must use http or https, received "${parsed.protocol}".`);
-  }
-  return value.replace(/\/+$/, '');
+  return parsed;
 }
 
 function requireOption(flag: string, value: string | undefined): string {
@@ -454,44 +168,88 @@ function requireOption(flag: string, value: string | undefined): string {
   return value;
 }
 
-function readStartRequest(values: {
-  project?: string | undefined;
-  task?: string | undefined;
-  profile?: string | undefined;
-  workspace?: string | undefined;
-  'request-id'?: string | undefined;
-  'expect-revision'?: string | undefined;
-  'expect-requirement-revision'?: string | undefined;
-}): StartRunRequest {
-  return {
-    projectId: requireOption('--project', values.project),
-    requestId: requireOption('--request-id', values['request-id']),
-    taskId: requireOption('--task', values.task),
-    profileId: requireOption('--profile', values.profile),
-    workspaceId: requireOption('--workspace', values.workspace),
-    expectedRevision: readRevision('--expect-revision', values['expect-revision']),
-    expectedRequirementRevision: readRevision('--expect-requirement-revision', values['expect-requirement-revision']),
+export function parseCliArgs(argv: readonly string[]): CliInvocation {
+  let parsed: ReturnType<typeof parseArgs<{ options: typeof OPTION_SPEC; allowPositionals: true }>>;
+  try {
+    parsed = parseArgs({ args: [...argv], options: OPTION_SPEC, allowPositionals: true, strict: true });
+  } catch (error) {
+    throw new UsageError(error instanceof Error ? error.message : 'The arguments could not be parsed.');
+  }
+  const { values, positionals } = parsed;
+
+  const name = positionals[0] ?? 'help';
+  if (!(SHELL_COMMANDS as readonly string[]).includes(name)) {
+    throw new UsageError(`Unknown command "${name}". Run "threadline help" for the supported commands.`);
+  }
+  const command = name as CliCommand;
+
+  const visibilityRaw = values.visibility;
+  if (visibilityRaw !== undefined && visibilityRaw !== 'project' && visibilityRaw !== 'principal') {
+    throw new UsageError('--visibility must be "project" or "principal".');
+  }
+
+  const base: CliInvocation = {
+    command,
+    home: values.home,
+    port: readInteger('--port', values.port, 1, 65_535) ?? undefined,
+    json: values.json,
+    root: values.root ?? null,
+    label: values.label ?? null,
+    joinProjectId: values.join ?? null,
+    projectId: values.project ?? null,
+    kind: values.kind ?? null,
+    file: values.file ?? null,
+    origin: values.origin ?? null,
+    revision: values.revision ?? null,
+    delivery: values.delivery ?? null,
+    mediaType: values['media-type'] ?? null,
+    visibility: visibilityRaw === undefined ? null : visibilityRaw,
+    sourceId: positionals[1] ?? null,
+    offset: readInteger('--offset', values.offset, 0, Number.MAX_SAFE_INTEGER),
+    maxBytes: readInteger('--max-bytes', values['max-bytes'], 1, 32_768),
+    limit: readInteger('--limit', values.limit, 1, 100),
+    kinds:
+      values.kinds === undefined
+        ? null
+        : values.kinds
+            .split(',')
+            .map((item) => item.trim())
+            .filter((item) => item.length > 0),
+    nativeSessionId: values.session ?? null,
+    cursor: values.cursor ?? null,
+    help: values.help,
   };
-}
 
-function readRevision(flag: string, value: string | undefined): number {
-  const raw = requireOption(flag, value);
-  if (!/^\d+$/.test(raw.trim())) {
-    throw new UsageError(`${flag} must be a non-negative integer, received "${raw}".`);
+  switch (command) {
+    case 'project:add':
+      requireOption('--root', values.root);
+      break;
+    case 'project:grants':
+      requireOption('--project', values.project);
+      break;
+    case 'source:append':
+      requireOption('--project', values.project);
+      requireOption('--kind', values.kind);
+      requireOption('--file', values.file);
+      break;
+    case 'source:inspect':
+    case 'source:read':
+      requireOption('--project', values.project);
+      if (positionals[1] === undefined || positionals[1].length === 0) {
+        throw new UsageError(`"${command}" needs the source id, for example: threadline ${command} --project <uuid> <sourceId>`);
+      }
+      if (positionals.length > 2) {
+        throw new UsageError(`"${command}" takes one source id.`);
+      }
+      break;
+    case 'history':
+      requireOption('--project', values.project);
+      break;
+    default:
+      if (positionals.length > 1) {
+        throw new UsageError(`"${command}" takes no positional arguments, received ${String(positionals.length - 1)}.`);
+      }
   }
-  return Number.parseInt(raw.trim(), 10);
-}
 
-function readTimeout(value: string | undefined): number {
-  if (value === undefined) {
-    return DEFAULT_REQUEST_TIMEOUT_MS;
-  }
-  if (!/^\d+$/.test(value.trim())) {
-    throw new UsageError(`--timeout must be a whole number of milliseconds, received "${value}".`);
-  }
-  const parsed = Number.parseInt(value.trim(), 10);
-  if (parsed < 1 || parsed > 600_000) {
-    throw new UsageError('--timeout must be between 1 and 600000 milliseconds.');
-  }
-  return parsed;
+  return base;
 }
