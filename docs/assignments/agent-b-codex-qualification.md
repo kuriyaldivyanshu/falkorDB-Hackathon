@@ -117,13 +117,90 @@ Stop at this checkpoint. Production MCP dependency installation, CLI dispatch, e
 
 ## Result record — owner fills during the assignment
 
-- Status: PLANNED.
-- Base ref/full SHA: pending creation gate.
-- Actual worktree/branch: pending creation gate.
-- Observed native version/route and identity conclusion: pending.
-- Temporary resources/processes: none yet.
-- Modules and exact verification/results: pending.
-- Runtime observations versus authored checks and unqualified behavior: pending.
-- Required integration/authorization and proposed checklist updates: pending.
-- Final commit/remote confirmation/PR URL: pending.
-- Retirement handoff: pending.
+- Status: COMPLETE for this qualification/preparation checkpoint. Native
+  runtime hook execution, MCP tool-call identity and the N03 slice remain
+  unqualified and are listed below with their required probes. N03 is not
+  marked complete.
+- Base ref/full SHA: `origin/main` at `38435dfa3273be21cf75525dc23b6a8b7973ba01`
+  (merge of the parallel-work-rulebook PR #8), verified equal to local `main`
+  before worktree creation.
+- Actual worktree/branch: worktree `/tmp/threadline-b-codex-qualification-01`
+  (canonical `/private/tmp/threadline-b-codex-qualification-01`), branch
+  `threadline/b-codex-qualification-01`, created from the resolved SHA, no
+  upstream configured before the first push. The original checkout was not
+  edited; Agent A's worktree was not touched.
+- Observed native version/route and identity conclusion: `codex-cli 0.163.0`
+  (`/opt/homebrew/bin/codex`). Route: documented profile file
+  `$CODEX_HOME/threadline.config.toml` selected with `codex --profile threadline`
+  (observed layering through `codex -p threadline mcp list --json`); the legacy
+  `profile = "..."` key is refused and `--profile` is refused for
+  `codex app-server`. Identity conclusion: hook `session_id` plus parent-session
+  semantics for subagents is `provisional` only; archived `_meta.threadId`/
+  `sessionId` for MCP tool calls stays a hypothesis (unverified on 0.163.0).
+  Model-issued memory writes stay gated; interim surface is a read-only MCP
+  tool plus human-driven mutation.
+- Temporary resources/processes: temporary probe root
+  `/tmp/threadline-b-codex-qualification-data-01` holds generated app-server
+  schemas, the isolated `CODEX_HOME`, authored probe scripts, downloaded doc
+  copies and verification scripts. No probe process was left running; no
+  Threadline service, database or shared port was used; the real native home
+  was never modified.
+- Modules and exact verification/results: new modules
+  `packages/cli/src/codex/events.ts`, `hook-output.ts` and `config-preview.ts`,
+  plus preview/evidence assets under `assets/codex/`. `npm run build` (`tsc -b`)
+  passes. 109 authored module checks pass (temporary script outside the repo):
+  event normalization (12 known events, unknown/malformed/oversized input,
+  64 KiB text bounds with `partial` completeness and code-point-safe cut, no
+  lone surrogates, correlation gaps for unusable session/turn/tool/agent
+  references), hook output (single-line purity, 4 KiB/8 KiB bounds,
+  refusal-by-default, marked truncation, unsupported events), config preview
+  (deterministic bytes and digests, TOML/shell quoting, ownership states
+  absent/owned/edited/foreign including stale-but-owned files recognized by the
+  recorded manifest digest and the JSON manifest's `kind`/`marker` fields).
+  The rendered profile parsed under Python `tomllib`, was accepted by the
+  installed binary (`codex -p threadline mcp list --json`), and
+  `debug prompt-input` with that profile spawned the rendered stdio server and
+  completed the MCP handshake.
+- Runtime observations versus authored checks and unqualified behavior:
+  observed on the installed binary — hook discovery/sources/trust state,
+  project-trust gating, `hooks/list` metadata, inline TOML hook shape via
+  `sessionFlags`, MCP stdio startup handshake, profile layering, schema enums
+  and `additionalContextLimit` semantics. Authored checks establish module and
+  protocol handling only. Unqualified: native hook stdin/stdout execution,
+  `additionalContext` delivery and spill at runtime, MCP `tools/call` `_meta`
+  identity, fork/subagent correlation, profile-layer hook loading.
+- Required integration/authorization and proposed checklist updates: three
+  human-authorized probes are recorded in `docs/native-integration-contract.md`
+  (live session with trusted hooks; authorized turn against a logging stdio
+  server; fork/subagent turn). Backend requests: session registration with
+  provisional precision, batched source append, context preparation and
+  occurrence recording, and a decision on read access for provisional
+  identity. CLI requests: `threadline codex-hook`, `threadline mcp`,
+  `threadline codex config-preview`. Proposed checklist updates for the
+  coordinator: mark the N00 native probe line satisfied by this bounded
+  qualification (installed version, configuration route, hook discovery/trust,
+  MCP startup, identity limits) while keeping N03 unchecked with the recorded
+  unqualified list; optionally add a line under section 6/7 noting that the
+  native adapter stays absent from public capabilities until the live probes
+  and backend work land.
+- Final commit/remote confirmation/PR URL: initial deliverables commit
+  `2651d65c5127039e4625889166e14ff304ab807b` on
+  `threadline/b-codex-qualification-01`, pushed with
+  `git push -u origin HEAD:refs/heads/threadline/b-codex-qualification-01`.
+  No authenticated GitHub route exists in this environment (`gh`, `hub` and
+  `glab` are absent, and installing tools or borrowing credentials is outside
+  this assignment), so this assignment did not create the PR; the owner created
+  it as `https://github.com/kuriyaldivyanshu/falkorDB-Hackathon/pull/9`
+  (base `main`, head `threadline/b-codex-qualification-01`). Existence and head
+  were verified with `git ls-remote origin refs/pull/9/head`. Review fixes stay
+  with that PR: commit
+  `e00d76d9eda3ad97a4e37ee47690e884cb396913` ("Fix review findings in ownership
+  check and correlation gaps") addressed the three findings — stale-but-owned
+  files recognized by the recorded manifest digest, role-aware ownership-marker
+  detection (JSON `kind`/`marker` for the manifest), and unusable tool/agent
+  references reported as correlation gaps. It was pushed to the same branch;
+  `git ls-remote origin refs/heads/threadline/b-codex-qualification-01
+  refs/pull/9/head` returned this SHA for both (verified).
+- Retirement handoff: the worktree may be retired after merge; the temporary
+  probe root is disposable once the PR is reviewed, and `archive/codex` was used
+  read-only as a hypothesis source.
