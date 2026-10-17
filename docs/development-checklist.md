@@ -184,3 +184,12 @@ field) and is listed in the review summary for owner B.
   deletion, privacy barrier, orphan sweep, export).
 - [ ] **N06** package, clean installation and demo evidence.
 - [ ] **N07** final consistency and release review.
+
+## 7. Parallel assignment reservations
+
+Follow [the parallel work rulebook](parallel-work-rulebook.md). The coordinator owns this registry/checklist while workers edit their separate assignment result records. These reservations are **PLANNED**; dispatch them only after the rulebook and assignments are merged to main. Resolve and record the then-current full `origin/main` SHA, not the older memory-foundation checkpoint.
+
+- **A — `a-n02b-semantic-01`:** [full prompt/contract](assignments/agent-a-n02b-semantic-memory.md). One semantic-memory/task checkpoint within N02B; backend/shared source and explicitly listed core docs. Branch `threadline/a-n02b-semantic-01`; worktree `/tmp/threadline-a-n02b-semantic-01`. N02C, episodes/procedure validation and native work remain later assignments.
+- **B — `b-codex-qualification-01`:** [full prompt/contract](assignments/agent-b-codex-qualification.md). Installed Codex qualification plus pure native-edge preparation; new `cli/src/codex` modules, preview assets and its tracked integration document only. Branch `threadline/b-codex-qualification-01`; worktree `/tmp/threadline-b-codex-qualification-01`. Backend connection, native installation/inference and production CLI/MCP wiring are later assignments.
+
+Root manifests/lockfiles/build/Compose configuration, the rulebook and the shared checklist are frozen to the workers for this round. A and B cannot write each other's paths or use each other's runtime resources. They may verify/commit/push/open PRs independently after their gates; one integrator handles reviews, main updates and merges serially. A completed PR's worktree receives only review/base-update fixes, then is retired after merge/recovery checks. The next checkpoint starts fresh.

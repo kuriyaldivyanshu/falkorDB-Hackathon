@@ -4,7 +4,7 @@
 
 Threadline is a Codex-first local memory and coordination package for FalkorDB Track 2. Codex owns inference, tools, authentication and execution. Owned execution has been removed. Source storage and graph delivery are verified; accepted-memory/context services and native Codex qualification remain incomplete.
 
-Before source work, read [docs/development-checklist.md](docs/development-checklist.md), select the next incomplete batch and use its file ownership and completion criteria. Read [CONTEXT.md](CONTEXT.md) when changing domain contracts. The root README describes the product and actual supported commands; the development checklist records implementation status.
+Before source work, read [docs/development-checklist.md](docs/development-checklist.md), select the next incomplete batch and use its file ownership and completion criteria. Before parallel work, branch/PR operations or worktree cleanup, follow [docs/parallel-work-rulebook.md](docs/parallel-work-rulebook.md) and the tracked assignment contract. Read [CONTEXT.md](CONTEXT.md) when changing domain contracts. The root README describes the product and actual supported commands; the development checklist records implementation status.
 
 Local archive source is optional historical reference. `docs/plans/`, `docs/migration.md` and `docs/evidence/` are ignored working material and may be absent in a fresh checkout; required instructions and acceptance criteria must live in tracked files. The previous execution roadmap is cancelled.
 
@@ -35,4 +35,4 @@ Use focused manual or temporary checks outside the repository for authorized imp
 
 Use one descriptive H1 per Markdown file, hierarchical headings, short paragraphs and language-labelled fences. Update product instructions and the migration status in the same batch as behavioral changes. Keep proposed commands distinct from implemented ones; publish evidence only for observed behavior.
 
-Assign shared files to one editor per batch and record ownership in the development checklist. Integrate dependent contract/entry-point changes together and leave a buildable result. Preserve unrelated dirty changes. Use concise imperative commit subjects and describe behavior, affected modules and validation in review summaries.
+The coordinator reserves shared-file ownership and owns the execution checklist during parallel work. Each worker uses one bounded assignment/worktree/branch/PR and reports results in its owned assignment record. Review fixes stay with that PR; the coordinator integrates serially and retires verified worktrees. Start each later checkpoint from fresh updated main. Integrate dependent contract/entry-point changes together and leave a buildable result. Preserve unrelated dirty changes. Use concise imperative commit subjects and describe behavior, affected modules and validation in review summaries.

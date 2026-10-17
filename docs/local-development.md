@@ -85,3 +85,7 @@ Qualify hooks, bounded context output and MCP identity before claiming compatibl
 ## Verification
 
 Run the workspace build after source/configuration changes. Keep temporary behavior checks outside the repository, use synthetic data and report observed outcomes. No permanent package test suite is currently provided. Native compatibility, erasure, concurrency and clean tarball installation remain explicit migration gates.
+
+## Parallel development
+
+Use [the parallel work rulebook](parallel-work-rulebook.md) and a coordinator-assigned task contract before creating a worktree. Each worktree has its own dependency installation, generated output and explicitly isolated verification resources. Required assignment results belong in tracked summaries or the PR; ignored local logs alone cannot establish completion.
