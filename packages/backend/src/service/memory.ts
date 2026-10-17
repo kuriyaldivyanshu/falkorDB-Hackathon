@@ -13,9 +13,14 @@ import {
   memoryViewSchema,
   parseContract,
   proposeMemoryInputSchema,
+  recordEpisodeInputSchema,
+  resolveMemoryContent,
+  type MemoryAuthoring,
+  type MemoryContent,
   type MemoryDocument,
   type MemoryOperationResult,
   type MemoryQueryResult,
+  type MemorySupport,
   type MemoryView,
 } from '@threadline/shared';
 
@@ -28,6 +33,7 @@ import {
   projectRootIdFor,
   readScopedMemoryHeadRows,
   readVersionDetailRows,
+  readVersionSupportRows,
   type MemoryHeadRow,
   type VersionDetailRow,
 } from '../storage/memoryGraph.js';
@@ -37,6 +43,7 @@ import type { AuthenticatedCall } from './auth.js';
 import {
   MEMORY_DOCUMENT_MAX_BYTES,
   classifyDedupe,
+  episodeRequestDigest,
   findIntentByKey,
   insertIntent,
   intentKeyFor,
@@ -45,21 +52,33 @@ import {
   requireHumanAuthority,
   requireProjectScope,
   requireWriteRole,
+  resolveVersionSupports,
   toMemoryOperationResult,
   toMemoryVersion,
   withGraphRead,
   type IntentRecord,
 } from './semanticSupport.js';
+import { classifyEpisodeEvidence } from './evidence.js';
 
 /**
- * Semantic memory admission, authority and reads.
+ * Memory admission, authority and reads for semantic and procedural memory.
  *
- * Content-bearing intents (`memory.propose`, `memory.correct`) are captured as
- * one immutable `memory_proposal` Source holding the canonical intent document;
- * the operation row stores references, never content. A producer can only
- * propose: acceptance and correction are explicit human decisions recorded as
- * new accepted versions, and every commit is a guarded single graph statement
- * performed by the leased worker on this operation's behalf.
+ * Content-bearing intents (`memory.propose`, `memory.correct`,
+ * `memory.episode.record`) are captured as one immutable `memory_proposal`
+ * Source holding the canonical intent document; the operation row stores
+ * references, never content. A producer can only propose: acceptance and
+ * correction are explicit human decisions recorded as new accepted versions,
+ * and every commit is a guarded single graph statement performed by the leased
+ * worker on this operation's behalf.
+ *
+ * Two things a caller may not do are decided here rather than trusted:
+ *
+ * - a procedure's state, review reference and supporting-episode set are
+ *   resolved by this service (`resolveMemoryContent`), so a proposal cannot
+ *   arrive already validated;
+ * - an episode's evidence precision is resolved from the eligibility of its
+ *   cited evidence (`classifyEpisodeEvidence`), so asking for `observed` without
+ *   qualifying evidence is refused rather than quietly recorded as authored.
  *
  * Reads report exactly what the graph holds: the single accepted `CURRENT`
  * head, the bounded set of proposed candidates, and an explicit conflict rather
@@ -70,6 +89,7 @@ export interface MemoryService {
   propose(call: AuthenticatedCall, input: unknown): Promise<MemoryOperationResult>;
   accept(call: AuthenticatedCall, input: unknown): Promise<MemoryOperationResult>;
   correct(call: AuthenticatedCall, input: unknown): Promise<MemoryOperationResult>;
+  recordEpisode(call: AuthenticatedCall, input: unknown): Promise<MemoryOperationResult>;
   query(call: AuthenticatedCall, input: unknown): Promise<MemoryQueryResult>;
   view(call: AuthenticatedCall, projectId: string, memoryId: string): Promise<MemoryView>;
 }
@@ -95,18 +115,22 @@ export function createMemoryService(deps: MemoryServiceDeps): MemoryService {
   };
 
   /**
-   * Semantic admission only: other versioned kinds land with their own
-   * operations, and a proposal carries an authored statement that must fit the
-   * admitted bound before anything is published.
+   * Semantic and procedural admission only.
+   *
+   * An episode arrives through its own operation, which resolves its evidence
+   * precision, and a handoff is its own state machine in N04. A proposal
+   * carries an authored statement or step list that must fit the admitted bound
+   * before anything is published.
    */
-  const requireSemanticContent = (content: MemoryDocument['content']): void => {
-    if (content.kind !== 'semantic') {
+  const requireAdmissibleContent = (authoring: MemoryAuthoring): void => {
+    const resolved = resolveMemoryContent(authoring);
+    if (resolved.kind === 'handoff' || resolved.kind === 'episodic') {
       throw new ThreadlineError(
         'unsupported',
-        'This build admits semantic memory versions only; observed episodes, procedures and handoffs are not implemented yet.',
+        'This build admits semantic and procedural versions through proposals; an episode is recorded with memory.episode.record.',
       );
     }
-    if (!memoryContentFits(content)) {
+    if (!memoryContentFits(resolved)) {
       throw new ThreadlineError('invalid_request', 'The memory version exceeds the admitted byte bound.');
     }
   };
@@ -162,7 +186,7 @@ export function createMemoryService(deps: MemoryServiceDeps): MemoryService {
     call: AuthenticatedCall,
     projectId: string,
     intent: {
-      readonly kind: 'memory.propose' | 'memory.correct';
+      readonly kind: 'memory.propose' | 'memory.correct' | 'memory.episode.record';
       readonly idempotencyKey: string;
       readonly requestDigest: string;
       readonly document: MemoryDocument;
@@ -353,7 +377,7 @@ export function createMemoryService(deps: MemoryServiceDeps): MemoryService {
       const parsed = parseContract(proposeMemoryInputSchema, input, 'memory proposal input');
       requireProjectScope(call, parsed.projectId);
       requireWriteRole(call);
-      requireSemanticContent(parsed.content);
+      requireAdmissibleContent(parsed.content);
       const memoryMode = parsed.memoryId === undefined || parsed.memoryId === null ? 'create' : 'attach';
       const memoryId = parsed.memoryId ?? randomUUID();
       const versionId = randomUUID();
@@ -368,13 +392,16 @@ export function createMemoryService(deps: MemoryServiceDeps): MemoryService {
       }
       const originTaskId = parsed.taskId ?? null;
       await requireVisibleEvidence(call, parsed.projectId, sourceIds);
+      // Resolved here, not authored: a proposal can never arrive already
+      // validated, and the worker re-reads the resolved form from the document.
+      const content = resolveMemoryContent(parsed.content);
       const document: MemoryDocument = {
         documentVersion: 1,
         operationKind: 'memory.propose',
         memoryId,
         memoryMode,
         versionId,
-        content: parsed.content,
+        content,
         applicability: parsed.applicability,
         observedUnder: parsed.observedUnder,
         sourceIds,
@@ -382,6 +409,7 @@ export function createMemoryService(deps: MemoryServiceDeps): MemoryService {
         originTaskId,
         expectedHead,
         reason: null,
+        requestedEvidencePrecision: null,
       };
       const requestDigest = memoryRequestDigest({
         kind: 'memory.propose',
@@ -396,9 +424,108 @@ export function createMemoryService(deps: MemoryServiceDeps): MemoryService {
         originTaskId,
         expectedHead,
         reason: null,
+        requestedEvidencePrecision: null,
       });
       return admitDocumentIntent(call, parsed.projectId, {
         kind: 'memory.propose',
+        idempotencyKey: parsed.idempotencyKey,
+        requestDigest,
+        document,
+      });
+    },
+
+    /**
+     * Records one attempted action and the outcome that was established for it.
+     *
+     * Each episode gets its own Memory identity and a single version: an episode
+     * is a record of what happened, so it is never proposed, never corrected and
+     * never revised. A report that turns out to be wrong is a *new* episode, and
+     * the earlier one keeps the outcome it recorded.
+     *
+     * An `observed` request is honoured only when every cited source passes this
+     * service's eligibility checks; otherwise the call is refused, because a
+     * caller that asked for an observation must not be handed back a weaker
+     * record without being told. The worker re-derives the same eligibility at
+     * delivery from durable facts, so a document cannot grant itself precision.
+     */
+    async recordEpisode(call, input): Promise<MemoryOperationResult> {
+      const parsed = parseContract(recordEpisodeInputSchema, input, 'episode recording input');
+      requireProjectScope(call, parsed.projectId);
+      requireWriteRole(call);
+      const uncertainty = parsed.uncertainty ?? null;
+      if (parsed.outcome === 'unknown' && uncertainty === null) {
+        throw new ThreadlineError(
+          'invalid_request',
+          'An episode whose outcome is unknown must state its uncertainty rather than record a bare unknown.',
+        );
+      }
+      const sourceIds = normalizedUuidList(parsed.sourceIds);
+      await requireVisibleEvidence(call, parsed.projectId, sourceIds);
+      const requested = parsed.evidencePrecision ?? null;
+      const classification = await classifyEpisodeEvidence(
+        { db: deps.db },
+        {
+          tenantId: call.scope.tenantId,
+          projectId: parsed.projectId,
+          sourceIds,
+          principalId: call.scope.principalId,
+        },
+        requested,
+      );
+      const memoryId = randomUUID();
+      const versionId = randomUUID();
+      const originTaskId = parsed.taskId ?? null;
+      const content: MemoryContent = {
+        kind: 'episodic',
+        action: parsed.action,
+        outcome: parsed.outcome,
+        observation: parsed.observation,
+        uncertainty,
+        evidencePrecision: classification.precision,
+      };
+      if (!memoryContentFits(content)) {
+        throw new ThreadlineError('invalid_request', 'The episode exceeds the admitted byte bound.');
+      }
+      const document: MemoryDocument = {
+        documentVersion: 1,
+        operationKind: 'memory.episode.record',
+        memoryId,
+        memoryMode: 'create',
+        versionId,
+        content,
+        applicability: parsed.applicability,
+        observedUnder: parsed.observedUnder,
+        sourceIds,
+        contradictsVersionIds: [],
+        originTaskId,
+        expectedHead: null,
+        reason: null,
+        requestedEvidencePrecision: requested,
+      };
+      const requestDigest = episodeRequestDigest({
+        kind: 'memory.episode.record',
+        projectId: parsed.projectId,
+        action: parsed.action,
+        outcome: parsed.outcome,
+        observation: parsed.observation,
+        uncertainty,
+        applicability: parsed.applicability,
+        observedUnder: parsed.observedUnder,
+        sourceIds,
+        originTaskId,
+        requestedEvidencePrecision: requested,
+      });
+      logger.log({
+        level: 'info',
+        message: 'Episode evidence classified.',
+        fields: {
+          actorPrincipalId: call.scope.principalId,
+          evidencePrecision: classification.precision,
+          evidenceClass: classification.class,
+        },
+      });
+      return admitDocumentIntent(call, parsed.projectId, {
+        kind: 'memory.episode.record',
         idempotencyKey: parsed.idempotencyKey,
         requestDigest,
         document,
@@ -437,18 +564,21 @@ export function createMemoryService(deps: MemoryServiceDeps): MemoryService {
       requireProjectScope(call, parsed.projectId);
       requireHumanAuthority(call, 'Memory correction');
       requireWriteRole(call);
-      requireSemanticContent(parsed.content);
+      requireAdmissibleContent(parsed.content);
       const sourceIds = normalizedUuidList(parsed.sourceIds);
       const contradictsVersionIds = normalizedUuidList(parsed.contradictsVersionIds ?? []);
       await requireVisibleEvidence(call, parsed.projectId, sourceIds);
       const versionId = randomUUID();
+      // A correction supersedes the head it names; it never rewrites it, and it
+      // may not change the kind of the identity it attaches to.
+      const content = resolveMemoryContent(parsed.content);
       const document: MemoryDocument = {
         documentVersion: 1,
         operationKind: 'memory.correct',
         memoryId: parsed.memoryId,
         memoryMode: 'attach',
         versionId,
-        content: parsed.content,
+        content,
         applicability: parsed.applicability,
         observedUnder: parsed.observedUnder,
         sourceIds,
@@ -456,6 +586,7 @@ export function createMemoryService(deps: MemoryServiceDeps): MemoryService {
         originTaskId: null,
         expectedHead: parsed.expectedCurrentVersionId,
         reason: parsed.reason,
+        requestedEvidencePrecision: null,
       };
       const requestDigest = memoryRequestDigest({
         kind: 'memory.correct',
@@ -470,6 +601,7 @@ export function createMemoryService(deps: MemoryServiceDeps): MemoryService {
         originTaskId: null,
         expectedHead: parsed.expectedCurrentVersionId,
         reason: parsed.reason,
+        requestedEvidencePrecision: null,
       });
       return admitDocumentIntent(call, parsed.projectId, {
         kind: 'memory.correct',
@@ -541,6 +673,7 @@ export function createMemoryService(deps: MemoryServiceDeps): MemoryService {
 
 interface MemoryHeadGroup {
   readonly kind: string;
+  readonly currentKind: string | null;
   readonly createdAtMs: number;
   readonly taskId: string | null;
   readonly currentIds: string[];
@@ -557,6 +690,7 @@ function groupHeadRows(rows: readonly MemoryHeadRow[], taskId: string | null): M
     if (entry === undefined) {
       entry = {
         kind: row.kind,
+        currentKind: row.current_kind,
         createdAtMs: row.created_at_ms ?? 0,
         taskId,
         currentIds: [],
@@ -576,10 +710,17 @@ function groupHeadRows(rows: readonly MemoryHeadRow[], taskId: string | null): M
   return grouped;
 }
 
+/**
+ * Loads a page's versions and, in one extra bounded query, the episodes they
+ * cite as supporting reuse.
+ *
+ * Both queries are keyed by the version ids already selected for this page, so
+ * a scan never grows with the size of project memory.
+ */
 async function loadVersionDetails(
   graph: Graph,
   groups: readonly MemoryHeadGroup[],
-): Promise<Map<string, VersionDetailRow>> {
+): Promise<PageVersionDetail> {
   const versionIds = new Set<string>();
   for (const group of groups) {
     for (const id of group.currentIds) {
@@ -589,15 +730,23 @@ async function loadVersionDetails(
       versionIds.add(id);
     }
   }
-  const details = await readVersionDetailRows(graph, [...versionIds]);
-  return new Map(details.map((detail) => [detail.version_id ?? '', detail]));
+  const ids = [...versionIds];
+  const [rows, supportRows] = await Promise.all([
+    readVersionDetailRows(graph, ids),
+    readVersionSupportRows(graph, ids),
+  ]);
+  return {
+    details: new Map(rows.map((detail) => [detail.version_id ?? '', detail])),
+    supports: resolveVersionSupports(supportRows, ids),
+  };
 }
 
-function assembleMemoryView(
-  memoryId: string,
-  group: MemoryHeadGroup,
-  details: ReadonlyMap<string, VersionDetailRow>,
-): MemoryView {
+interface PageVersionDetail {
+  readonly details: ReadonlyMap<string, VersionDetailRow>;
+  readonly supports: ReadonlyMap<string, MemorySupport[]>;
+}
+
+function assembleMemoryView(memoryId: string, group: MemoryHeadGroup, page: PageVersionDetail): MemoryView {
   if (group.currentIds.length > 1) {
     throw new ThreadlineError(
       'authority_conflict',
@@ -606,33 +755,43 @@ function assembleMemoryView(
   }
   let current: MemoryView['current'] = null;
   if (group.currentIds.length === 1) {
-    const detail = details.get(group.currentIds[0] ?? '');
+    const versionId = group.currentIds[0] ?? '';
+    const detail = page.details.get(versionId);
     if (detail === undefined || !detail.is_current || detail.acceptance !== 'accepted') {
       throw new ThreadlineError(
         'authority_conflict',
         'The current version could not be resolved consistently; retry the read.',
       );
     }
-    current = toMemoryVersion(detail);
+    // The identity's kind and the head's own kind must agree. A disagreement
+    // means a write changed one without the other, which is not authority a
+    // read may resolve by preferring either side.
+    if (group.currentKind !== null && detail.kind !== group.currentKind) {
+      throw new ThreadlineError(
+        'authority_conflict',
+        'The current version records a different kind from its memory identity; no head is reported.',
+      );
+    }
+    current = toMemoryVersion(detail, page.supports.get(versionId) ?? []);
   }
   const candidates = group.candidateIds
     .map((id) => {
-      const detail = details.get(id);
+      const detail = page.details.get(id);
       if (detail === undefined || detail.acceptance !== 'proposed') {
         throw new ThreadlineError(
           'authority_conflict',
           'A proposed candidate could not be resolved consistently; retry the read.',
         );
       }
-      return detail;
+      return { id, detail };
     })
     .sort(
       (left, right) =>
-        (right.created_at_ms ?? 0) - (left.created_at_ms ?? 0) ||
-        String(left.version_id).localeCompare(String(right.version_id)),
+        (right.detail.created_at_ms ?? 0) - (left.detail.created_at_ms ?? 0) ||
+        left.id.localeCompare(right.id),
     )
     .slice(0, 8)
-    .map(toMemoryVersion);
+    .map(({ id, detail }) => toMemoryVersion(detail, page.supports.get(id) ?? []));
   return parseContract(
     memoryViewSchema,
     { memoryId, kind: group.kind, taskId: group.taskId, current, candidates },

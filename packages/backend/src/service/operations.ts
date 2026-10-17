@@ -3,12 +3,14 @@ import { randomUUID } from 'node:crypto';
 import type { Graph } from 'falkordb';
 
 import {
+  OBSERVED_EVIDENCE_SOURCE_KINDS,
   ThreadlineError,
   memoryContentFits,
   memoryDocumentSchema,
   operationViewSchema,
   parseContract,
   type DecimalString,
+  type MemoryContent,
   type MemoryDocument,
   type OperationKind,
   type OperationState,
@@ -45,7 +47,13 @@ import {
 import type { SqlDatabase } from '../storage/pg.js';
 import { MEMORY_GRAPH_SCHEMA_VERSION } from '../version.js';
 import type { AuthenticatedCall } from './auth.js';
-import { MEMORY_DOCUMENT_MAX_BYTES, memoryDocumentRequestFacts, memoryRequestDigest } from './semanticSupport.js';
+import {
+  MEMORY_DOCUMENT_MAX_BYTES,
+  episodeDocumentRequestFacts,
+  episodeRequestDigest,
+  memoryDocumentRequestFacts,
+  memoryRequestDigest,
+} from './semanticSupport.js';
 
 /**
  * The leased operation worker and the operation inspection read.
@@ -80,6 +88,7 @@ export const SUPPORTED_OPERATION_KINDS: readonly string[] = [
   'memory.propose',
   'memory.accept',
   'memory.correct',
+  'memory.episode.record',
   'task.require',
 ];
 
@@ -87,6 +96,12 @@ export const SUPPORTED_OPERATION_KINDS: readonly string[] = [
 const MAX_PROPOSED_CANDIDATES = 8;
 /** Bounded requirements per task; matches the accepted view bound. */
 const MAX_TASK_REQUIREMENTS = 16;
+/**
+ * Only a semantic memory can govern a task. An episode records what happened and
+ * a procedure proposes how to act; neither is an obligation, so neither may be
+ * bound as a requirement.
+ */
+const OBLIGATION_MEMORY_KIND = 'semantic';
 
 const GRAPH_READY_TTL_MS = 5 * 60_000;
 const GRAPH_PROBE_TTL_MS = 2_000;
@@ -800,10 +815,13 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
         'The captured intent document does not match the recorded operation; nothing was committed.',
       );
     }
-    if (document.content.kind !== 'semantic' || !memoryContentFits(document.content)) {
-      return refuseIntent('unsupported_memory_kind', 'This build commits semantic memory versions only.');
+    if (!memoryContentFits(document.content)) {
+      return refuseIntent('version_too_large', 'The captured memory version exceeds the admitted byte bound.');
     }
-    const derived = memoryRequestDigest(memoryDocumentRequestFacts(row.project_id, document));
+    const derived =
+      document.operationKind === 'memory.episode.record'
+        ? episodeRequestDigest(episodeDocumentRequestFacts(row.project_id, document))
+        : memoryRequestDigest(memoryDocumentRequestFacts(row.project_id, document));
     if (derived !== row.request_digest) {
       return refuseIntent(
         'intent_integrity_mismatch',
@@ -881,6 +899,166 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
         'dependency_pending',
         'The captured intent document is still being admitted; the intent waits for its own anchor.',
       );
+    }
+    return null;
+  };
+
+  /**
+   * Re-derives the episode's evidence classification at delivery.
+   *
+   * Admission classified the evidence from the same durable facts, but those
+   * facts can move: a source can lose its completeness or have its admission
+   * rejected while the intent waits behind a graph outage. Re-deriving here is
+   * what stops a captured document from asserting a precision its evidence no
+   * longer supports.
+   */
+  const verifyEpisodeEvidence = async (
+    row: ClaimedOperationRow,
+    document: MemoryDocument,
+  ): Promise<PlanOutcomeRefuse | null> => {
+    if (document.content.kind !== 'episodic') {
+      return refuseIntent('invalid_intent', 'An episode intent must carry episodic content.');
+    }
+    const facts = await readEpisodeEvidenceFacts(row, document.sourceIds);
+    const byId = new Map(facts.map((entry) => [entry.id, entry]));
+    for (const sourceId of document.sourceIds) {
+      const entry = byId.get(sourceId);
+      if (entry === undefined || entry.visibility !== 'project') {
+        return refuseIntent(
+          'evidence_not_readable',
+          'A cited source is not present in this project scope or cannot be admitted as evidence.',
+        );
+      }
+      if (entry.availability !== 'available') {
+        return refuseIntent('source_unavailable', 'A cited source is not available for admission as evidence.');
+      }
+    }
+    const requested = document.requestedEvidencePrecision ?? null;
+    if (requested !== 'observed') {
+      return document.content.evidencePrecision === 'authored'
+        ? null
+        : refuseIntent(
+            'evidence_precision_conflict',
+            'The captured episode claims an observation its admission never granted.',
+          );
+    }
+    const ineligible = episodeEvidenceIneligibility(facts, document.sourceIds);
+    if (ineligible !== null) {
+      return refuseIntent('episode_evidence_unsupported', ineligible);
+    }
+    return document.content.evidencePrecision === 'observed'
+      ? null
+      : refuseIntent(
+          'evidence_precision_conflict',
+          'The captured episode records less precision than its evidence admits; nothing was committed.',
+        );
+  };
+
+  /**
+   * The delivery-side twin of `classifyEpisodeEvidence`.
+   *
+   * Both read the same five conditions from durable ledger facts, and both
+   * refuse rather than downgrade. This copy exists because the worker must decide
+   * from the ledger it holds a lease over, never from what an admitting request
+   * happened to see.
+   */
+  const episodeEvidenceIneligibility = (
+    facts: readonly EpisodeEvidenceRow[],
+    sourceIds: readonly string[],
+  ): string | null => {
+    const byId = new Map(facts.map((entry) => [entry.id, entry]));
+    const observedKinds: ReadonlySet<string> = new Set(OBSERVED_EVIDENCE_SOURCE_KINDS);
+    for (const sourceId of sourceIds) {
+      const entry = byId.get(sourceId);
+      if (entry === undefined) {
+        return 'A cited source is no longer present in the ledger.';
+      }
+      if (!observedKinds.has(entry.kind)) {
+        return `A cited source is catalogued as "${entry.kind}", which is not outcome evidence in this contract.`;
+      }
+      if (entry.completeness !== 'complete') {
+        return `A cited source is recorded as ${entry.completeness}; only a complete record can establish an outcome.`;
+      }
+      if (entry.producer_kind !== 'human') {
+        return 'A cited source was recorded by a non-human principal; a producer assertion stays authored evidence.';
+      }
+      if (entry.anchor_state !== 'committed') {
+        return 'A cited source has not been admitted to project memory.';
+      }
+    }
+    return null;
+  };
+
+  const readEpisodeEvidenceFacts = async (
+    row: ClaimedOperationRow,
+    sourceIds: readonly string[],
+  ): Promise<EpisodeEvidenceRow[]> =>
+    deps.db.withTenantTransaction(row.tenant_id, (tx) =>
+      tx.rows<EpisodeEvidenceRow>(
+        `SELECT s.id, s.kind, s.completeness, s.availability, s.visibility,
+                p.kind AS producer_kind, o.state AS anchor_state
+           FROM threadline_memory.sources s
+           JOIN threadline_memory.principals p ON p.tenant_id = s.tenant_id AND p.id = s.producer_principal_id
+           LEFT JOIN threadline_memory.operations o
+                  ON o.tenant_id = s.tenant_id AND o.project_id = s.project_id
+                 AND o.kind = 'source.append' AND o.intent_source_id = s.id
+          WHERE s.tenant_id = $1 AND s.project_id = $2 AND s.id = ANY($3::uuid[])`,
+        [row.tenant_id, row.project_id, [...sourceIds]],
+      ),
+    );
+
+  /**
+   * Validates the episodes a procedure version cites as supporting reuse.
+   *
+   * Every reference must name a version project memory holds, that is episodic,
+   * and that was accepted: an unaccepted candidate is a proposal, not a recorded
+   * outcome. The reference is checked, never copied — the outcome each episode
+   * actually recorded is read back through the version read, so a procedure can
+   * never present support its evidence does not carry.
+   *
+   * A referenced episode may itself still be waiting on its own admission, in
+   * which case this is a real wait rather than an invalidity.
+   */
+  const verifyProcedureSupports = async (
+    graph: Graph,
+    document: MemoryDocument,
+    versionId: string,
+    pendingRows: readonly PendingIntentRow[],
+  ): Promise<PlanOutcome | null> => {
+    if (document.content.kind !== 'procedural' || document.content.supportedBy.length === 0) {
+      return null;
+    }
+    for (const supportId of document.content.supportedBy) {
+      const state = await readVersionState(graph, supportId);
+      if (state === null) {
+        return pendingRows.some((entry) => createsVersion(entry, supportId))
+          ? retryPending(
+              'dependency_pending',
+              'A supporting episode version is still being admitted; this procedure waits for it.',
+            )
+          : refuseIntent(
+              'supporting_episode_missing',
+              'A supporting episode version is not present in project memory.',
+            );
+      }
+      if (state.kind !== 'episodic') {
+        return refuseIntent(
+          'supporting_reference_not_episodic',
+          'A supporting reference does not name an episodic version.',
+        );
+      }
+      if (state.acceptance !== 'accepted') {
+        return refuseIntent(
+          'supporting_episode_not_accepted',
+          'A supporting episode version was never accepted, so it is a proposal rather than a recorded outcome.',
+        );
+      }
+      if (supportId === versionId) {
+        return refuseIntent(
+          'supporting_reference_self',
+          'A procedure version cannot cite itself as supporting evidence.',
+        );
+      }
     }
     return null;
   };
@@ -1092,6 +1270,28 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
     if (integrity !== null) {
       return { prepared: 'outcome', outcome: integrity };
     }
+    if (document.content.kind !== 'semantic' && document.content.kind !== 'procedural') {
+      return {
+        prepared: 'outcome',
+        outcome: refuseIntent(
+          'unsupported_memory_kind',
+          'This build commits semantic and procedural versions through a proposal.',
+        ),
+      };
+    }
+    if (document.content.kind === 'procedural') {
+      // A proposal can never arrive validated: the state was resolved to
+      // `candidate` by admission, and a bare review reference grants nothing.
+      if (document.content.procedureState !== 'candidate' || document.content.reviewRef !== null) {
+        return {
+          prepared: 'outcome',
+          outcome: refuseIntent(
+            'procedure_state_unavailable',
+            'A proposal is admitted as a candidate procedure; validated reuse requires a declared review and compatible reuse that this build does not perform.',
+          ),
+        };
+      }
+    }
     const evidenceOutcome = await requireEvidenceAdmissible(row, base.actorPrincipalId, documentSourceId, document.sourceIds);
     if (evidenceOutcome !== null) {
       return { prepared: 'outcome', outcome: evidenceOutcome };
@@ -1109,26 +1309,35 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
             if (state.memoryExists) {
               return refuseIntent('memory_id_conflict', 'The memory identity already exists in the project graph.');
             }
-            return null;
+          } else {
+            if (!state.memoryExists) {
+              return pendingRows.some((entry) => createsMemory(entry, memoryId))
+                ? retryPending(
+                    'dependency_pending',
+                    'The memory identity is not admitted yet; the proposal that creates it is still pending.',
+                  )
+                : refuseIntent(
+                    'memory_not_available',
+                    'The memory identity this proposal attaches to is not present in the project graph.',
+                  );
+            }
+            // A kind change would repoint every task requirement bound to this
+            // identity at a different kind of obligation, so it is refused here
+            // and again by the commit statement.
+            if (state.kind !== document.content.kind) {
+              return refuseIntent(
+                'memory_kind_change_refused',
+                'A proposal may not change the kind of an existing memory identity.',
+              );
+            }
+            if (state.proposedVersionIds.length >= MAX_PROPOSED_CANDIDATES) {
+              return refuseIntent(
+                'candidate_limit_reached',
+                `The memory already holds ${String(MAX_PROPOSED_CANDIDATES)} proposed candidates; a further proposal is refused until one is resolved.`,
+              );
+            }
           }
-          if (!state.memoryExists) {
-            return pendingRows.some((entry) => createsMemory(entry, memoryId))
-              ? retryPending(
-                  'dependency_pending',
-                  'The memory identity is not admitted yet; the proposal that creates it is still pending.',
-                )
-              : refuseIntent(
-                  'memory_not_available',
-                  'The memory identity this proposal attaches to is not present in the project graph.',
-                );
-          }
-          if (state.proposedVersionIds.length >= MAX_PROPOSED_CANDIDATES) {
-            return refuseIntent(
-              'candidate_limit_reached',
-              `The memory already holds ${String(MAX_PROPOSED_CANDIDATES)} proposed candidates; a further proposal is refused until one is resolved.`,
-            );
-          }
-          return null;
+          return verifyProcedureSupports(graph, document, versionId, pendingRows);
         },
         commit: (graph, context) =>
           commitMemoryPropose(graph, {
@@ -1147,8 +1356,15 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
             memoryId,
             memoryMode,
             versionId,
-            subtype: document.content.kind === 'semantic' ? document.content.subtype : 'requirement',
-            statement: document.content.kind === 'semantic' ? document.content.statement : '',
+            kind: document.content.kind,
+            operationKind: row.kind,
+            contentJson: JSON.stringify(document.content),
+            subtype: document.content.kind === 'semantic' ? document.content.subtype : '',
+            statement: summarizeContent(document.content),
+            delegation: 'authored',
+            evidencePrecision: null,
+            acceptance: 'proposed',
+            acceptedAtMs: null,
             applicabilityJson: JSON.stringify(document.applicability),
             observedUnderJson: JSON.stringify(document.observedUnder),
             observedAtMs: row.created_at.getTime(),
@@ -1156,10 +1372,17 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
             expectedHead: document.expectedHead,
             sourceAnchorIds: document.sourceIds,
             contradictionVersionIds: document.contradictsVersionIds,
+            supportVersionIds: supportingVersionIds(document.content),
             candidateCap: MAX_PROPOSED_CANDIDATES,
           }),
         diagnose: async (graph) => {
           const state = await readMemoryState(graph, projectRootId, memoryId);
+          if (memoryMode === 'attach' && state.memoryExists && state.kind !== document.content.kind) {
+            return refuseIntent(
+              'memory_kind_change_refused',
+              'A proposal may not change the kind of an existing memory identity.',
+            );
+          }
           if (memoryMode === 'attach' && state.memoryExists && state.proposedVersionIds.length >= MAX_PROPOSED_CANDIDATES) {
             return refuseIntent(
               'candidate_limit_reached',
@@ -1187,7 +1410,7 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
               );
             }
           }
-          return null;
+          return verifyProcedureSupports(graph, document, versionId, pendingRows);
         },
       },
     };
@@ -1386,6 +1609,15 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
     if (integrity !== null) {
       return { prepared: 'outcome', outcome: integrity };
     }
+    if (document.content.kind !== 'semantic' && document.content.kind !== 'procedural') {
+      return {
+        prepared: 'outcome',
+        outcome: refuseIntent(
+          'unsupported_memory_kind',
+          'This build corrects semantic and procedural versions; an episode is a record of what happened and is never revised.',
+        ),
+      };
+    }
     const evidenceOutcome = await requireEvidenceAdmissible(row, base.actorPrincipalId, documentSourceId, document.sourceIds);
     if (evidenceOutcome !== null) {
       return { prepared: 'outcome', outcome: evidenceOutcome };
@@ -1401,6 +1633,15 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
         actorPrincipalId: base.actorPrincipalId,
         precheck: async (graph) => {
           const state = await readMemoryState(graph, projectRootId, memoryId);
+          if (state.memoryExists && state.kind !== document.content.kind) {
+            // Refused here and again by the commit statement. A correction that
+            // changed the kind would silently repoint every task requirement
+            // bound to this identity at a different kind of obligation.
+            return refuseIntent(
+              'memory_kind_change_refused',
+              'A correction may not change the kind of a memory identity; supersede it and propose a new one instead.',
+            );
+          }
           if (!state.memoryExists) {
             return memoryBeingAdmitted
               ? retryPending('dependency_pending', 'The memory identity is not admitted yet; a related intent is still pending.')
@@ -1426,7 +1667,7 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
           if (state.proposedVersionIds.includes(versionId)) {
             return refuseIntent('version_id_conflict', 'The correction version identity already exists in the project graph.');
           }
-          return null;
+          return verifyProcedureSupports(graph, document, versionId, pendingRows);
         },
         commit: (graph, context) =>
           commitMemoryCorrect(graph, {
@@ -1445,8 +1686,12 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
             memoryId,
             versionId,
             expectedHead,
-            subtype: document.content.kind === 'semantic' ? document.content.subtype : 'requirement',
-            statement: document.content.kind === 'semantic' ? document.content.statement : '',
+            kind: document.content.kind,
+            contentJson: JSON.stringify(document.content),
+            subtype: document.content.kind === 'semantic' ? document.content.subtype : '',
+            statement: summarizeContent(document.content),
+            delegation: 'authored',
+            evidencePrecision: null,
             applicabilityJson: JSON.stringify(document.applicability),
             observedUnderJson: JSON.stringify(document.observedUnder),
             observedAtMs: row.created_at.getTime(),
@@ -1454,6 +1699,7 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
             reason,
             sourceAnchorIds: document.sourceIds,
             contradictionVersionIds: document.contradictsVersionIds,
+            supportVersionIds: supportingVersionIds(document.content),
           }),
         diagnose: async (graph) => {
           const version = await readVersionState(graph, versionId);
@@ -1497,7 +1743,158 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
               );
             }
           }
-          return null;
+          return verifyProcedureSupports(graph, document, versionId, pendingRows);
+        },
+      },
+    };
+  };
+
+  /**
+   * Delivers one recorded episode.
+   *
+   * The plan is the proposal plan with two differences that are decided by this
+   * service rather than by the request: the identity is always new, because an
+   * episode is a record of what happened and is never proposed onto an existing
+   * identity; and the delegation marker follows the evidence precision the
+   * delivery re-derived above. A caller-supplied outcome or Source kind buys
+   * nothing here — the outcome recorded is the outcome that was asserted, and the
+   * precision recorded is the precision the evidence admitted.
+   */
+  const prepareEpisodeRecord = async (row: ClaimedOperationRow): Promise<Preparation> => {
+    const documentSourceId = row.intent_source_id;
+    const memoryId = row.intent_memory_id;
+    const versionId = row.intent_version_id;
+    if (documentSourceId === null || memoryId === null || versionId === null) {
+      return {
+        prepared: 'outcome',
+        outcome: refuseIntent(
+          'invalid_intent',
+          'A memory.episode.record intent must name its content source, memory and version.',
+        ),
+      };
+    }
+    const base = await loadBaseFacts(row);
+    if (base.refusal !== null) {
+      return { prepared: 'outcome', outcome: base.refusal };
+    }
+    if (base.payload.memoryMode !== 'create') {
+      return {
+        prepared: 'outcome',
+        outcome: refuseIntent('invalid_intent', 'An episode always records a new memory identity.'),
+      };
+    }
+    const loaded = await readIntentDocument(row, documentSourceId);
+    if (loaded.refusal !== null) {
+      return { prepared: 'outcome', outcome: loaded.refusal };
+    }
+    const { document } = loaded;
+    if (document.memoryMode !== 'create') {
+      return {
+        prepared: 'outcome',
+        outcome: refuseIntent(
+          'intent_integrity_mismatch',
+          'The captured intent document does not record a new episode identity.',
+        ),
+      };
+    }
+    const integrity = verifyMemoryDocument(row, document);
+    if (integrity !== null) {
+      return { prepared: 'outcome', outcome: integrity };
+    }
+    if (document.content.kind !== 'episodic') {
+      return {
+        prepared: 'outcome',
+        outcome: refuseIntent('invalid_intent', 'An episode intent must carry episodic content.'),
+      };
+    }
+    // The ordinary evidence gate runs first on purpose: a cited source whose
+    // admission is still pending is a temporary wait, and judging its evidence
+    // classification before that is known would refuse a real wait as invalid.
+    const evidenceOutcome = await requireEvidenceAdmissible(row, base.actorPrincipalId, documentSourceId, document.sourceIds);
+    if (evidenceOutcome !== null) {
+      return { prepared: 'outcome', outcome: evidenceOutcome };
+    }
+    const precision = await verifyEpisodeEvidence(row, document);
+    if (precision !== null) {
+      return { prepared: 'outcome', outcome: precision };
+    }
+    // Bound before the plan closures: the commit runs long after this frame's
+    // narrowing would have been lost, so the checked form is captured here.
+    const episode = document.content;
+    const projectRootId = projectRootIdFor(row.project_id);
+    const observed = document.content.evidencePrecision === 'observed';
+    const delegation = observed ? 'observed' : 'authored';
+    // A deterministic observed episode is proposal-free: its evidence passed
+    // every eligibility check, so it is admitted as current rather than waiting
+    // on an acceptance that would add nothing. An authored episode is a report
+    // and stays a candidate until a human accepts it.
+    const acceptance = observed ? 'accepted' : 'proposed';
+    return {
+      prepared: 'plan',
+      plan: {
+        project: base.project,
+        actorPrincipalId: base.actorPrincipalId,
+        precheck: async (graph) => {
+          const state = await readMemoryState(graph, projectRootId, memoryId);
+          return state.memoryExists
+            ? refuseIntent('memory_id_conflict', 'The episode identity already exists in the project graph.')
+            : null;
+        },
+        commit: (graph, context) =>
+          commitMemoryPropose(graph, {
+            projectRootId: context.projectRootId,
+            graphEpoch: context.graphEpoch,
+            privacyRevision: context.privacyRevision,
+            receiptId: context.receiptId,
+            eventIdPrefix: context.eventIdPrefix,
+            operationId: context.operationId,
+            requestDigest: context.requestDigest,
+            actorPrincipalId: context.actorPrincipalId,
+            nowMs: context.nowMs(),
+            graphSchemaVersion: context.graphSchemaVersion,
+            tenantId: row.tenant_id,
+            projectId: row.project_id,
+            memoryId,
+            memoryMode: 'create',
+            versionId,
+            kind: 'episodic',
+            operationKind: row.kind,
+            contentJson: JSON.stringify(episode),
+            subtype: '',
+            statement: episode.action,
+            delegation,
+            evidencePrecision: episode.evidencePrecision,
+            acceptance,
+            acceptedAtMs: acceptance === 'accepted' ? context.nowMs() : null,
+            applicabilityJson: JSON.stringify(document.applicability),
+            observedUnderJson: JSON.stringify(document.observedUnder),
+            observedAtMs: row.created_at.getTime(),
+            originTaskId: document.originTaskId,
+            expectedHead: null,
+            sourceAnchorIds: document.sourceIds,
+            contradictionVersionIds: [],
+            supportVersionIds: [],
+            candidateCap: MAX_PROPOSED_CANDIDATES,
+          }),
+        diagnose: async (graph) => {
+          // Ask about this version before asking about the identity: an observed
+          // episode commits as accepted, so a version present here is this
+          // operation's own effect without a receipt, not a foreign identity.
+          const version = await readVersionState(graph, versionId);
+          if (version !== null) {
+            return refuseIntent(
+              'graph_inconsistent',
+              'The project graph holds this episode version without a receipt; refusing to guess an outcome.',
+            );
+          }
+          const state = await readMemoryState(graph, projectRootId, memoryId);
+          if (state.memoryExists) {
+            return refuseIntent('memory_id_conflict', 'The episode identity already exists in the project graph.');
+          }
+          const anchorCount = await countSourceAnchors(graph, [documentSourceId, ...document.sourceIds]);
+          return anchorCount < 1 + document.sourceIds.length
+            ? refuseIntent('evidence_anchor_missing', 'A cited source anchor is missing from the project graph.')
+            : null;
         },
       },
     };
@@ -1576,6 +1973,15 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
               ? retryPending('dependency_pending', 'The memory identity is not admitted yet; a related intent is still pending.')
               : refuseIntent('memory_not_available', 'The memory identity is not present in the project graph.');
           }
+          // Only an obligation may govern a task. An episode is a record of what
+          // happened and a procedure is advice; binding either one would let
+          // history or a suggestion stand in for a requirement.
+          if (memory.kind !== OBLIGATION_MEMORY_KIND) {
+            return refuseIntent(
+              'requirement_kind_unsuitable',
+              `A task requirement binds a ${OBLIGATION_MEMORY_KIND} obligation; this memory is a ${memory.kind ?? 'unknown'} record.`,
+            );
+          }
           return null;
         },
         commit: (graph, context) =>
@@ -1595,6 +2001,7 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
             expectedTaskRevision: expectedRevision,
             newRevision: randomUUID(),
             maxRequirements: MAX_TASK_REQUIREMENTS,
+            obligationKind: OBLIGATION_MEMORY_KIND,
           }),
         diagnose: async (graph) => {
           const state = await readTaskState(graph, projectRootId, taskId);
@@ -1609,6 +2016,13 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
           }
           if (state.requiredMemoryIds.includes(memoryId)) {
             return refuseIntent('requirement_already_bound', 'The task already requires this memory identity.');
+          }
+          const memory = await readMemoryState(graph, projectRootId, memoryId);
+          if (memory.memoryExists && memory.kind !== OBLIGATION_MEMORY_KIND) {
+            return refuseIntent(
+              'requirement_kind_unsuitable',
+              `A task requirement binds a ${OBLIGATION_MEMORY_KIND} obligation; this memory is a ${memory.kind ?? 'unknown'} record.`,
+            );
           }
           return null;
         },
@@ -1628,6 +2042,8 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
         return prepareMemoryAccept(row);
       case 'memory.correct':
         return prepareMemoryCorrect(row);
+      case 'memory.episode.record':
+        return prepareEpisodeRecord(row);
       case 'task.require':
         return prepareTaskRequire(row);
       default:
@@ -1975,6 +2391,16 @@ interface AnchorStateRow {
   readonly error_code: string | null;
 }
 
+interface EpisodeEvidenceRow {
+  readonly id: string;
+  readonly kind: string;
+  readonly completeness: string;
+  readonly availability: string;
+  readonly visibility: string;
+  readonly producer_kind: string;
+  readonly anchor_state: string | null;
+}
+
 interface PendingIntentRow {
   readonly id: string;
   readonly kind: string;
@@ -1999,10 +2425,15 @@ interface PendingIntentRow {
  * whose own commit creates the identity in question.
  */
 const createsMemory = (entry: PendingIntentRow, memoryId: string): boolean =>
-  entry.kind === 'memory.propose' && entry.memory_mode === 'create' && entry.intent_memory_id === memoryId;
+  (entry.kind === 'memory.propose' || entry.kind === 'memory.episode.record') &&
+  entry.memory_mode === 'create' &&
+  entry.intent_memory_id === memoryId;
 
 const createsVersion = (entry: PendingIntentRow, versionId: string): boolean =>
-  (entry.kind === 'memory.propose' || entry.kind === 'memory.correct') && entry.intent_version_id === versionId;
+  (entry.kind === 'memory.propose' ||
+    entry.kind === 'memory.correct' ||
+    entry.kind === 'memory.episode.record') &&
+  entry.intent_version_id === versionId;
 
 const createsTask = (entry: PendingIntentRow, taskId: string): boolean =>
   entry.kind === 'task.create' && entry.intent_task_id === taskId;
@@ -2021,7 +2452,7 @@ const DEPENDENCY_SELECT = `SELECT id, kind, state,
 
 const PENDING_MEMORY_INTENTS_SQL = `${DEPENDENCY_SELECT}
    WHERE tenant_id = $1 AND project_id = $2 AND id <> $3
-     AND kind IN ('memory.propose', 'memory.accept', 'memory.correct')
+     AND kind IN ('memory.propose', 'memory.accept', 'memory.correct', 'memory.episode.record')
      AND state IN ('pending', 'leased', 'ambiguous')
      AND (intent_memory_id = $4
           OR ($5::uuid IS NOT NULL AND intent_version_id = $5)
@@ -2034,7 +2465,7 @@ const LATEST_VERSION_INTENT_SQL = `${DEPENDENCY_SELECT}
 
 const PENDING_TASK_INTENTS_SQL = `${DEPENDENCY_SELECT}
    WHERE tenant_id = $1 AND project_id = $2 AND id <> $3
-     AND kind IN ('task.create', 'task.require', 'memory.propose', 'memory.correct')
+     AND kind IN ('task.create', 'task.require', 'memory.propose', 'memory.correct', 'memory.episode.record')
      AND state IN ('pending', 'leased', 'ambiguous')
      AND (intent_task_id = $4 OR intent_memory_id = $5)`;
 
@@ -2077,6 +2508,31 @@ interface DeliveryPlan {
 type Preparation =
   | { readonly prepared: 'outcome'; readonly outcome: PlanOutcome }
   | { readonly prepared: 'plan'; readonly plan: DeliveryPlan };
+
+/**
+ * The bounded summary a version carries beside its full content.
+ *
+ * A focused read matches against this, so it is the shortest honest description
+ * of the version: the statement for a semantic requirement, the goal for a
+ * procedure. It is never a copy of the version and never a summary of evidence.
+ */
+function summarizeContent(content: MemoryContent): string {
+  switch (content.kind) {
+    case 'semantic':
+      return content.statement;
+    case 'procedural':
+      return content.goal;
+    case 'episodic':
+      return content.action;
+    default:
+      return content.objective;
+  }
+}
+
+/** The episode versions a stored content cites as supporting reuse. */
+function supportingVersionIds(content: MemoryContent): readonly string[] {
+  return content.kind === 'procedural' ? content.supportedBy : [];
+}
 
 function refuseIntent(code: string, detail: string): PlanOutcomeRefuse {
   return { type: 'refuse', code, detail };
