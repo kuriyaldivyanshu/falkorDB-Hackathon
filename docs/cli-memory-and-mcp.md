@@ -17,10 +17,13 @@ session, and neither writes memory on a model's behalf.
 | `threadline mcp` | Read-only stdio MCP server bound to one project | No write tool, no acceptance tool, no HTTP/SQL/shell/filesystem tool |
 | `threadline codex:preview` | Renders the Codex profile that starts `mcp` | Writes nothing; renders no hook entry and no credential |
 
-Not implemented in this build: native capture, session enrollment, context
-preparation, model-written memory, coordination claims and handoffs. The MCP
-tool-call identity path is still unqualified, which is one reason writes stay
-human-only.
+Semantic memory, episodes and procedural candidates are implemented (see
+[docs/memory-kinds.md](memory-kinds.md) for the memory-kind contracts and
+`POST /v2/memories/episodes`). Validated procedural reuse, bounded context,
+coordination claims, handoffs, native capture, native session enrollment and
+strong native identity are **not** implemented and are reported as unavailable by
+`threadline capabilities`. The MCP tool-call identity path is still unqualified,
+which is one reason writes stay human-only.
 
 ## One complete workflow
 
@@ -174,7 +177,20 @@ carries the graph receipt with its event sequence as a decimal string.
 
 In `--json` mode each command prints exactly one machine-readable result. A
 pending outcome is never printed as a success, and `--wait` never converts a
-refusal into a pass.
+refusal into a pass. A refused command names the offending field of the input
+document on stderr, so a rejected proposal says which part of the document was
+wrong without echoing the document back.
+
+### Proposals now accept semantic and procedural content
+
+The proposal and correction contracts are shared, and they narrow what a caller
+may author. `memory:propose` and `memory:correct` accept **semantic** and
+**procedural** content; an episodic proposal is refused, because an episode
+arrives through its own operation where the service resolves its evidence
+precision. A procedure proposal supplies its steps, prerequisites, parameters
+and the episode versions it claims as support; it cannot write its own
+`procedureState` or `reviewRef`, and an attempt to do so is an explicit refusal
+rather than a silently dropped field.
 
 ## The read-only MCP server
 
@@ -193,6 +209,11 @@ credential cannot see the configured project. It exposes six read-only tools:
 | `threadline_task_requirements` | `GET /v2/tasks/:taskId/requirements` | `taskId` |
 | `threadline_source_inspect` | `GET /v2/sources/:sourceId` | `sourceId` (metadata only) |
 | `threadline_source_read` | `GET /v2/sources/:sourceId/range` | `sourceId`, `offset`, `maxBytes` (1–32768) |
+
+`threadline_memory_query` accepts `kind: "episodic"` or `kind: "procedural"` to
+narrow the bounded scan, and `threadline_memory_inspect` returns the stored
+content of any kind — including the server-resolved `evidencePrecision` of an
+episode and the `procedureState`, `reviewRef` and `supportedBy` of a procedure.
 
 What the server guarantees:
 
@@ -267,6 +288,31 @@ paths, and the exact command to run the server by hand.
   observed, model-issued writes stay disabled and this server stays read-only.
 - Context preparation, occurrence recording and session enrollment are not
   implemented; there is no `context.prepare` tool or command here.
-- Claims, handoffs, episodes and procedures remain unavailable operations.
+- Claims and handoffs remain unavailable operations.
 - A verified second-credential path over HTTP is still a follow-up for the
   backend owner; this checkpoint does not close it.
+
+### Gaps this client surface still has, now that episodes and procedures exist
+
+These are gaps in **this** client, not in the service. The backend routes exist
+and are verified; the commands do not, and inventing them here would exceed this
+assignment's scope. They are the next client batch's work.
+
+- **Episode recording has no CLI command.** `POST /v2/memories/episodes`
+  (`memory.episode.record`) is supported by the service, but there is no
+  `threadline memory:episode:record`. Note that `memory:propose` correctly
+  *refuses* episodic content: an episode arrives only through its own operation,
+  because the service resolves its evidence precision rather than accepting one
+  from the caller.
+- **Procedural admission works; procedural validation does not exist yet.**
+  A procedure is proposed and human-accepted through `memory:propose` /
+  `memory:accept` exactly like a semantic requirement, and stays
+  `procedureState: "candidate"` afterwards. `memory.procedure.validate` is
+  reported unavailable by the service, so there is nothing for a CLI command to
+  call yet. Acceptance is deliberately not validation.
+- **The MCP tool surface does not expose episodes or procedures as separate
+  tools.** They are readable through `threadline_memory_query` with
+  `kind: "episodic"` or `kind: "procedural"`, and through
+  `threadline_memory_inspect`, which returns the stored content including the
+  server-resolved `evidencePrecision`, `procedureState` and `supportedBy`. A
+  dedicated episode tool is unnecessary: the existing reads already cover it.
