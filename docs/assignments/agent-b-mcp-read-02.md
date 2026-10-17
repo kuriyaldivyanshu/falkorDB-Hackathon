@@ -562,6 +562,80 @@ unavailable in capabilities". The capability table now reports
 table it summarises. It is a `healthGuarantees.note` string in the backend and
 this assignment does not edit backend source; reported for the backend owner.
 
+### Open backend documentation defect: exact location and required wording
+
+Still open on this branch and on `main`. Backend source is outside this
+assignment's ownership, so this records the exact edit for the coordinator
+instead of making it.
+
+**File:** `packages/backend/src/index.ts`
+**Location:** the `guarantees.note` ternary in `createMemoryService`'s liveness
+handler — the `durableReady() ? '<text A>' : '<text B>'` expression at line 481
+on this branch. The stale sentence is the tail of text A:
+
+> Episodes, procedures, context and native integration are not implemented and
+> are stated unavailable in capabilities.
+
+**Why it is wrong now:** `threadline capabilities` reports
+`memory.episode.record` as **supported** and serves
+`POST /v2/memories/episodes`, and a procedure can be proposed, human-accepted
+and read back with a server-resolved `procedureState`. `GET /v2/status` is
+served to any authenticated caller, so a client is told the opposite of the
+capability table on the same service.
+
+**Required wording.** Replace text A with the following, which keeps the
+durable-store and receipt claims, names what is implemented, and names what is
+not:
+
+```text
+Source history is durable in SQL plus immutable files. Semantic memory proposals, explicit human acceptance, corrections and task requirements are admitted in SQL and committed to the project graph through the leased worker with graph receipts; accepted-memory reads resolve the current version from that graph. Episode admission and procedural candidates with human review are admitted and committed the same way; a human-accepted procedure stays a candidate. Validated procedural reuse, bounded context preparation and occurrence recording, coordination, handoffs and native capture are not implemented and are stated unavailable in capabilities.
+```
+
+That replacement is 648 UTF-8 bytes, inside the 1024-byte
+`backendGuaranteesSchema.note` limit in `packages/shared/src/health.ts`, so no
+schema change is required. The comment immediately above the ternary
+("Episodes, procedures, context and native integration are still absent…") needs
+the same correction; it is documentation inside the same backend file.
+
+**Verification for the coordinator after the correction lands on main:** merge
+`main` into this branch normally, run `npm run build`, start the service against
+an isolated store and confirm `threadline status` reports the new wording with
+`state: ready`, and `GET /v2/capabilities` still reports `memory.episode.record`
+supported and `memory.procedure.validate` unavailable. No MCP, preview or
+offline-binary check depends on this string, so the 128-check suite does not
+need re-running for it.
+
+Until that correction is on `main`, this sentence is the one place where the
+product documentation and the running service disagree.
+
+### Documentation consistency check (final, `13112cf`)
+
+Checked that `README.md`, `docs/local-development.md`, `docs/cli-memory-and-mcp.md`,
+`docs/native-integration-contract.md` and this record all say the same thing about
+what is implemented, what is unavailable, and what is unqualified.
+
+| Claim | README | local-development | cli-memory-and-mcp | native-integration-contract | this record |
+| --- | --- | --- | --- | --- | --- |
+| Semantic memory, tasks, episodes, procedural candidates implemented | yes | yes | yes | yes | yes |
+| Validated procedural reuse unavailable | yes | yes | yes | yes | yes |
+| Bounded context / occurrence recording unavailable | yes | yes | yes | yes | yes |
+| Native capture and enrollment unavailable | yes | yes | yes | yes | yes |
+| Strong native identity / `tools/call` unqualified | yes | yes | yes | yes | yes |
+| N03 not complete | yes | yes | yes | yes | yes |
+| Authored MCP checks are not installed-binary evidence | — | — | yes | yes | yes |
+
+Every local Markdown link in the four documents resolves; every fence is
+language-labelled; each file has one H1 and hierarchical headings. The only
+sentence that disagrees with the capability table is the backend's own
+`Guarantees` string, which is outside this branch's ownership and is described
+immediately below.
+
+No source, dependency or integrated behaviour changed after the verified head
+`13112cf`, so the build and the 128 checks were not re-run; the transcript at
+`/tmp/threadline-b-mcp-read-data-02/logs/verification-merged.txt`
+(`sha256:a93eaf6308764a69c568f964b8db0afefcc4c5307cd6a9d710276b732a97da84`)
+still describes the checked tree.
+
 ### Recovery and artifact paths
 
 The complete assignment prompt and contract are in the first half of this file.
