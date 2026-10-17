@@ -4,10 +4,9 @@
   "compilerOptions": {
     "rootDir": "src",
     "outDir": "dist",
-    "jsx": "react-jsx",
     "lib": ["ES2023"],
-    "types": ["node", "react"]
+    "types": ["node"]
   },
-  "include": ["src/**/*.ts", "src/**/*.tsx"],
-  "references": [{ "path": "../shared" }]
+  "include": ["src/**/*.ts"],
+  "references": [{ "path": "../shared" }, { "path": "../backend" }]
 }

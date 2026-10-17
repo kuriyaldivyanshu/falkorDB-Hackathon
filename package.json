@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Threadline local coding harness — M02 journaled read-only execution (FalkorDB Track 2 MVP)",
+  "description": "Threadline — Codex-first agent memory and coordination (FalkorDB Track 2)",
   "license": "UNLICENSED",
   "engines": {
     "node": ">=22"
@@ -13,11 +13,14 @@
   ],
   "scripts": {
     "build": "tsc -b",
-    "db:setup": "npm run build && node packages/backend/dist/src/setup-local-db.js",
-    "clean": "tsc -b --clean"
+    "clean": "tsc -b --clean",
+    "setup": "npm run build && node packages/cli/dist/index.js init",
+    "serve": "node packages/cli/dist/index.js serve",
+    "status": "node packages/cli/dist/index.js status"
   },
   "devDependencies": {
     "@types/node": "^26.6.5",
     "typescript": "^7.0.2"
-  }
+  },
+  "packageManager": "npm@11.4.1"
 }

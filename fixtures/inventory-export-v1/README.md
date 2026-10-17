@@ -1,7 +1,20 @@
-# Authored inventory-export seed
+# Inventory exporter memory demonstration
 
-`seed/src/exporter.mjs` is the original template, kept outside any mutable candidate directory. Later run admission copies it into that run's registered candidate; the template must never be registered as the Builder's writable workspace.
+This public authored example supports the Codex-first memory demo. It contains [a schema-v2 manifest](manifest.json) and [a deliberately imperfect seed](seed/src/exporter.mjs).
 
-The seed deliberately preserves input timestamp text instead of normalizing UTC with millisecond precision. This is an authored defect, not an observed model mistake. It makes the initial mixed-offset case fail the manifest's expected CSV. It otherwise implements the public validation, age, sorting and CSV rules. The public specification remains `archive/plans/contracts/fixture-manifest.json`.
+## What is retained
 
-M02 tests execute authored cases directly to demonstrate the defect. They are development evidence, not protected checker receipts or accepted completion. The protected service checker remains M08.
+- Inventory input/output rules and public cases, including malformed input and CSV escaping.
+- An initial freshness requirement of 600 seconds and a later human-approved value of 60 seconds.
+- A mixed-offset timestamp case exposing the seed's deliberate failure to normalize UTC.
+- A distinct compatible reuse example and an incompatible JSON-output contract.
+
+The defect is authored demonstration data, not an observed mistake by a model. The manifest's expected outputs are a specification, not passing evidence.
+
+## How to use it
+
+Copy the seed into an explicitly selected native-agent demo worktree. Run Codex there under its normal permissions. Record actual observed failures/outcomes as Sources, accept the requirement change explicitly, then start a distinct session and inspect which current memory it receives.
+
+Keep this seed unchanged while a demo copy is edited. A generic implementation may already handle the new freshness value; demonstrate current checked output without inventing a second code change.
+
+The manifest has no owned checker, protected receipt, candidate-mount or agent-launch contract. Threadline supplies memory; a human or separate temporary verification command compares actual outputs with the public cases. No automatic fixture copying or execution belongs in backend startup.

@@ -1,409 +1,474 @@
 import {
-  BackendStateError,
-  PROTOCOL_VERSION,
   ThreadlineError,
-  newCommandId,
-  newEventId,
-  newEchoId,
-  type BackendState,
-  type CommandId,
-
+  type CapabilityReport,
   type ComponentStatus,
-  type EchoId,
-  type EventId,
   type HealthReport,
+  type LivenessReport,
+  type ServiceState,
 } from '@threadline/shared';
 
-import { createProviderSettings, type ProviderSettings } from './provider/settings.js';
-import { join } from 'node:path';
-import { createManagedRuntime, type ManagedRuntime } from './runtime/managed.js';
-import type { ResponsesDriver } from './provider/responses.js';
-import { createHttpServer, type BackendAddress, type HttpServerHandle } from './api/server.js';
-import type { BackendConfig } from './config.js';
-import { createCommandDispatcher, type CommandDispatcher } from './domain/dispatcher.js';
-import { createDevelopmentRegistry } from './domain/development.js';
-import { createApplicationServices, type ApplicationServices } from './domain/services.js';
-import { createEventPublisher, type EventPublisher } from './events/publisher.js';
+import { buildCapabilityReport } from './capabilities.js';
+import { createApiServer, type ApiServerHandle, type ServiceAddress } from './api/server.js';
+import { storageConfigured, type ServiceConfig } from './config.js';
 import type { Logger } from './log.js';
 import { silentLogger } from './log.js';
+import { createAuthService, type AuthService } from './service/auth.js';
+import {
+  createOperationsWorker,
+  createOperationService,
+  type OperationService,
+  type OperationsWorker,
+  type OperationWorkerStatus,
+} from './service/operations.js';
+import { createProjectService, type ProjectService } from './service/projects.js';
+import { createSourceService, type SourceService } from './service/sources.js';
+import { createSourceFileStore, type SourceFileStore } from './storage/files.js';
 import { createGraphStore, startGraphStore, type GraphStore } from './storage/graph.js';
-import { bootstrapLocalOwner, type LocalBootstrap } from './storage/identity.js';
-import { ensureCoreSchema, type SchemaStatus } from './storage/migrate.js';
-import { sha256Hex } from './storage/digest.js';
+import { readSchemaStatus, readPrivilegedFunctionOwners, type PrivilegedFunctionReport, type SchemaStatus } from './storage/migrate.js';
 import { assertTenantFenceEnforceable, createSqlDatabase, type SqlDatabase } from './storage/pg.js';
-import { ENSURE_ACTOR_CYPHER } from './storage/graph-queries.js';
 import { THREADLINE_BACKEND_VERSION } from './version.js';
 
+/**
+ * Memory-only composition root.
+ *
+ * There is no provider transport, no owned inference, no run lifecycle and no
+ * seeded fixture in this process. What exists is a local HTTP service over one
+ * storage contract: SQL for identity, sources, operations and jobs; immutable
+ * files for source bytes; FalkorDB for accepted memory.
+ *
+ * Honesty rules applied here:
+ *
+ * - construction has no side effects and opens nothing;
+ * - an unconfigured or unreachable store is reported `degraded`, never faked;
+ * - a durable operation without a ready store throws `storage_unavailable`
+ *   rather than falling back to process memory.
+ */
+
 export { THREADLINE_BACKEND_VERSION } from './version.js';
-export { CONFIG_ENV_KEYS, DEFAULT_LIMITS, describeConfig, parseBackendConfig } from './config.js';
-export type { BackendConfig, BackendLimits, BackendConfigSummary, ConfigSource } from './config.js';
-export { ROUTES } from './api/routes.js';
-export type { BackendAddress } from './api/server.js';
-export { createEventPublisher } from './events/publisher.js';
-export type { EventListener, EventPublisher, EventSubscription } from './events/publisher.js';
-export { createCommandDispatcher } from './domain/dispatcher.js';
-export type { CommandContext, CommandDispatcher, CommandRegistry } from './domain/dispatcher.js';
-export { createDevelopmentRegistry } from './domain/development.js';
-export { parseCommandRequest } from './domain/validate.js';
-export { readBearerToken } from './domain/services.js';
-export type { ApplicationServices, StorageReadiness } from './domain/services.js';
-export { admitGoal, readCurrentAuthority, reconcilePendingAdmissions } from './domain/admission.js';
-export type { ProjectScope } from './domain/admission.js';
-export { assertTenantFenceEnforceable, createSqlDatabase } from './storage/pg.js';
-export type { SqlDatabase, TxClient } from './storage/pg.js';
-export { createGraphStore, startGraphStore } from './storage/graph.js';
-export type { GraphStore, GraphSchemaReport } from './storage/graph.js';
+export { MEMORY_GRAPH_SCHEMA_VERSION, MEMORY_SQL_SCHEMA_VERSION } from './version.js';
 export {
-  ensureCoreSchema,
-  readSchemaStatus,
-  coreBootstrapChecksum,
-} from './storage/migrate.js';
-export { CORE_BOOTSTRAP_VERSION } from './storage/sql.js';
+  CONFIG_ENV_KEYS,
+  DEFAULT_LIMITS,
+  DEFAULT_SERVICE_HOST,
+  DEFAULT_SERVICE_PORT,
+  describeConfig,
+  loadServiceConfig,
+  storageConfigured,
+  THREADLINE_SQL_SCHEMA,
+} from './config.js';
+export type {
+  ConfigSource,
+  FalkorDbConfig,
+  LoadedConfig,
+  PostgresConfig,
+  ServiceConfig,
+  ServiceConfigSummary,
+  ServiceLimits,
+} from './config.js';
+export { DEFAULT_HOME_DIRECTORY_NAME, HOME_ENV_KEY, installationPaths, resolveHomeDirectory } from './environment.js';
+export type { EnvironmentMap, InstallationPaths } from './environment.js';
+export { createJsonLogger, silentLogger } from './log.js';
+export type { Logger, LogRecord } from './log.js';
+export { assertTenantFenceEnforceable, createSqlDatabase, withProjectWriteLock } from './storage/pg.js';
+export type { SqlDatabase, TxClient } from './storage/pg.js';
+export { ensureMemorySchema, readSchemaStatus } from './storage/migrate.js';
 export type { SchemaStatus } from './storage/migrate.js';
+export { LATEST_SQL_SCHEMA_VERSION, MEMORY_SQL_MIGRATIONS } from './storage/schema.js';
+export { createGraphStore, startGraphStore } from './storage/graph.js';
+export type { GraphSchemaReport, GraphStore } from './storage/graph.js';
+export { createSourceFileStore } from './storage/files.js';
+export type { SourceFileStore } from './storage/files.js';
+export { canonicalDigest, canonicalize, sha256Hex } from './storage/digest.js';
+export { createAuthService, generateClientToken, hashClientToken, readBearerToken } from './service/auth.js';
+export type { AuthenticatedCall, AuthService } from './service/auth.js';
 export {
   bootstrapLocalOwner,
-  authenticateSession,
-  revokeSession,
-  requireProjectMembership,
-  loadProjectScopeByTenant,
-  deriveGraphKey,
-  SESSION_TOKEN_FILENAME,
-} from './storage/identity.js';
-export type { AuthenticatedPrincipal, LocalBootstrap } from './storage/identity.js';
+  readCredentialFile,
+  writeCredentialFile,
+} from './service/bootstrap.js';
+export type { BootstrapResult, LocalCredentialFile } from './service/bootstrap.js';
+export { createProjectService } from './service/projects.js';
+export type { ProjectService } from './service/projects.js';
+export { createSourceService } from './service/sources.js';
+export type { SourceService } from './service/sources.js';
 export {
-  findInbox,
-  listPendingAdmissions,
-  recordAdmissionIntent,
-  settleCommitted,
-} from './storage/inbox.js';
-export type { InboxRow } from './storage/inbox.js';
-export { canonicalDigest, canonicalize, sha256Hex } from './storage/digest.js';
+  createOperationsWorker,
+  createOperationService,
+  SUPPORTED_OPERATION_KINDS,
+} from './service/operations.js';
+export type {
+  OperationService,
+  OperationsWorker,
+  OperationWorkerStatus,
+} from './service/operations.js';
+export { buildCapabilityReport, SUPPORTED_OPERATION_IDS, unsupportedOperation } from './capabilities.js';
+export { initializeInstallation } from './init.js';
+export type { InitReport } from './init.js';
 
-const M00_GUARANTEE_NOTE =
-  'M00 development scaffold: state is process-local, nothing is persisted, events are not replayable and no task can be admitted.';
+export interface StorageStatus {
+  /** Whether a database is configured at all. */
+  readonly configured: boolean;
+  /** Whether the stores answered; readiness is derived from the store itself. */
+  readonly reachable: boolean;
+  readonly schema: SchemaStatus | null;
+  readonly sqlReady: boolean;
+  /** The cross-tenant credential/claim functions are usable. */
+  readonly privilegedSqlReady: boolean;
+  readonly graphReady: boolean;
+  readonly filesReady: boolean;
+  /** The leased operation worker's live state; null when no worker exists. */
+  readonly worker: OperationWorkerStatus | null;
+  readonly detail: string;
+}
 
-/** Components this milestone still does not contain, reported rather than implied. */
-const NOT_IMPLEMENTED: readonly ComponentStatus[] = [
-  {
-    name: 'checker',
-    present: false,
-    ready: false,
-    detail: 'No protected checker exists at this milestone; completion cannot be accepted before M08.',
-  },
-];
+export interface ServiceStatus {
+  readonly health: HealthReport;
+  readonly storage: StorageStatus;
+}
 
-export interface BackendDeps {
-  readonly providerVaultDirectory?: string;
-  readonly providerCredentialRevision?: string;
-  readonly providerKeyFetch?: typeof fetch;
-  /** Explicit test-only provider injection; no environment or HTTP fixture switch. */
-  readonly runtimeDriver?: ResponsesDriver;
-  readonly config: BackendConfig;
+export interface MemoryServiceDeps {
+  readonly config: ServiceConfig;
   readonly clock?: () => Date;
-  /** Injected by tests; production wires the real stores during start(). */
-  readonly database?: SqlDatabase;
-  readonly graphStore?: GraphStore;
-  readonly allocateCommandId?: () => CommandId;
-  readonly allocateEventId?: () => EventId;
-  readonly allocateEchoId?: () => EchoId;
   readonly logger?: Logger;
+  /** Injected by focused checks; production wires the real stores in start(). */
+  readonly database?: SqlDatabase;
+  readonly migrationDb?: SqlDatabase;
+  readonly graphStore?: GraphStore;
+  readonly files?: SourceFileStore;
 }
 
-export interface Backend {
+export interface MemoryService {
   readonly version: string;
-  readonly state: BackendState;
-  readonly address: BackendAddress | null;
-  readonly events: EventPublisher;
-  start(): Promise<BackendAddress>;
+  readonly state: ServiceState;
+  readonly address: ServiceAddress | null;
+  start(): Promise<ServiceAddress>;
   stop(): Promise<void>;
+  /** Minimal unauthenticated liveness; carries no component or tenant detail. */
+  liveness(): LivenessReport;
   health(): HealthReport;
-  /**
-   * Executes one command. The optional `authorization` is the request's raw
-   * header; it travels with the command context rather than through shared
-   * state, so concurrent requests cannot observe each other's credential.
-   */
-  dispatch: CommandDispatcher;
-  /** Durable services. Throws `storage_unavailable` when storage is unconfigured. */
-  readonly services: ApplicationServices;
-  /** Local bootstrap identities, available once storage has started. */
-  readonly localBootstrap: LocalBootstrap | null;
+  status(): ServiceStatus;
+  capabilities(): CapabilityReport;
+  /** Durable services. Throws `storage_unavailable` until the stores are ready. */
+  readonly auth: AuthService;
+  readonly projects: ProjectService;
+  readonly sources: SourceService;
+  readonly operations: OperationService;
 }
 
-/**
- * Composition entry point.
- *
- * Construction has no side effects: no socket is bound, no directory is
- * created and no environment is read here. Callers pass validated
- * configuration and drive the lifecycle explicitly.
- */
-export function createBackend(deps: BackendDeps): Backend {
+export function createMemoryService(deps: MemoryServiceDeps): MemoryService {
   const logger = deps.logger ?? silentLogger;
   const clock = deps.clock ?? (() => new Date());
-  const allocateEventId = deps.allocateEventId ?? newEventId;
 
-  const publisher = createEventPublisher({
-    maxListeners: deps.config.limits.maxEventListeners,
-    clock,
-    generateEventId: allocateEventId,
-    logger,
-  });
-
-  let state: BackendState = 'created';
-  let stateSince = clock();
-  let startedAt: number | null = null;
-  let http: HttpServerHandle | null = null;
-  let startInFlight: Promise<BackendAddress> | null = null;
-  let stopInFlight: Promise<void> | null = null;
+  let state: ServiceState = 'created';
+  let startedAtMs: number | null = null;
+  let server: ApiServerHandle | null = null;
   let database: SqlDatabase | null = deps.database ?? null;
-  let migrationDatabase: SqlDatabase | null = null;
+  let migrationDb: SqlDatabase | null = deps.migrationDb ?? null;
   let graphStore: GraphStore | null = deps.graphStore ?? null;
-  let schemaStatus: SchemaStatus = { state: 'unconfigured' };
-  let localBootstrap: LocalBootstrap | null = null;
+  let files: SourceFileStore | null = deps.files ?? null;
+  let schema: SchemaStatus | null = null;
+  let reachable = false;
+  let filesReady = false;
+  let graphReady = false;
+  /**
+   * Whether the narrow cross-tenant functions are actually usable. A reachable
+   * database does not imply this: forced row-level security applies to the
+   * function owner too, so an owner that cannot bypass the fence makes
+   * authentication, claiming and the backlog count return nothing at all.
+   */
+  let privilegedSql: PrivilegedFunctionReport = {
+    ready: false,
+    owners: [],
+    missing: [],
+    detail: 'The privileged SQL path has not been checked yet.',
+  };
+  let auth: AuthService | null = null;
+  let projects: ProjectService | null = null;
+  let sources: SourceService | null = null;
+  let operations: OperationService | null = null;
+  let worker: OperationsWorker | null = null;
 
-  const setState = (next: BackendState, detail: string): void => {
-    state = next;
-    stateSince = clock();
-    if (publisher.closed) {
+  const sqlReady = (): boolean => reachable && schema?.state === 'applied' && database !== null;
+
+  /**
+   * Durable work needs both halves: a fenced store that ordinary access can use,
+   * and a privileged path that can resolve a credential and claim across
+   * tenants. Reporting only the first is what made a dead claim path look
+   * healthy.
+   */
+  const durableReady = (): boolean => sqlReady() && privilegedSql.ready;
+
+  /**
+   * Graph readiness must come from a live probe.
+   *
+   * The worker holds a live probe, so its answer wins. With no worker there is
+   * no prober at all, and the one-time startup probe is a historical
+   * observation rather than a current one — reporting it as ready is exactly the
+   * stale claim that let an outage read as healthy. Without a live prober the
+   * honest answer is "unavailable".
+   */
+  const resolveGraphServing = (workerStatus: OperationWorkerStatus | null): boolean =>
+    workerStatus !== null ? workerStatus.graphReachable : false;
+
+  const requireDurable = <T>(service: T | null): T => {
+    if (service === null || !durableReady()) {
+      throw new ThreadlineError(
+        'storage_unavailable',
+        schema?.state === 'absent'
+          ? 'The threadline_memory schema is not applied; run "threadline init" with store credentials.'
+          : sqlReady() && !privilegedSql.ready
+            ? `The privileged SQL path is unusable, so no durable operation can be admitted. ${privilegedSql.detail}`
+            : 'The durable stores are not ready; no memory operation was attempted.',
+      );
+    }
+    return service;
+  };
+
+  const openStorage = async (): Promise<void> => {
+    if (!storageConfigured(deps.config)) {
+      logger.log({
+        level: 'warn',
+        message: 'No durable store is configured; the service starts degraded and records nothing.',
+      });
       return;
     }
     try {
-      publisher.publish('backend.status', {
-        state: next,
-        since: stateSince.toISOString(),
-        detail,
+      database ??= createSqlDatabase({ config: deps.config.postgres, logger });
+      if (migrationDb === null && deps.config.postgres.migrationUser.length > 0) {
+        migrationDb = createSqlDatabase({
+          config: {
+            ...deps.config.postgres,
+            user: deps.config.postgres.migrationUser,
+            password: deps.config.postgres.migrationPassword,
+          },
+          logger,
+        });
+      }
+      await database.ping();
+      reachable = true;
+      schema = await readSchemaStatus({
+        db: database,
+        postgres: deps.config.postgres,
       });
+      if (schema.state === 'applied') {
+        // The fence is only real for a restricted role; verify rather than trust.
+        await assertTenantFenceEnforceable(database);
+      } else {
+        logger.log({
+          level: 'warn',
+          message: 'The memory schema is not applied; durable operations are unavailable.',
+          fields: { schemaState: schema.state, schemaVersion: schema.version },
+        });
+      }
     } catch (error) {
-      // A status transition must never fail the transition itself.
+      reachable = false;
+      database = null;
       logger.log({
-        level: 'warn',
-        message: 'Could not publish backend status event.',
-        fields: { errorName: error instanceof Error ? error.name : typeof error, state: next },
-      });
-    }
-  };
-
-  const isAccepting = (): boolean => state === 'ready';
-
-  /**
-   * `state` is reassigned by setState. Reading it through a call keeps the
-   * compiler from carrying the `created` narrowing from the guard below into
-   * the asynchronous body of start(), where the value has already changed.
-   */
-  const currentState = (): BackendState => state;
-
-  const requireServices = (): ApplicationServices => {
-    if (services === null) {
-      throw new ThreadlineError(
-        'storage_unavailable',
-        'Durable services are not available until storage has started.',
-      );
-    }
-    return services;
-  };
-
-  const registry = createDevelopmentRegistry({
-    publishAccepted: (payload) => {
-      publisher.publish('development.echo.accepted', payload);
-    },
-    newEchoId: deps.allocateEchoId ?? newEchoId,
-    acceptGoal: async (input, context) => {
-      const principal = await requireServices().authenticate(context.authorization);
-      return requireServices().admitGoal(principal, input);
-    },
-  });
-
-  const dispatch: CommandDispatcher = createCommandDispatcher({
-    registry,
-    limits: deps.config.limits,
-    isAccepting,
-    clock,
-    allocateCommandId: deps.allocateCommandId ?? newCommandId,
-    logger,
-  });
-
-  let services: ApplicationServices | null = null;
-  let runtime: ManagedRuntime | null = null;
-  let providerSettings: ProviderSettings | null = null;
-
-  const openStorage = async (): Promise<void> => {
-    if (deps.config.storage.mode !== 'required') {
-      logger.log({
-        level: 'info',
-        message: 'Storage is unconfigured; durable admission is disabled.',
+        level: 'error',
+        message: 'PostgreSQL is configured but not reachable; the service starts degraded.',
+        fields: { errorName: error instanceof Error ? error.name : typeof error },
       });
       return;
     }
-    database ??= createSqlDatabase({ config: deps.config.storage.postgres, logger });
-    if (migrationDatabase === null && deps.config.storage.postgres.migrationUser.length > 0) {
-      migrationDatabase = createSqlDatabase({
-        config: { ...deps.config.storage.postgres, user: deps.config.storage.postgres.migrationUser, password: deps.config.storage.postgres.migrationPassword },
+
+    // A reachable database is not the same as a usable privileged path. Resolve
+    // it explicitly so readiness never reports healthy admission while
+    // authentication and claiming would match no rows.
+    if (sqlReady()) {
+      privilegedSql = await readPrivilegedFunctionOwners(database);
+      if (!privilegedSql.ready) {
+        logger.log({
+          level: 'error',
+          message: 'The cross-tenant SQL functions are unusable; authentication and claiming cannot succeed.',
+          fields: { detail: privilegedSql.detail.slice(0, 400) },
+        });
+      }
+    } else {
+      privilegedSql = {
+        ready: false,
+        owners: [],
+        missing: [],
+        detail: 'The privileged SQL path is unverified because the memory schema is not applied.',
+      };
+    }
+
+    try {
+      graphStore ??= createGraphStore({ config: deps.config.falkordb, logger });
+      await startGraphStore(graphStore);
+      graphReady = true;
+    } catch (error) {
+      graphReady = false;
+      logger.log({
+        level: 'error',
+        message: 'FalkorDB is configured but not reachable; memory admission is unavailable.',
+        fields: { errorName: error instanceof Error ? error.name : typeof error },
+      });
+    }
+
+    files ??= createSourceFileStore({ root: deps.config.paths.sourceRoot, logger });
+    filesReady = await files.probe();
+
+    auth = createAuthService({ db: database, clock, logger });
+    projects = createProjectService({ db: database, clock, logger });
+    sources = createSourceService({ db: database, files, clock, logger });
+    operations = createOperationService({ db: database });
+    if (graphStore !== null && sqlReady()) {
+      worker = createOperationsWorker({
+        db: database,
+        graphStore,
+        limits: deps.config.limits,
+        clock,
         logger,
       });
     }
-    graphStore ??= createGraphStore({ config: deps.config.storage.falkordb, logger });
-    await startGraphStore(graphStore);
-
-    const report = await ensureCoreSchema({
-      db: database,
-      migrationDb: migrationDatabase ?? database,
-      applicationRole: deps.config.storage.postgres.applicationRole,
-      logger,
-    });
-    schemaStatus = report.status;
-
-    await assertTenantFenceEnforceable(database);
-
-    const bootstrap = await bootstrapLocalOwner({
-      db: database,
-      local: deps.config.storage.local,
-      dataDirectory: deps.config.dataDirectory,
-      clock,
-      logger,
-    });
-    localBootstrap = bootstrap;
-
-    await ensureProjectRoot(graphStore, bootstrap, clock, logger);
-    services = createApplicationServices({
-      config: deps.config,
-      db: database,
-      graphs: graphStore,
-      clock,
-      logger,
-      schema: schemaStatus,
-    });
-    services.bootstrapExecution();
-    runtime = createManagedRuntime({ services, db: database, dataDirectory: deps.config.dataDirectory,
-      credentialRevision: deps.providerCredentialRevision, apiKey: deps.config.storage.providerApiKey, model: deps.config.storage.providerModel,
-      providerId: deps.config.storage.providerId, providerApi: deps.config.storage.providerApi, baseUrl: deps.config.storage.providerBaseUrl,
-      ...(deps.runtimeDriver ? { driver: deps.runtimeDriver } : {}),
-      activity: (projectId, tenantId, sessionId, runId, activity) => {
-        if (publisher.closed) return;
-        const detail = activity.kind === 'visible_text' ? activity.text : activity.kind === 'run_state' ? activity.detail
-          : activity.kind === 'tool_state' ? activity.toolName : '';
-        try { publisher.publish('run.activity', { projectId, tenantId, sessionId, runId, kind: activity.kind,
-          state: 'state' in activity ? activity.state : '', detail: detail.slice(0, 4096) }); } catch { /* UI hints cannot change execution. */ }
-      },
-    });
-    providerSettings = createProviderSettings({ directory: deps.providerVaultDirectory ?? join(deps.config.dataDirectory, 'provider-credentials'),
-      runtime: () => { if (!runtime) throw new ThreadlineError('storage_unavailable', 'Owned runtime is unavailable.'); return runtime; },
-      ...(deps.providerKeyFetch ? { fetchImpl: deps.providerKeyFetch } : {}) });
-    await services.refreshReadiness();
-
-    const reconciled = await services.reconcile(bootstrap.tenantId, bootstrap.projectId);
-    if (reconciled.unresolved > 0 || reconciled.quarantined > 0)
-      throw new ThreadlineError('authority_unavailable','Pending admissions need reconciliation before startup can complete.');
-    services.startCapture(bootstrap.tenantId);
     logger.log({
       level: 'info',
-      message: 'Storage ready.',
-      fields: { graphKey: bootstrap.graphKey, ...reconciled },
+      message: 'Storage state resolved.',
+      fields: {
+        reachable,
+        schemaState: schema?.state ?? 'unconfigured',
+        graphReady,
+        filesReady,
+      },
     });
   };
 
   const closeStorage = async (): Promise<void> => {
-    await runtime?.close();
-    runtime = null;
-    providerSettings = null;
-    await services?.stopCapture();
-    services = null;
-    const stores = [graphStore, database, migrationDatabase];
+    const closers: Promise<void>[] = [];
+    if (worker !== null) {
+      await worker.stop().catch(() => undefined);
+      worker = null;
+    }
+    if (graphStore !== null) {
+      closers.push(graphStore.close());
+    }
+    if (database !== null) {
+      closers.push(database.close());
+    }
+    if (migrationDb !== null && migrationDb !== database) {
+      closers.push(migrationDb.close());
+    }
     graphStore = null;
     database = null;
-    migrationDatabase = null;
-    const closed = await Promise.allSettled(stores.map(store => store?.close()));
-    if (closed.some(result => result.status === 'rejected')) {
-      throw new ThreadlineError('storage_unavailable', 'One or more storage connections could not close cleanly.');
+    migrationDb = null;
+    auth = null;
+    projects = null;
+    sources = null;
+    operations = null;
+    const settled = await Promise.allSettled(closers);
+    if (settled.some((result) => result.status === 'rejected')) {
+      logger.log({ level: 'warn', message: 'One or more storage connections did not close cleanly.' });
     }
   };
 
+  const storageStatus = (): StorageStatus => {
+    const configured = storageConfigured(deps.config);
+    const workerStatus = worker?.status() ?? null;
+    const graphServing = resolveGraphServing(workerStatus);
+    const state = !configured
+      ? 'unconfigured'
+      : reachable
+        ? `schema ${schema?.state ?? 'unknown'}`
+        : 'unreachable';
+    const detail = !configured
+      ? 'No PostgreSQL database, user and password are configured for this installation.'
+      : reachable
+        ? (schema?.detail ?? 'The store answered; schema state is unknown.')
+        : 'The configured PostgreSQL database did not answer its probe.';
+    return {
+      configured,
+      reachable,
+      schema,
+      sqlReady: sqlReady(),
+      privilegedSqlReady: privilegedSql.ready,
+      graphReady: graphServing,
+      filesReady,
+      worker: workerStatus,
+      detail: `${detail} ${privilegedSql.detail} Graph: ${graphServing ? 'reachable' : 'unavailable'}. Source files: ${filesReady ? 'writable' : 'unavailable'} (state: ${state}).`,
+    };
+  };
+
   const health = (): HealthReport => {
-    const listening = http?.listening ?? false;
+    const listening = server?.listening ?? false;
+    const workerStatus = worker?.status() ?? null;
+    const graphServing = resolveGraphServing(workerStatus);
     const components: readonly ComponentStatus[] = [
       {
         name: 'api',
         present: true,
         ready: listening,
         detail: listening
-          ? 'Local HTTP transport is bound and serving health, commands and events.'
-          : 'Local HTTP transport exists in this process but is not bound to a port.',
+          ? 'The loopback HTTP transport is bound and serving this build\'s routes.'
+          : 'The transport exists in this process but is not bound to a port.',
       },
       {
-        name: 'eventPublisher',
-        present: true,
-        ready: !publisher.closed,
-        detail: publisher.closed
-          ? 'Event publisher is closed; no further events will be delivered.'
-          : 'Process-local events with bounded listeners; no replay and no persistence.',
+        name: 'postgres',
+        present: storageConfigured(deps.config),
+        ready: sqlReady(),
+        detail: !storageConfigured(deps.config)
+          ? 'Storage is unconfigured; identity, sources and operations are unavailable.'
+          : sqlReady()
+            ? `Schema threadline_memory version ${String(schema?.version ?? 0)} is applied with forced row-level security.`
+            : storageStatus().detail,
       },
-      ...storeComponents(),
-      { name: 'provider', present: runtime !== null && runtime.configuration().model.length > 0,
-        ready: runtime !== null && runtime.configuration().apiKey.length > 0 && runtime.configuration().model.length > 0,
-        detail: `Owned ${runtime?.configuration().providerId ?? deps.config.storage.providerId}/${runtime?.configuration().providerApi ?? deps.config.storage.providerApi} transport; inference starts only on explicit run:start. Model compatibility requires a live turn.` },
-      ...NOT_IMPLEMENTED,
+      {
+        name: 'privilegedSql',
+        present: storageConfigured(deps.config),
+        ready: privilegedSql.ready,
+        detail: privilegedSql.detail,
+      },
+      {
+        name: 'falkordb',
+        present: storageConfigured(deps.config),
+        ready: graphServing,
+        detail: graphServing
+          ? 'FalkorDB answered its most recent probe; project graphs are initialized and verified on first admission.'
+          : 'FalkorDB is not reachable; graph admission is unavailable and pending operations wait unsettled.',
+      },
+      {
+        name: 'sources',
+        present: files !== null,
+        ready: filesReady && durableReady(),
+        detail: filesReady && durableReady()
+          ? 'Immutable source bytes and their SQL catalog are available.'
+          : 'Source capture requires the catalog schema, a usable privileged SQL path and a writable source root.',
+      },
+      {
+        name: 'operations',
+        present: worker !== null,
+        ready: workerStatus?.running ?? false,
+        detail: workerStatus?.detail ?? 'No leased commit worker exists without a configured durable store.',
+      },
+      {
+        name: 'nativeAdapter',
+        present: false,
+        ready: false,
+        detail:
+          'No Codex profile, hook or MCP server is installed by this build; native capture remains unqualified.',
+      },
     ];
-    const uptimeMs = startedAt === null ? 0 : Math.max(0, clock().getTime() - startedAt);
-    const storageReady = services?.readiness().sqlReady === true && services.readiness().graphReady;
+
     return {
-      protocolVersion: PROTOCOL_VERSION,
+      protocolVersion: 2,
       backendVersion: THREADLINE_BACKEND_VERSION,
       state,
-      uptimeMs,
-      components,
+      uptimeMs: startedAtMs === null ? 0 : Math.max(0, clock().getTime() - startedAtMs),
+      components: [...components],
       guarantees: {
-        durable: storageReady,
+        // No accepted-memory write or read service exists yet; connectivity and
+        // a running worker are not accepted memory (N02B).
+        durableMemory: false,
+        graphAdmission: durableReady() && graphServing && (workerStatus?.running ?? false),
+        sourceHistory: durableReady() && filesReady,
         replayable: false,
-        multiSession: false,
-        note: storageReady
-          ? 'M02: accepted authority, model attempts and read-tool artifacts are durable. Run execution is explicitly started; SSE has no replay. Protected task completion is unavailable; paid model compatibility remains unverified.'
-          : deps.config.storage.mode === 'required' ? 'M01 stores are not ready; durable admission is unavailable. Previously committed data remains in its stores.' : M00_GUARANTEE_NOTE,
+        note: durableReady()
+          ? 'Source history is durable in SQL plus immutable files. Source-backed graph admission commits through the leased worker with graph receipts; accepted memory, context and coordination land in later batches and are stated unavailable in capabilities.'
+          : 'No durable store is ready: health and capabilities are served, and every durable operation refuses.',
       },
     };
   };
 
-  /** Real per-store component status. Presence and readiness are separate facts. */
-  const storeComponents = (): readonly ComponentStatus[] => {
-    const configured = deps.config.storage.mode === 'required';
-    if (!configured) {
-      return [
-        {
-          name: 'postgres',
-          present: false,
-          ready: false,
-          detail: 'Storage is unconfigured; set THREADLINE_STORAGE_MODE=required to enable durable admission.',
-        },
-        {
-          name: 'falkordb',
-          present: false,
-          ready: false,
-          detail: 'Storage is unconfigured; set THREADLINE_STORAGE_MODE=required to enable durable admission.',
-        },
-      ];
-    }
-    const readiness = services?.readiness();
-    const schema = schemaStatus.state;
-    return [
-      {
-        name: 'postgres',
-        present: true,
-        ready: readiness?.sqlReady === true,
-        detail:
-          schema === 'applied'
-            ? `Core schema version ${String(schemaStatus.state === 'applied' ? schemaStatus.version : 0)} applied; tenant fence enforced by row-level security.`
-            : 'Core schema is not applied yet.',
-      },
-      {
-        name: 'falkordb',
-        present: true,
-        ready: readiness?.graphReady === true,
-        detail:
-          schema === 'applied'
-            ? `Graph authority on the project epoch with unique Entity/Event/RequestReceipt constraints enforced.`
-            : 'Graph authority is not ready yet.',
-      },
-    ];
-  };
-
-  const backend: Backend = {
+  const service: MemoryService = {
     version: THREADLINE_BACKEND_VERSION,
 
     get state() {
@@ -411,205 +476,106 @@ export function createBackend(deps: BackendDeps): Backend {
     },
 
     get address() {
-      return http?.address ?? null;
+      return server?.address ?? null;
     },
 
-    events: publisher,
-
-    get services(): ApplicationServices {
-      return requireServices();
-    },
-
-    get localBootstrap(): LocalBootstrap | null {
-      return localBootstrap;
-    },
-
-    start(): Promise<BackendAddress> {
-      if (state !== 'created') {
-        throw new BackendStateError('start the backend', 'created', state);
+    get auth(): AuthService {
+      if (auth === null || !durableReady()) {
+        throw new ThreadlineError(
+          'storage_unavailable',
+          sqlReady() && !privilegedSql.ready
+            ? `Authentication is unavailable because the privileged SQL path is unusable. ${privilegedSql.detail}`
+            : 'Authentication is unavailable until storage is configured.',
+        );
       }
-      setState('starting', 'Opening durable stores.');
-      const starting_ = (async (): Promise<void> => {
-        try {
-          await openStorage();
-        } catch (error) {
-          setState('stopped', 'A required data store could not be opened; refusing to serve.');
-          const server = http;
-          http = null;
-          startedAt = null;
-          await Promise.allSettled([server?.close(), closeStorage()]);
-          publisher.close();
-          throw error;
-        }
-        if (currentState() === 'starting') setState('starting', 'Opening the local HTTP transport.');
-      })();
-      void starting_;
-      const server = createHttpServer({
-        runtime: () => runtime,
+      return auth;
+    },
+
+    get projects(): ProjectService {
+      return requireDurable(projects);
+    },
+
+    get sources(): SourceService {
+      return requireDurable(sources);
+    },
+
+    get operations(): OperationService {
+      return requireDurable(operations);
+    },
+
+    liveness: () => ({
+      protocolVersion: 2,
+      backendVersion: THREADLINE_BACKEND_VERSION,
+      state,
+      uptimeMs: startedAtMs === null ? 0 : Math.max(0, clock().getTime() - startedAtMs),
+    }),
+    health,
+    status: () => ({ health: health(), storage: storageStatus() }),
+    capabilities: () => buildCapabilityReport(),
+
+    async start(): Promise<ServiceAddress> {
+      if (state !== 'created') {
+        throw new ThreadlineError('invalid_request', 'The service has already been started.');
+      }
+      state = 'starting';
+      await openStorage();
+      logger.log({
+        level: 'info',
+        message: 'Starting the memory service.',
+        fields: {
+          home: deps.config.paths.home,
+          host: deps.config.host,
+          port: deps.config.port,
+          database: deps.config.postgres.database,
+          ownerLabel: deps.config.ownerLabel,
+        },
+      });
+      server = createApiServer({
         config: deps.config,
-        dispatch,
-        publisher,
-        health,
-        services: () => services,
-        localBootstrap: () => localBootstrap,
-        providerSettings: () => providerSettings,
+        service,
         logger,
       });
-      http = server;
-      const starting = (async (): Promise<BackendAddress> => {
-        try {
-          await starting_;
-          if (currentState() !== 'starting') throw new BackendStateError('finish starting the backend', 'starting', currentState());
-          const address = await server.listen();
-          if (currentState() !== 'starting') {
-            throw new BackendStateError('finish starting the backend', 'starting', currentState());
-          }
-          startedAt = clock().getTime();
-          setState('ready', 'Local HTTP transport is accepting commands.');
-          return address;
-        } catch (error) {
-          if (currentState() === 'starting') {
-            http = null;
-            startedAt = null;
-            setState('stopped', 'The transport could not bind; the backend stopped instead of pretending to run.');
-            await server.close();
-            await closeStorage();
-            publisher.close();
-          }
-          throw error;
-        } finally {
-          startInFlight = null;
-        }
-      })();
-      startInFlight = starting;
-      return starting;
-    },
-
-    stop(): Promise<void> {
-      if (state === 'stopped') {
-        return Promise.resolve();
-      }
-      if (state === 'stopping') {
-        return stopInFlight ?? Promise.resolve();
-      }
-      setState('stopping', 'Refusing new commands and closing open streams.');
-      const stopping = (async (): Promise<void> => {
-        if (startInFlight !== null) {
-          await startInFlight.catch(() => {});
-        }
-        const server = http;
-        http = null;
-        if (server !== null) {
-          await server.close();
-        }
+      let address: ServiceAddress;
+      try {
+        address = await server.listen();
+      } catch (error) {
+        await server.close().catch(() => undefined);
+        server = null;
         await closeStorage();
-        setState('stopped', 'Transport, stores and event listeners released.');
-        publisher.close();
-      })().finally(() => {
-        stopInFlight = null;
+        state = 'stopped';
+        throw error;
+      }
+      startedAtMs = clock().getTime();
+      worker?.start();
+      state = durableReady() ? 'ready' : 'degraded';
+      logger.log({
+        level: 'info',
+        message: 'Memory service is listening.',
+        fields: { url: address.url, state },
       });
-      stopInFlight = stopping;
-      return stopping;
+      return address;
     },
 
-    health,
-
-    dispatch,
+    async stop(): Promise<void> {
+      if (state === 'stopped') {
+        return;
+      }
+      // Shutdown is not a distinct lifecycle state: the service stops accepting
+      // and moves straight to `stopped`. Inventing a `stopping` state here would
+      // be a value the health contract does not define and cannot report.
+      const live = server;
+      server = null;
+      if (live !== null) {
+        await live.close();
+      }
+      if (worker !== null) {
+        await worker.stop().catch(() => undefined);
+      }
+      await closeStorage();
+      startedAtMs = null;
+      state = 'stopped';
+      logger.log({ level: 'info', message: 'Memory service stopped.' });
+    },
   };
-
-  return backend;
-}
-
-/**
- * Creates the graph control record for a freshly bootstrapped project and waits
- * until its unique constraints are actually enforced.
- *
- * `MERGE` makes this safe to repeat: a restart re-reads the existing epoch
- * instead of creating a second root. The epoch is taken from SQL, so the graph
- * can never drift from the relational authority record.
- */
-/**
- * Deterministic graph id for one principal's ActorRef.
- *
- * Kept in step with the SQL `users.id` so provenance joins across stores
- * without a lookup table.
- */
-function deriveActorGraphId(tenantId: string, userId: string): string {
-  const hex = sha256Hex(`actor:${tenantId}:${userId}`);
-  return [
-    hex.slice(0, 8),
-    hex.slice(8, 12),
-    `5${hex.slice(13, 16)}`,
-    `8${hex.slice(17, 20)}`,
-    hex.slice(20, 32),
-  ].join('-');
-}
-
-async function ensureProjectRoot(
-  graphs: GraphStore,
-  bootstrap: LocalBootstrap,
-  clock: () => Date,
-  logger: Logger,
-): Promise<void> {
-  const graph = graphs.graph(bootstrap.graphKey);
-  await graph.query(
-    `MERGE (root:Entity:ProjectRoot {id:$project_id})
-     ON CREATE SET root.schema_version = 1,
-                     root.created_at_ms = $now_ms,
-                     root.producer_id = $producer_id,
-                     root.visibility = 'project',
-                     root.tenant_id = $tenant_id,
-                     root.project_id = $project_id,
-                     root.graph_epoch = $graph_epoch,
-                     root.generation = 0,
-                     root.next_event_seq = 0,
-                     root.requirement_revision = 0,
-                     root.status = 'ready'`,
-    {
-      params: {
-        project_id: bootstrap.projectId,
-        now_ms: clock().getTime(),
-        producer_id: bootstrap.userId,
-        tenant_id: bootstrap.tenantId,
-        graph_epoch: bootstrap.graphEpoch,
-      },
-    },
-  );
-
-  await graph.query(ENSURE_ACTOR_CYPHER, {
-    params: {
-      actor_id: deriveActorGraphId(bootstrap.tenantId, bootstrap.userId),
-      now_ms: clock().getTime(),
-      producer_id: bootstrap.userId,
-      sql_id: bootstrap.userId,
-      display_label: 'Local Owner',
-    },
-  });
-
-  const observed = await graph.roQuery<{ graph_epoch?: unknown }>(
-    'MATCH (root:Entity:ProjectRoot {id:$project_id}) RETURN root.graph_epoch AS graph_epoch',
-    { params: { project_id: bootstrap.projectId } },
-  );
-  const epoch = observed.data?.[0]?.graph_epoch;
-  if (epoch !== bootstrap.graphEpoch) {
-    throw new ThreadlineError(
-      'authority_conflict',
-      'The graph project root is on a different epoch than the relational record.',
-      { projectId: bootstrap.projectId },
-    );
-  }
-
-  const report = await graphs.ensureSchema(bootstrap.graphKey);
-  if (!report.ready) {
-    throw new ThreadlineError(
-      'storage_unavailable',
-      'Graph constraints did not reach OPERATIONAL; refusing to admit authority.',
-      { waitedMs: report.waitedMs },
-    );
-  }
-  logger.log({
-    level: 'info',
-    message: 'Graph project root ready with enforced constraints.',
-    fields: { graphEpoch: bootstrap.graphEpoch },
-  });
+  return service;
 }

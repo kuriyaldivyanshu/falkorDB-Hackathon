@@ -1,47 +1,53 @@
 # Threadline domain language
 
-Threadline preserves applicable working state across coding sessions. Its vocabulary distinguishes recorded observations, accepted obligations and evidence that permits completion.
+Threadline preserves sourced project memory and coordinates its use across independent coding-agent sessions.
 
-## Work and participants
+## Participants and scope
 
-**Run**: One human-authorized goal execution with a shared policy and budget. It can span several replacement sessions.
+**Project**: A deliberately associated body of work with its own memory and access grants. A repository path alone does not establish the association.
 
-**Task**: A bounded unit of work governed by current requirements and acceptance criteria. Its identity survives a change of worker.
+**Native session**: An observed conversation in an existing coding agent. Its tools, model loop and execution remain under that agent's control.
+_Avoid_: Threadline run, owned worker.
 
-**Builder**: The model-driven participant authorized to work on a task's candidate. Only its current claim permits writing.
+**Enrollment**: An explicitly approved connection between a native adapter, a principal and a project. It defines the capture and memory access scope.
 
-**Fresh successor**: A new Builder session continuing the same task from current shared state. It does not inherit the previous conversation.
-_Avoid_: Resume, fork, transcript replay.
+**Binding generation**: The current association of an enrolled producer with a specific native session. Rebinding makes an earlier producer instance stale.
 
-**Trusted checker**: The deterministic participant that checks an exact candidate against approved criteria and records observed evidence. It is not a second model agent.
-_Avoid_: AI Verifier when referring to the first-release checker.
+**Task**: A work item used to organize current requirements, relevant memory and coordination. Its identity can survive a change of native session.
 
-**Claim**: The current worker's authority to advance a task. Replacing that authority makes the previous worker's future actions stale.
+**Coordination claim**: A time-bounded right to advance specified shared task memory. It does not grant or prevent native filesystem execution.
+_Avoid_: Execution lock, sandbox permission.
 
-**Human session**: An authenticated person's application access. It is distinct from a Builder's conversation.
+## Evidence and memory
 
-## Memory and evidence
+**Source**: A versioned record of permitted evidence, with its origin, retained bytes and completeness. Missing bytes remain unavailable even when their digest survives.
 
-**Requirement**: A human-accepted obligation governing a task. A changed obligation creates a new accepted version.
+**Capture**: Recording supported visible work under an approved policy. Capturing a statement does not accept it as reusable truth.
 
-**Observation**: An immutable record of something actually captured. An observation alone does not establish that an explanation is true.
+**Episode**: A source-backed attempt and observed outcome under stated conditions. An unknown outcome stays unknown.
 
-**Attempt**: A source-backed action and observed outcome under stated conditions. Its lesson can be useful without being a universal rule.
+**Semantic memory**: An accepted requirement, decision or scoped fact with provenance. An agent assertion is initially a proposal.
 
-**Checkpoint**: A sourced snapshot of working state that states which observations it covers. Later observations remain available for reconciliation.
-_Avoid_: Complete transcript, hidden thinking, guaranteed final recap.
+**Procedure**: A reusable sequence with explicit prerequisites, parameters and supporting outcomes. Validation requires evidence of compatible reuse.
 
-**Context packet**: The bounded current obligations and applicable evidence selected for a participant. It contains source references and explains omissions.
+**Memory version**: A specific authored or observed form of a memory, including its provenance and applicability. Corrections supersede versions instead of rewriting observations.
 
-**Decision**: An explicitly accepted choice. An agent-written preference remains a proposal or observation until accepted.
+**Current authority**: The accepted memory version that presently governs a requirement or decision. The latest captured assertion is not automatically authoritative.
 
-**Procedure**: A versioned reusable sequence with explicit preconditions and supporting outcomes. A candidate procedure is distinct from one validated on compatible later work.
+**Applicability**: The conditions under which a memory is useful for current work. Those conditions can differ from the conditions under which it was originally observed.
 
-**Verification receipt**: A trusted record of actual checks against one candidate and set of conditions. A model statement or completed checklist cannot substitute for it.
+**Handoff**: A source-backed offer of current task state and unresolved work to another session, with a recorded acceptance state. It does not transfer hidden native state or control a process.
 
-**Source**: The original authorized evidence supporting a record. A digest or summary does not make missing source bytes available.
+## Delivery and privacy
 
-**Capture**: Recording permitted observable work. Capture does not require accepting it as reusable knowledge or forwarding it to another session.
+**Context packet**: Bounded current authority and applicable evidence selected for a session, with source references and omission reasons.
 
-**Condensation**: Producing a smaller representation of optional history. It preserves attribution and uncertainty and cannot replace governing obligations.
-_Avoid_: Lossless summary, automatic proof, summary as authority.
+**Context occurrence**: A record of preparing or delivering a packet at a native boundary. Emission does not prove that a model read or followed it.
+
+**Operation receipt**: Durable proof of a particular guarded memory-state commit. It does not certify the correctness of native code execution.
+
+**Capture gap**: An explicit interval or item whose evidence is missing, partial or unsupported. A later summary cannot turn the gap into a complete observation.
+
+**Privacy revision**: The current boundary for admitting and releasing project memory after consent or availability changes. Earlier queued work cannot override a later erasure boundary.
+
+**Erasure**: Denial and removal of managed source content and its derived memory, with persistence retention reported separately. It does not recall text already delivered to a native client.

@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Threadline wire contracts — identifiers, command/result/event envelopes, health and typed errors",
+  "description": "Threadline wire contracts — identity, sources, memory, coordination, context, operations and typed errors",
   "license": "UNLICENSED",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -22,5 +22,8 @@
   "scripts": {
     "build": "tsc -b",
     "clean": "tsc -b --clean"
+  },
+  "dependencies": {
+    "zod": "^4.6.7"
   }
 }

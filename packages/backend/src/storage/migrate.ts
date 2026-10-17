@@ -1,383 +1,428 @@
 import { ThreadlineError } from '@threadline/shared';
 
+import type { PostgresConfig } from '../config.js';
+import { THREADLINE_SQL_SCHEMA } from '../config.js';
 import type { Logger } from '../log.js';
 import { silentLogger } from '../log.js';
 import { sha256Hex } from './digest.js';
-import { CORE_BOOTSTRAP_SQL, CORE_BOOTSTRAP_VERSION, SCHEMA_MIGRATIONS_SQL } from './sql.js';
-import type { SqlDatabase } from './pg.js';
+import { createSqlDatabase, toStorageError, type SqlDatabase } from './pg.js';
+import { LATEST_SQL_SCHEMA_VERSION, MEMORY_SQL_MIGRATIONS } from './schema.js';
 
 /**
- * Versioned schema bootstrap.
+ * Migration runner for schema `threadline_memory`.
  *
- * Three states are distinguished and never conflated:
+ * A new schema with its own ledger: this never touches the retired
+ * owned-execution schema, never mutates an existing migration version and never
+ * converts stored data. Applied versions are checksum-verified, so a migration
+ * that changes after being applied is reported as an incompatible build rather
+ * than silently re-run.
  *
- * - `applied`: a row exists for this store/version and the checksum matches.
- * - `unapplied`: no row exists. The migration body runs inside one transaction
- *   that also writes the bookkeeping row, so a failure leaves no partial schema
- *   and no false record.
- * - `incompatible`: a row exists with a different checksum. This build refuses
- *   to continue rather than guess which schema is present.
- *
- * An ordinary restart takes the `applied` path and never re-runs DDL.
+ * The runner also provisions the restricted application role because the new
+ * schema is useless without one: forced row-level security is only meaningful
+ * for a role that cannot bypass it.
  */
 
-export const MIGRATION_STORE_POSTGRES = 'postgres';
+export const SCHEMA_MIGRATIONS_TABLE = 'schema_migrations';
+export const MIGRATION_LOCK_KEY = 'threadline:memory:migrations';
 
-export type SchemaStatus =
-  | { readonly state: 'unconfigured' }
-  | { readonly state: 'unapplied'; readonly version: number }
-  | { readonly state: 'applied'; readonly version: number; readonly appliedAt: string }
-  | { readonly state: 'incompatible'; readonly expected: string; readonly recorded: string };
+export interface SchemaStatus {
+  readonly state: 'applied' | 'absent' | 'incompatible' | 'unconfigured';
+  readonly version: number;
+  readonly expectedVersion: number;
+  readonly applicationRole: string;
+  /** The application role exists and cannot bypass row-level security. */
+  readonly roleVerified: boolean;
+  readonly detail: string;
+}
 
-export interface MigrationDeps {
-  /** Used only to read `schema_migrations`. */
+export interface EnsureSchemaDeps {
   readonly db: SqlDatabase;
-  /** Schema owner connection used for DDL and grants. */
   readonly migrationDb: SqlDatabase;
-  /** Optional non-owner role to grant table privileges to after applying. */
-  readonly applicationRole?: string;
+  readonly postgres: PostgresConfig;
   readonly logger?: Logger;
 }
 
-export interface MigrationReport {
-  readonly status: SchemaStatus;
-  readonly durationMs: number;
+const IDENTIFIER = /^[a-z_][a-z0-9_]{0,62}$/;
+
+export async function ensureMemorySchema(deps: EnsureSchemaDeps): Promise<SchemaStatus> {
+  const logger = deps.logger ?? silentLogger;
+  const applicationRole = deps.postgres.applicationRole.trim().length > 0
+    ? deps.postgres.applicationRole
+    : deps.postgres.user;
+  if (!IDENTIFIER.test(applicationRole)) {
+    throw new ThreadlineError(
+      'invalid_request',
+      'The application role must be a plain lower-case PostgreSQL identifier.',
+      { roleLength: applicationRole.length },
+    );
+  }
+
+  await ensureApplicationRole(deps.migrationDb, deps.postgres, applicationRole, logger);
+
+  await deps.migrationDb.withConnection(async (connection) => {
+    // The session lock is held on one reserved connection and released in the
+    // `finally`, so a crashed run cannot leave the ledger locked.
+    await connection.query('SELECT pg_advisory_lock(hashtextextended($1, 0))', [MIGRATION_LOCK_KEY]);
+    try {
+      // The migration user's own name matches the retired schema, so the
+      // default search path would create these unqualified objects inside it.
+      // Pin the path explicitly; the connection is discarded on release.
+      await connection.query(`SET search_path TO ${THREADLINE_SQL_SCHEMA}, pg_temp`);
+      await connection.query(`CREATE SCHEMA IF NOT EXISTS ${THREADLINE_SQL_SCHEMA}`);
+      await connection.query(
+        `CREATE TABLE IF NOT EXISTS ${THREADLINE_SQL_SCHEMA}.${SCHEMA_MIGRATIONS_TABLE} (
+           version integer PRIMARY KEY,
+           name text NOT NULL,
+           checksum text NOT NULL,
+           applied_at timestamptz NOT NULL DEFAULT now()
+         )`,
+      );
+
+      const applied = await connection.query<{ version: number; checksum: string }>(
+        `SELECT version, checksum FROM ${THREADLINE_SQL_SCHEMA}.${SCHEMA_MIGRATIONS_TABLE} ORDER BY version`,
+      );
+      const appliedByVersion = new Map(applied.map((row) => [row.version, row.checksum]));
+
+      for (const migration of MEMORY_SQL_MIGRATIONS) {
+        const checksum = migrationChecksum(migration.statements);
+        const existing = appliedByVersion.get(migration.version);
+        if (existing !== undefined) {
+          if (existing.trim() !== checksum) {
+            throw new ThreadlineError(
+              'schema_incompatible',
+              `Applied migration ${String(migration.version)} does not match this build's checksum.`,
+              { version: migration.version },
+            );
+          }
+          continue;
+        }
+        await connection.query('BEGIN');
+        try {
+          for (const statement of migration.statements) {
+            await connection.query(statement);
+          }
+          await connection.query(
+            `INSERT INTO ${THREADLINE_SQL_SCHEMA}.${SCHEMA_MIGRATIONS_TABLE} (version, name, checksum)
+             VALUES ($1, $2, $3)`,
+            [migration.version, migration.name, checksum],
+          );
+          await connection.query('COMMIT');
+          logger.log({
+            level: 'info',
+            message: 'Applied SQL migration.',
+            fields: { version: migration.version, name: migration.name },
+          });
+        } catch (error) {
+          await connection.query('ROLLBACK').catch(() => undefined);
+          throw error instanceof ThreadlineError ? error : toStorageError(error, 'migration_apply');
+        }
+      }
+
+      await grantToApplicationRole(connection, applicationRole);
+    } finally {
+      await connection
+        .query('SELECT pg_advisory_unlock(hashtextextended($1, 0))', [MIGRATION_LOCK_KEY])
+        .catch(() => undefined);
+    }
+  });
+
+  const status = await readSchemaStatus({ db: deps.db, postgres: deps.postgres });
+  if (status.state !== 'applied') {
+    throw new ThreadlineError('storage_unavailable', 'The memory schema did not reach the applied state.', {
+      state: status.state,
+      version: status.version,
+    });
+  }
+  return status;
 }
 
-export function coreBootstrapChecksum(): string {
-  return sha256Hex(CORE_BOOTSTRAP_SQL);
+export interface ReadSchemaDeps {
+  readonly db: SqlDatabase;
+  readonly postgres: PostgresConfig;
 }
 
 /**
- * Reads migration bookkeeping. Safe to run as the application identity once
- * the schema exists; `schema_migrations` has no row-level security.
+ * Reads the ledger without applying anything.
+ *
+ * Readiness depends on this answer, so it is derived from the store rather than
+ * from a successful start attempt.
  */
-export async function readSchemaStatus(db: Pick<SqlDatabase, 'query'>): Promise<SchemaStatus> {
-  const rows = await db.query<{ version: number; checksum: string; applied_at: Date }>(
-    `SELECT version, checksum, applied_at
-       FROM threadline.schema_migrations
-      WHERE store = $1 AND version = $2`,
-    [MIGRATION_STORE_POSTGRES, CORE_BOOTSTRAP_VERSION],
-  );
-  const row = rows[0];
-  if (row === undefined) {
-    return { state: 'unapplied', version: CORE_BOOTSTRAP_VERSION };
+export async function readSchemaStatus(deps: ReadSchemaDeps): Promise<SchemaStatus> {
+  const applicationRole = deps.postgres.applicationRole.trim().length > 0
+    ? deps.postgres.applicationRole
+    : deps.postgres.user;
+  const roleVerified = await readRoleIsRestricted(deps.db, applicationRole);
+  let version: number;
+  try {
+    const rows = await deps.db.query<{ version: number }>(
+      `SELECT version FROM ${THREADLINE_SQL_SCHEMA}.${SCHEMA_MIGRATIONS_TABLE} ORDER BY version DESC LIMIT 1`,
+    );
+    version = rows[0]?.version ?? 0;
+  } catch (error) {
+    if (error instanceof ThreadlineError && error.code === 'storage_unavailable') {
+      return {
+        state: 'absent',
+        version: 0,
+        expectedVersion: LATEST_SQL_SCHEMA_VERSION,
+        applicationRole,
+        roleVerified,
+        detail: 'The threadline_memory schema is not present in this database.',
+      };
+    }
+    throw error;
   }
-  const expected = coreBootstrapChecksum();
-  const recorded = row.checksum.trim();
-  if (recorded !== expected) {
-    return { state: 'incompatible', expected, recorded };
+
+  if (version === LATEST_SQL_SCHEMA_VERSION) {
+    return {
+      state: 'applied',
+      version,
+      expectedVersion: LATEST_SQL_SCHEMA_VERSION,
+      applicationRole,
+      roleVerified,
+      detail: `Schema version ${String(version)} applied with forced row-level security.`,
+    };
   }
   return {
-    state: 'applied',
-    version: row.version,
-    appliedAt: row.applied_at.toISOString(),
+    state: version > LATEST_SQL_SCHEMA_VERSION ? 'incompatible' : 'absent',
+    version,
+    expectedVersion: LATEST_SQL_SCHEMA_VERSION,
+    applicationRole,
+    roleVerified,
+    detail:
+      version > LATEST_SQL_SCHEMA_VERSION
+        ? `The database is on schema version ${String(version)}, newer than this build expects.`
+        : `The database is on schema version ${String(version)}; this build expects ${String(LATEST_SQL_SCHEMA_VERSION)}.`,
   };
 }
 
 /**
- * Applies the core bootstrap when it is genuinely unapplied.
+ * The functions that must cross the tenant fence without a tenant context.
  *
- * `ensureBookkeeping` runs outside the migration transaction so that a failed
- * bootstrap still leaves `schema_migrations` present and queryable.
+ * Each is `SECURITY DEFINER`, so it runs with its owner's privileges. Forced
+ * row-level security applies to a table's owner as well, so a definer function
+ * only sees rows when its owner is a superuser or holds `BYPASSRLS`. That is a
+ * real privilege requirement, not an implementation detail: without it the
+ * functions match no rows and authentication, claiming and backlog all fail
+ * silently. These are the only names that may hold that privilege.
  */
-export async function ensureCoreSchema(deps: MigrationDeps): Promise<MigrationReport> {
-  const logger = deps.logger ?? silentLogger;
-  const startedAt = Date.now();
+export const PRIVILEGED_FUNCTIONS = ['token_lookup', 'claim_operations', 'operation_backlog'] as const;
 
-  // DDL runs on the owner connection. The application identity is deliberately
-  // not given CREATE on the schema, so it cannot apply migrations at all.
-  await deps.migrationDb.withTransaction(async (client) => {
-    await client.rows('SELECT pg_advisory_xact_lock(73010402)');
-    await client.rows('SET LOCAL search_path = threadline, pg_catalog');
-    await client.rows(SCHEMA_MIGRATIONS_SQL);
-  });
-
-  const current = await readSchemaStatus(deps.migrationDb);
-  if (current.state === 'applied') {
-    logger.log({
-      level: 'info',
-      message: 'Core schema already applied; startup will not re-run DDL.',
-      fields: { version: current.version },
-    });
-    await hardenSessions(deps);
-    await migrateModelAttemptFacts(deps);
-    await migrateCheckpointState(deps);
-    await migrateCheckpointIntent(deps);
-    await migrateCheckpointOutcomes(deps);
-    await migrateContextFacts(deps);
-    await grantApplicationPrivileges(deps);
-    return { status: current, durationMs: Date.now() - startedAt };
-  }
-  if (current.state === 'incompatible') {
-    throw new ThreadlineError(
-      'schema_incompatible',
-      'The recorded core schema checksum does not match this build.',
-      {
-        expectedVersion: CORE_BOOTSTRAP_VERSION,
-        expectedChecksum: current.expected,
-        recordedChecksum: current.recorded,
-      },
-    );
-  }
-
-  logger.log({
-    level: 'info',
-    message: 'Applying core bootstrap migration.',
-    fields: { version: CORE_BOOTSTRAP_VERSION },
-  });
-
-  await deps.migrationDb.withTransaction(async (client) => {
-    await client.rows('SELECT pg_advisory_xact_lock(73010402)');
-    const locked = await readSchemaStatus({ query: client.rows });
-    if (locked.state === 'applied') return;
-    if (locked.state === 'incompatible') {
-      throw new ThreadlineError('schema_incompatible','The recorded core schema checksum does not match this build.', {
-        expectedVersion: CORE_BOOTSTRAP_VERSION, expectedChecksum: locked.expected, recordedChecksum: locked.recorded,
-      });
-    }
-    await client.rows('SET LOCAL search_path = threadline, pg_catalog');
-    await client.rows(CORE_BOOTSTRAP_SQL);
-    await client.rows(
-      `INSERT INTO threadline.schema_migrations (id, store, version, checksum)
-       VALUES (gen_random_uuid(), $1, $2, $3)`,
-      [MIGRATION_STORE_POSTGRES, CORE_BOOTSTRAP_VERSION, coreBootstrapChecksum()],
-    );
-  });
-
-  await hardenSessions(deps);
-  await migrateModelAttemptFacts(deps);
-  await migrateCheckpointState(deps);
-  await migrateCheckpointIntent(deps);
-  await migrateCheckpointOutcomes(deps);
-    await migrateContextFacts(deps);
-  await grantApplicationPrivileges(deps);
-
-  const applied = await readSchemaStatus(deps.migrationDb);
-  if (applied.state !== 'applied') {
-    throw new ThreadlineError(
-      'schema_incompatible',
-      'The core migration reported success but no applied row is visible.',
-    );
-  }
-  logger.log({
-    level: 'info',
-    message: 'Core bootstrap migration applied.',
-    fields: { version: CORE_BOOTSTRAP_VERSION, durationMs: Date.now() - startedAt },
-  });
-  return { status: applied, durationMs: Date.now() - startedAt };
+export interface PrivilegedFunctionOwner {
+  readonly functionName: string;
+  readonly owner: string;
+  /** The owner can see rows through forced row-level security. */
+  readonly ownerBypassesRls: boolean;
 }
+
+export interface PrivilegedFunctionReport {
+  readonly ready: boolean;
+  /** True when every function exists and its owner can bypass the fence. */
+  readonly owners: readonly PrivilegedFunctionOwner[];
+  /** Function names that are missing from the schema entirely. */
+  readonly missing: readonly string[];
+  readonly detail: string;
+}
+
 /**
- * Grants the non-owner application role its table privileges.
+ * Reads which role owns each cross-tenant function and whether that role can
+ * bypass forced row-level security.
  *
- * Identifiers cannot be bound as parameters, so the role name is validated
- * against a strict pattern and quoted. An unknown role is reported rather than
- * silently skipped: a migration that applies but grants nothing would leave the
- * application failing later with an opaque permission error.
+ * Answers a report rather than throwing, so a caller can both refuse to claim
+ * durability and state exactly what is wrong.
  */
-async function grantApplicationPrivileges(deps: MigrationDeps): Promise<void> {
-  const role = deps.applicationRole ?? '';
-  if (role.length === 0) {
+export async function readPrivilegedFunctionOwners(db: SqlDatabase): Promise<PrivilegedFunctionReport> {
+  let rows: readonly {
+    proname: string;
+    rolname: string;
+    rolsuper: boolean;
+    rolbypassrls: boolean;
+  }[];
+  try {
+    rows = await db.query<{ proname: string; rolname: string; rolsuper: boolean; rolbypassrls: boolean }>(
+      `SELECT p.proname, r.rolname, r.rolsuper, r.rolbypassrls
+         FROM pg_proc p
+         JOIN pg_namespace n ON n.oid = p.pronamespace
+         JOIN pg_roles r ON r.oid = p.proowner
+        WHERE n.nspname = $1 AND p.proname = ANY($2::text[])`,
+      [THREADLINE_SQL_SCHEMA, [...PRIVILEGED_FUNCTIONS]],
+    );
+  } catch (error) {
+    return {
+      ready: false,
+      owners: [],
+      missing: [...PRIVILEGED_FUNCTIONS],
+      detail:
+        'The cross-tenant function ownership could not be read, so the privileged SQL path is unverified.',
+    };
+  }
+
+  const owners: PrivilegedFunctionOwner[] = rows.map((row) => ({
+    functionName: row.proname,
+    owner: row.rolname,
+    ownerBypassesRls: row.rolsuper || row.rolbypassrls,
+  }));
+  const present = new Set(owners.map((owner) => owner.functionName));
+  const missing = PRIVILEGED_FUNCTIONS.filter((name) => !present.has(name));
+  const blocked = owners.filter((owner) => !owner.ownerBypassesRls);
+
+  if (missing.length > 0) {
+    return {
+      ready: false,
+      owners,
+      missing,
+      detail: `The cross-tenant functions ${missing.join(', ')} are not present in schema ${THREADLINE_SQL_SCHEMA}; apply the schema with "threadline init".`,
+    };
+  }
+  if (blocked.length > 0) {
+    const named = blocked
+      .map((owner) => `${owner.functionName} (owner ${owner.owner})`)
+      .join(', ');
+    return {
+      ready: false,
+      owners,
+      missing,
+      detail:
+        `Forced row-level security applies to the function owner, so a ${'SECURITY DEFINER'} function whose owner ` +
+        `cannot bypass it matches no rows: ${named}. Run "threadline init" with a migration role that is a ` +
+        `superuser or holds BYPASSRLS; the application role must still be unable to bypass the fence.`,
+    };
+  }
+  return {
+    ready: true,
+    owners,
+    missing,
+    detail:
+      'Credential resolution, the leased claim and the backlog count run through the narrow cross-tenant functions, ' +
+      `which are owned by ${[...new Set(owners.map((owner) => owner.owner))].join(', ')}.`,
+  };
+}
+
+/**
+ * Refuses a privilege configuration that cannot work.
+ *
+ * Setup calls this so an unsupported role layout is rejected with the offending
+ * function and owner named, rather than surfacing later as an empty claim.
+ */
+export async function assertPrivilegedFunctionOwners(db: SqlDatabase): Promise<PrivilegedFunctionReport> {
+  const report = await readPrivilegedFunctionOwners(db);
+  if (!report.ready) {
+    throw new ThreadlineError('storage_unavailable', report.detail, {
+      missing: report.missing.join(', '),
+      blocked: report.owners
+        .filter((owner) => !owner.ownerBypassesRls)
+        .map((owner) => `${owner.functionName}:${owner.owner}`)
+        .join(', '),
+    });
+  }
+  return report;
+}
+
+function migrationChecksum(statements: readonly string[]): string {
+  return sha256Hex(statements.join('\n--\n'));
+}
+
+/**
+ * Creates the application role when it is missing and verifies it cannot bypass
+ * the tenant fence. An existing role's password is never rewritten.
+ */
+async function ensureApplicationRole(
+  migrationDb: SqlDatabase,
+  postgres: PostgresConfig,
+  applicationRole: string,
+  logger: Logger,
+): Promise<void> {
+  const existing = await migrationDb.query<{ rolsuper: boolean; rolbypassrls: boolean }>(
+    'SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = $1',
+    [applicationRole],
+  );
+  const role = existing[0];
+  if (role === undefined) {
+    if (postgres.password.length === 0) {
+      throw new ThreadlineError(
+        'invalid_request',
+        'Creating the application role requires its password to be configured.',
+      );
+    }
+    const statement = await migrationDb.query<{ statement: string }>(
+      "SELECT format('CREATE ROLE %I LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS PASSWORD %L', $1::text, $2::text) AS statement",
+      [applicationRole, postgres.password],
+    );
+    const ddl = statement[0]?.statement;
+    if (ddl === undefined) {
+      throw new ThreadlineError('storage_unavailable', 'Could not build the application role statement.');
+    }
+    await migrationDb.query(ddl);
+    logger.log({ level: 'info', message: 'Created the restricted application role.', fields: { applicationRole } });
     return;
   }
-  if (!/^[a-z_][a-z0-9_]{0,62}$/.test(role)) {
+  if (role.rolsuper || role.rolbypassrls) {
     throw new ThreadlineError(
-      'schema_incompatible',
-      'The configured PostgreSQL application role is not a plain lower-case identifier.',
-      { applicationRole: role },
+      'storage_unavailable',
+      'The configured application role can bypass row-level security, so the tenant fence cannot be enforced.',
+      { applicationRole },
     );
   }
-  await deps.migrationDb.withTransaction(async (client) => {
-    await client.rows('SELECT pg_advisory_xact_lock(73010402)');
-    await client.rows('SET LOCAL search_path = threadline, pg_catalog');
-    await client.rows(`GRANT USAGE ON SCHEMA threadline TO "${role}"`);
-    await client.rows(`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA threadline TO "${role}"`);
-    await client.rows(`REVOKE INSERT, UPDATE, DELETE ON threadline.schema_migrations FROM "${role}"`);
-    await client.rows(`GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA threadline TO "${role}"`);
-    await client.rows(
-      `GRANT EXECUTE ON FUNCTION threadline.session_by_token_hash(char(64)) TO "${role}"`,
-    );
-  });
 }
 
-// Version 1 remains immutable. Existing installations receive a checksummed additive patch.
-const SESSION_HARDENING_SQL = `CREATE OR REPLACE FUNCTION threadline.session_by_token_hash(p_token_hash char(64))
-RETURNS TABLE(session_id uuid,tenant_id uuid,user_id uuid,display_name text,tenant_slug text,expires_at timestamptz,idle_expires_at timestamptz)
-LANGUAGE sql SECURITY DEFINER SET search_path = threadline, pg_catalog AS $$
- SELECT s.id,s.tenant_id,s.user_id,u.display_name,t.slug,s.expires_at,s.idle_expires_at
- FROM threadline.user_sessions s JOIN threadline.users u ON u.id=s.user_id
- JOIN threadline.tenants t ON t.id=s.tenant_id
- JOIN threadline.tenant_memberships tm ON tm.tenant_id=s.tenant_id AND tm.user_id=s.user_id
- WHERE s.token_hash=p_token_hash AND s.revoked_at IS NULL AND u.status='active' AND t.status='active' AND tm.status='active'
-$$;
-REVOKE ALL ON FUNCTION threadline.session_by_token_hash(char(64)) FROM PUBLIC;`;
-// Additive M04 facts. A checkpoint is an immutable manifest artifact plus the
-// current pointer and its coverage; the graph holds the pointer too, so SQL must
-// record what was published and which operation produced it. Versions 1-3 stay
-// byte-identical.
-const CHECKPOINT_STATE_SQL = `CREATE TABLE threadline.task_checkpoints (
-  tenant_id uuid NOT NULL,
-  project_id uuid NOT NULL,
-  task_id uuid NOT NULL,
-  revision bigint NOT NULL CHECK (revision > 0),
-  operation_id uuid NOT NULL,
-  manifest_artifact_id uuid NOT NULL,
-  manifest_digest char(64) NOT NULL,
-  checkpoint_source_id uuid NOT NULL,
-  producer_session_id uuid NOT NULL,
-  requirement_revision bigint NOT NULL CHECK (requirement_revision >= 0),
-  covered_capture_seq bigint NOT NULL CHECK (covered_capture_seq >= 0),
-  graph_epoch uuid NOT NULL,
-  visibility text NOT NULL CHECK (visibility IN ('project','user','session')),
-  producer_kind text NOT NULL CHECK (producer_kind IN ('service','agent_proposal')),
-  publication_state text NOT NULL CHECK (publication_state IN ('committed','pending','ambiguous')),
-  created_at timestamptz NOT NULL DEFAULT now(),
-  PRIMARY KEY (tenant_id, project_id, task_id, revision),
-  UNIQUE (tenant_id, project_id, task_id, operation_id),
-  FOREIGN KEY (tenant_id, project_id, manifest_artifact_id) REFERENCES threadline.artifacts(tenant_id, project_id, id)
-);
-ALTER TABLE threadline.task_checkpoints ENABLE ROW LEVEL SECURITY;
-ALTER TABLE threadline.task_checkpoints FORCE ROW LEVEL SECURITY;
-CREATE POLICY tenant_fence ON threadline.task_checkpoints USING (tenant_id = nullif(current_setting('threadline.tenant_id', true), '')::uuid) WITH CHECK (tenant_id = nullif(current_setting('threadline.tenant_id', true), '')::uuid);
-
-CREATE TABLE threadline.checkpoint_coverage (
-  tenant_id uuid NOT NULL,
-  project_id uuid NOT NULL,
-  task_id uuid NOT NULL,
-  session_id uuid NOT NULL,
-  covered_capture_seq bigint NOT NULL CHECK (covered_capture_seq >= 0),
-  graph_admitted_capture_seq bigint NOT NULL CHECK (graph_admitted_capture_seq >= 0),
-  updated_at timestamptz NOT NULL DEFAULT now(),
-  PRIMARY KEY (tenant_id, project_id, task_id, session_id),
-  FOREIGN KEY (tenant_id, project_id) REFERENCES threadline.projects(tenant_id, id)
-);
-ALTER TABLE threadline.checkpoint_coverage ENABLE ROW LEVEL SECURITY;
-ALTER TABLE threadline.checkpoint_coverage FORCE ROW LEVEL SECURITY;
-CREATE POLICY tenant_fence ON threadline.checkpoint_coverage USING (tenant_id = nullif(current_setting('threadline.tenant_id', true), '')::uuid) WITH CHECK (tenant_id = nullif(current_setting('threadline.tenant_id', true), '')::uuid);`;
-
-// Additive M04 facts. A staged checkpoint must record the exact intent it came
-// from, so a replay compares what was submitted rather than re-deriving a
-// fingerprint from the manifest it produced -- otherwise a changed payload could
-// be reconstructed to look identical. The graph position that proves commitment
-// is recorded when the receipt is read back. Versions 1-4 stay byte-identical.
-const CHECKPOINT_INTENT_SQL = `ALTER TABLE threadline.task_checkpoints
- ADD COLUMN submission_fingerprint char(64),
- ADD COLUMN graph_event_seq bigint CHECK (graph_event_seq > 0),
- ADD COLUMN graph_committed_at timestamptz,
- ADD COLUMN resolved_at timestamptz;`;
-
-async function migrateCheckpointIntent(deps: MigrationDeps): Promise<void> {
-  await deps.migrationDb.withTransaction(async (tx) => {
-    await tx.rows('SELECT pg_advisory_xact_lock(73010402)');
-    const checksum = sha256Hex(CHECKPOINT_INTENT_SQL);
-    const rows = await tx.rows<{ checksum: string }>(
-      "SELECT checksum FROM threadline.schema_migrations WHERE store='postgres' AND version=5",
+async function readRoleIsRestricted(db: SqlDatabase, role: string): Promise<boolean> {
+  try {
+    const rows = await db.query<{ rolsuper: boolean; rolbypassrls: boolean }>(
+      'SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = $1',
+      [role],
     );
-    if (rows[0]) {
-      if (rows[0].checksum.trim() !== checksum) {
-        throw new ThreadlineError('schema_incompatible', 'Checkpoint-intent migration checksum differs.');
-      }
-      return;
-    }
-    await tx.rows(CHECKPOINT_INTENT_SQL);
-    await tx.rows(
-      "INSERT INTO threadline.schema_migrations(id,store,version,checksum) VALUES(gen_random_uuid(),'postgres',5,$1)",
-      [checksum],
-    );
-  });
-}
-
-async function migrateCheckpointState(deps: MigrationDeps): Promise<void> {
-  await deps.migrationDb.withTransaction(async (tx) => {
-    await tx.rows('SELECT pg_advisory_xact_lock(73010402)');
-    const checksum = sha256Hex(CHECKPOINT_STATE_SQL);
-    const rows = await tx.rows<{ checksum: string }>(
-      "SELECT checksum FROM threadline.schema_migrations WHERE store='postgres' AND version=4",
-    );
-    if (rows[0]) {
-      if (rows[0].checksum.trim() !== checksum) {
-        throw new ThreadlineError('schema_incompatible', 'Checkpoint migration checksum differs.');
-      }
-      return;
-    }
-    await tx.rows(CHECKPOINT_STATE_SQL);
-    await tx.rows(
-      "INSERT INTO threadline.schema_migrations(id,store,version,checksum) VALUES(gen_random_uuid(),'postgres',4,$1)",
-      [checksum],
-    );
-  });
-}
-
-async function hardenSessions(deps: MigrationDeps): Promise<void> {
- await deps.migrationDb.withTransaction(async tx => {
-  await tx.rows('SELECT pg_advisory_xact_lock(73010402)');
-  const checksum = sha256Hex(SESSION_HARDENING_SQL);
-  const rows = await tx.rows<{checksum:string}>("SELECT checksum FROM threadline.schema_migrations WHERE store='postgres' AND version=2");
-  if (rows[0]) {
-   if(rows[0].checksum.trim()!==checksum) throw new ThreadlineError('schema_incompatible','Session migration checksum differs.');
-   return;
+    const row = rows[0];
+    return row !== undefined && !row.rolsuper && !row.rolbypassrls;
+  } catch {
+    return false;
   }
-  await tx.rows(SESSION_HARDENING_SQL);
-  await tx.rows("INSERT INTO threadline.schema_migrations(id,store,version,checksum) VALUES(gen_random_uuid(),'postgres',2,$1)",[checksum]);
- });
 }
 
-// Additive M02 facts. Never infer possible charge from a status string or lose
-// an admitted reservation after a restart. Versions 1 and 2 remain byte-identical.
-const MODEL_ATTEMPT_FACTS_SQL = `ALTER TABLE threadline.model_requests
- ADD COLUMN possible_charge boolean,
- ADD COLUMN reserved_tokens bigint CHECK (reserved_tokens >= 0);`;
-async function migrateModelAttemptFacts(deps: MigrationDeps): Promise<void> {
-  await deps.migrationDb.withTransaction(async tx => {
-    await tx.rows('SELECT pg_advisory_xact_lock(73010402)');
-    const checksum = sha256Hex(MODEL_ATTEMPT_FACTS_SQL);
-    const rows = await tx.rows<{ checksum: string }>(
-      "SELECT checksum FROM threadline.schema_migrations WHERE store='postgres' AND version=3");
-    if (rows[0]) {
-      if (rows[0].checksum.trim() !== checksum)
-        throw new ThreadlineError('schema_incompatible', 'Model-attempt migration checksum differs.');
-      return;
-    }
-    await tx.rows(MODEL_ATTEMPT_FACTS_SQL);
-    await tx.rows("INSERT INTO threadline.schema_migrations(id,store,version,checksum) VALUES(gen_random_uuid(),'postgres',3,$1)", [checksum]);
-  });
+/**
+ * Grants exactly what the application role needs, on this schema only.
+ *
+ * The role has no privileges on the retired schema: it is created fresh for
+ * this schema, and nothing here grants `USAGE` on any other namespace.
+ */
+async function grantToApplicationRole(connection: SqlDatabase, applicationRole: string): Promise<void> {
+  await connection.query(`REVOKE ALL ON SCHEMA ${THREADLINE_SQL_SCHEMA} FROM PUBLIC`);
+  await connection.query(`GRANT USAGE ON SCHEMA ${THREADLINE_SQL_SCHEMA} TO "${applicationRole}"`);
+  await connection.query(
+    `GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA ${THREADLINE_SQL_SCHEMA} TO "${applicationRole}"`,
+  );
+  await connection.query(
+    `GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA ${THREADLINE_SQL_SCHEMA} TO "${applicationRole}"`,
+  );
+  await connection.query(
+    `GRANT EXECUTE ON FUNCTION ${THREADLINE_SQL_SCHEMA}.token_lookup(text) TO "${applicationRole}"`,
+  );
+  await connection.query(
+    `GRANT EXECUTE ON FUNCTION ${THREADLINE_SQL_SCHEMA}.claim_operations(integer, text, text, integer, text[]) TO "${applicationRole}"`,
+  );
+  await connection.query(
+    `GRANT EXECUTE ON FUNCTION ${THREADLINE_SQL_SCHEMA}.operation_backlog() TO "${applicationRole}"`,
+  );
+  await connection.query(
+    `ALTER DEFAULT PRIVILEGES IN SCHEMA ${THREADLINE_SQL_SCHEMA}
+       GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO "${applicationRole}"`,
+  );
 }
 
-// Pending graph writes and definite refusals are distinct durable outcomes.
-const CHECKPOINT_OUTCOMES_SQL = `ALTER TABLE threadline.task_checkpoints
- DROP CONSTRAINT task_checkpoints_publication_state_check,
- ADD CONSTRAINT task_checkpoints_publication_state_check
- CHECK (publication_state IN ('committed','pending','ambiguous','rejected')),
- ADD COLUMN rejection_reason text;`;
-async function migrateCheckpointOutcomes(deps:MigrationDeps):Promise<void> {
-  await deps.migrationDb.withTransaction(async tx=>{
-    await tx.rows('SELECT pg_advisory_xact_lock(73010402)');
-    const checksum=sha256Hex(CHECKPOINT_OUTCOMES_SQL);
-    const rows=await tx.rows<{checksum:string}>("SELECT checksum FROM threadline.schema_migrations WHERE store='postgres' AND version=6");
-    if(rows[0]){if(rows[0].checksum.trim()!==checksum)throw new ThreadlineError('schema_incompatible','Checkpoint-outcomes migration checksum differs.');return;}
-    await tx.rows(CHECKPOINT_OUTCOMES_SQL);
-    await tx.rows("INSERT INTO threadline.schema_migrations(id,store,version,checksum) VALUES(gen_random_uuid(),'postgres',6,$1)",[checksum]);
-  });
-}
-
-// M05 reuses the fenced packet/delivery/message tables; earlier versions stay immutable.
-const CONTEXT_FACTS_SQL = `ALTER TABLE threadline.context_packets ADD COLUMN owner_user_id uuid REFERENCES threadline.users(id);
-ALTER TABLE threadline.context_deliveries ADD COLUMN attempt_id uuid,
- ADD COLUMN lifecycle text CHECK(lifecycle IN ('staged','journaled','dispatch_observed','outcome_unknown','terminal_observed')),
- ADD COLUMN occurrence_json jsonb, ADD COLUMN transition_json jsonb;
-CREATE UNIQUE INDEX context_occurrence_attempt ON threadline.context_deliveries(tenant_id,project_id,context_packet_id,attempt_id);
-ALTER TABLE threadline.provider_profiles ADD COLUMN selection_operation_id uuid, ADD COLUMN selection_digest char(64);
-CREATE UNIQUE INDEX profile_selection_intent ON threadline.provider_profiles(tenant_id,project_id,owner_user_id,selection_operation_id);
-ALTER TABLE threadline.project_messages ADD COLUMN input_kind text, ADD COLUMN inference_consent text,
- ADD COLUMN task_graph_id uuid;
-CREATE INDEX context_packet_task_owner ON threadline.context_packets(tenant_id,project_id,task_graph_id,owner_user_id,created_at DESC);`;
-async function migrateContextFacts(deps: MigrationDeps): Promise<void> {
- await deps.migrationDb.withTransaction(async tx => {
-  await tx.rows('SELECT pg_advisory_xact_lock(73010402)');
-  const checksum=sha256Hex(CONTEXT_FACTS_SQL);
-  const rows=await tx.rows<{checksum:string}>("SELECT checksum FROM threadline.schema_migrations WHERE store='postgres' AND version=7");
-  if(rows[0]) { if(rows[0].checksum.trim()!==checksum) throw new ThreadlineError('schema_incompatible','Context migration checksum differs.'); return; }
-  await tx.rows(CONTEXT_FACTS_SQL);
-  await tx.rows("INSERT INTO threadline.schema_migrations(id,store,version,checksum) VALUES(gen_random_uuid(),'postgres',7,$1)",[checksum]);
- });
+/** Creates the pooled application and migration databases for a run. */
+export function createMemoryDatabases(
+  postgres: PostgresConfig,
+  logger: Logger,
+): { readonly db: SqlDatabase; readonly migrationDb: SqlDatabase } {
+  const db = createSqlDatabase({ config: postgres, logger });
+  const migrationDb =
+    postgres.migrationUser.length > 0
+      ? createSqlDatabase({
+          config: {
+            ...postgres,
+            user: postgres.migrationUser,
+            password: postgres.migrationPassword,
+          },
+          logger,
+        })
+      : db;
+  return { db, migrationDb };
 }
