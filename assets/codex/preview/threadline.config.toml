@@ -1,0 +1,64 @@
+# threadline:managed v1
+# Generated preview only: this build does not install Codex configuration.
+# Select with: codex --profile threadline
+# Non-managed hooks must be reviewed and trusted (`/hooks`) before they run.
+
+[mcp_servers.threadline]
+command = "/usr/local/bin/node"
+args = ["/opt/threadline/bin/codex-entry.mjs", "mcp", "--home", "/Users/example/.threadline"]
+required = false
+startup_timeout_sec = 10
+tool_timeout_sec = 30
+env = { THREADLINE_HOME = "/Users/example/.threadline" }
+
+# threadline:begin hook:SessionStart
+[[hooks.SessionStart]]
+[[hooks.SessionStart.hooks]]
+type = "command"
+command = "/usr/local/bin/node /opt/threadline/bin/codex-entry.mjs codex-hook SessionStart --home /Users/example/.threadline"
+timeout = 10
+additionalContextLimit = 0
+# threadline:end hook:SessionStart
+
+# threadline:begin hook:UserPromptSubmit
+[[hooks.UserPromptSubmit]]
+[[hooks.UserPromptSubmit.hooks]]
+type = "command"
+command = "/usr/local/bin/node /opt/threadline/bin/codex-entry.mjs codex-hook UserPromptSubmit --home /Users/example/.threadline"
+timeout = 10
+additionalContextLimit = 0
+# threadline:end hook:UserPromptSubmit
+
+# threadline:begin hook:PreToolUse
+[[hooks.PreToolUse]]
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = "/usr/local/bin/node /opt/threadline/bin/codex-entry.mjs codex-hook PreToolUse --home /Users/example/.threadline"
+timeout = 10
+additionalContextLimit = 0
+# threadline:end hook:PreToolUse
+
+# threadline:begin hook:PostToolUse
+[[hooks.PostToolUse]]
+[[hooks.PostToolUse.hooks]]
+type = "command"
+command = "/usr/local/bin/node /opt/threadline/bin/codex-entry.mjs codex-hook PostToolUse --home /Users/example/.threadline"
+timeout = 10
+additionalContextLimit = 0
+# threadline:end hook:PostToolUse
+
+# threadline:begin hook:Stop
+[[hooks.Stop]]
+[[hooks.Stop.hooks]]
+type = "command"
+command = "/usr/local/bin/node /opt/threadline/bin/codex-entry.mjs codex-hook Stop --home /Users/example/.threadline"
+timeout = 10
+# threadline:end hook:Stop
+
+# threadline:begin hook:SessionEnd
+[[hooks.SessionEnd]]
+[[hooks.SessionEnd.hooks]]
+type = "command"
+command = "/usr/local/bin/node /opt/threadline/bin/codex-entry.mjs codex-hook SessionEnd --home /Users/example/.threadline"
+timeout = 2
+# threadline:end hook:SessionEnd

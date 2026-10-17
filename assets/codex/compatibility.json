@@ -1,0 +1,114 @@
+{
+  "kind": "threadline-codex-compatibility",
+  "harness": "codex",
+  "qualifiedVersion": "0.163.0",
+  "observedAt": "2026-10-17",
+  "route": {
+    "profileFileName": "threadline.config.toml",
+    "selection": "codex --profile threadline",
+    "mcpServerId": "threadline"
+  },
+  "observedOnInstalledBinary": {
+    "hookEventNames": [
+      "preToolUse",
+      "permissionRequest",
+      "postToolUse",
+      "preCompact",
+      "postCompact",
+      "sessionStart",
+      "sessionEnd",
+      "userPromptSubmit",
+      "subagentStart",
+      "subagentStop",
+      "stop",
+      "interrupt"
+    ],
+    "hookSources": [
+      "system",
+      "user",
+      "project",
+      "mdm",
+      "sessionFlags",
+      "plugin",
+      "cloudRequirements",
+      "cloudManagedConfig",
+      "legacyManagedConfigFile",
+      "legacyManagedConfigMdm",
+      "unknown"
+    ],
+    "hookTrustStatuses": ["managed", "untrusted", "trusted", "modified"],
+    "hookOutputEntryKinds": ["warning", "stop", "feedback", "context", "error"],
+    "hookExecutionModes": ["sync", "async"],
+    "hookHandlerTypes": ["command", "mcpTool", "prompt", "agent"],
+    "additionalContextSpillDefaultTokens": 2500,
+    "mcpProtocolVersion": "2025-06-18",
+    "mcpClientInfo": {
+      "name": "codex-mcp-client",
+      "title": "Codex",
+      "version": "0.163.0"
+    },
+    "profileLayering": {
+      "command": "codex -p threadline mcp list --json",
+      "result": "the threadline.config.toml stdio entry appeared for the profile and not for the base config"
+    },
+    "legacyProfileKeyRefused": "legacy `profile = \"...\"` config is refused; use `--profile <name>`"
+  },
+  "documented": {
+    "hookInputCommonFields": [
+      "session_id",
+      "transcript_path",
+      "cwd",
+      "hook_event_name",
+      "model",
+      "permission_mode",
+      "turn_id"
+    ],
+    "hookContextEvents": [
+      "SessionStart",
+      "UserPromptSubmit",
+      "SubagentStart",
+      "PreToolUse",
+      "PostToolUse"
+    ],
+    "additionalContextLimit": {
+      "omitted": "default ~2500-token spill threshold",
+      "positiveInteger": "custom spill threshold",
+      "zero": "pass the handler text through; the handler must enforce its own cap"
+    },
+    "spillLocation": "<temp_dir>/hook_outputs/<session_id>/<uuid>.txt",
+    "trustRequirement": "non-managed hooks must be reviewed and trusted; trust is recorded against the hook hash",
+    "hookTimeoutDefaults": {
+      "command": "600 seconds",
+      "sessionEndAndInterrupt": "1 second default, 1-3 second maximum"
+    },
+    "sources": [
+      "https://learn.chatgpt.com/docs/hooks",
+      "https://learn.chatgpt.com/docs/config-file/config-reference",
+      "https://learn.chatgpt.com/docs/extend/mcp"
+    ]
+  },
+  "unverified": [
+    "hook stdin/stdout runtime execution on the installed binary (requires a live session or turn)",
+    "MCP tools/call _meta identity fields (requires an authorized live turn)",
+    "fork and subagent identity correlation",
+    "profile-layer hook discovery (the inline TOML shape is observed only through the sessionFlags layer)",
+    "additionalContext spill pass-through at runtime"
+  ],
+  "schemaEvidence": {
+    "generatedWith": "codex app-server generate-json-schema --out <dir>",
+    "files": [
+      {
+        "path": "v2/HooksListResponse.json",
+        "sha256": "891dd10ef7f78e59631fce05fff2becddb8004b3c0338dbbbd6b4f17ef1fa64f"
+      },
+      {
+        "path": "v2/HookCompletedNotification.json",
+        "sha256": "1f146d70303cea6e59752191179e36a273650d63a74d4f9338f9a399da6597d2"
+      },
+      {
+        "path": "ClientRequest.json",
+        "sha256": "6b10888f163f569922d42c41e94a98b4261258abc7581c14eca867c3b125dc6f"
+      }
+    ]
+  }
+}

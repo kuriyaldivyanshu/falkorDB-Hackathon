@@ -1,0 +1,36 @@
+{
+  "kind": "threadline-codex-ownership",
+  "manifestVersion": 1,
+  "marker": "threadline:managed v1",
+  "harness": {
+    "name": "codex",
+    "qualifiedVersion": "0.163.0"
+  },
+  "profileName": "threadline",
+  "ownedEntries": {
+    "mcpServers": [
+      "threadline"
+    ],
+    "hookEvents": [
+      "SessionStart",
+      "UserPromptSubmit",
+      "PreToolUse",
+      "PostToolUse",
+      "Stop",
+      "SessionEnd"
+    ]
+  },
+  "files": [
+    {
+      "role": "profile",
+      "path": "/Users/example/.codex/threadline.config.toml",
+      "digest": "sha256:9e767646a380b9cf3a47556ba10c2426e36cd6a8b83269fc395645aba47fac7e"
+    }
+  ],
+  "policy": {
+    "replace": "marker-and-digest-match",
+    "editedFile": "manual-resolution-required",
+    "foreignEntries": "refuse-and-report",
+    "secrets": "process-environment-only"
+  }
+}
