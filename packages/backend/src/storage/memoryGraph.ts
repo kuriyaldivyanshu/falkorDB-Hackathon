@@ -329,32 +329,40 @@ OPTIONAL MATCH (other:Entity:MemoryVersion)
 WHERE other.id IN $contradictionVersionIds
 WITH p, anchors, collect(DISTINCT other) AS contradictions
 WHERE size(contradictions) = $contradictionCount
+OPTIONAL MATCH (supportNode:Entity:MemoryVersion)
+WHERE supportNode.id IN $supportVersionIds
+WITH p, anchors, contradictions, collect(DISTINCT supportNode) AS supports
+WHERE size(supports) = $supportCount
 OPTIONAL MATCH (m0:Entity:Memory {id: $memoryId})
-WITH p, anchors, contradictions, m0
-WHERE ($memoryMode = 'attach' AND m0 IS NOT NULL) OR ($memoryMode = 'create' AND m0 IS NULL)
+WITH p, anchors, contradictions, supports, m0
+WHERE ($memoryMode = 'attach' AND m0 IS NOT NULL AND m0.kind = $kind)
+   OR ($memoryMode = 'create' AND m0 IS NULL)
 OPTIONAL MATCH (m0)-[:HAS_VERSION]->(proposed:Entity:MemoryVersion)
 WHERE proposed.acceptance = 'proposed'
-WITH p, anchors, contradictions, m0, count(proposed) AS proposedCount
+WITH p, anchors, contradictions, supports, m0, count(proposed) AS proposedCount
 WHERE proposedCount < $candidateCap
 MERGE (m:Entity:Memory {id: $memoryId})
 ON CREATE SET m.tenant_id = $tenantId, m.project_id = $projectId,
-              m.kind = 'semantic', m.created_at_ms = $nowMs,
+              m.kind = $kind, m.created_at_ms = $nowMs,
               m.created_by_principal_id = $actorPrincipalId,
               m.graph_epoch = $graphEpoch, m.graph_schema_version = $graphSchemaVersion
 MERGE (p)-[:HAS_MEMORY]->(m)
 CREATE (v:Entity:MemoryVersion)
 SET v.id = $versionId,
     v.memory_id = $memoryId,
-    v.kind = 'semantic',
+    v.kind = $kind,
+    v.content_json = $contentJson,
     v.subtype = $subtype,
     v.statement = $statement,
     v.applicability_json = $applicabilityJson,
     v.observed_under_json = $observedUnderJson,
-    v.acceptance = 'proposed',
-    v.delegation = 'authored',
+    v.acceptance = $acceptance,
+    v.delegation = $delegation,
+    v.evidence_precision = $evidencePrecision,
     v.author_principal_id = $actorPrincipalId,
     v.created_at_ms = $nowMs,
     v.observed_at_ms = $observedAtMs,
+    v.accepted_at_ms = $acceptedAtMs,
     v.origin_task_id = $originTaskId,
     v.proposed_against_head = $expectedHead,
     v.graph_epoch = $graphEpoch,
@@ -362,6 +370,12 @@ SET v.id = $versionId,
 CREATE (m)-[:HAS_VERSION]->(v)
 FOREACH (anchor IN anchors | CREATE (v)-[:SOURCED_FROM]->(anchor))
 FOREACH (other IN contradictions | CREATE (v)-[:CONTRADICTS]->(other))
+FOREACH (support IN supports | CREATE (v)-[:SUPPORTED_BY]->(support))
+// A deterministically observed episode is proposal-free, so its version becomes
+// the identity's current authority here. The accepted branch is unreachable for
+// a proposal, so this never fires on that path.
+FOREACH (adopt IN CASE WHEN $acceptance = 'accepted' THEN [1] ELSE [] END |
+  CREATE (m)-[:CURRENT]->(v))
 SET p.event_head = coalesce(p.event_head, 0) + 1
 WITH p, m, v, p.event_head AS eventSeq
 CREATE (event:Entity:Event)
@@ -372,13 +386,14 @@ SET event.id = $eventIdPrefix + toString(eventSeq),
     event.seq = eventSeq,
     event.memory_id = $memoryId,
     event.version_id = $versionId,
+    event.memory_kind = $kind,
     event.privacy_revision = toInteger($privacyRevision),
     event.committed_at_ms = $nowMs,
     event.graph_schema_version = $graphSchemaVersion
 CREATE (receipt:Entity:OperationReceipt)
 SET receipt.id = $receiptId,
     receipt.operation_id = $operationId,
-    receipt.kind = 'memory.propose',
+    receipt.kind = $operationKind,
     receipt.request_digest = $requestDigest,
     receipt.graph_epoch = $graphEpoch,
     receipt.event_seq = eventSeq,
@@ -388,14 +403,41 @@ SET receipt.id = $receiptId,
 CREATE (receipt)-[:RECEIPT_EVENT]->(event)
 RETURN toString(eventSeq) AS event_seq`;
 
+/**
+ * The proposal commit serves `memory.propose` and `memory.episode.record`.
+ *
+ * The statements are identical; only who resolves `delegation` and
+ * `evidencePrecision` differs. An episode's are resolved from evidence
+ * eligibility by this service, a proposal's are always `authored`/`null`. That
+ * is deliberate: an episode gains no authority by taking a different path
+ * through the graph, because there is only one path.
+ *
+ * `supportVersionIds` was verified against project memory by the worker before
+ * this call. `SUPPORTED_BY` is a reference, never a copy: the outcome each
+ * supporting episode actually recorded is read back through the version read.
+ */
 export interface MemoryProposeCommit extends GraphCommitBase {
   readonly tenantId: string;
   readonly projectId: string;
   readonly memoryId: string;
   readonly memoryMode: 'create' | 'attach';
   readonly versionId: string;
+  readonly kind: string;
+  readonly operationKind: string;
+  readonly contentJson: string;
   readonly subtype: string;
   readonly statement: string;
+  readonly delegation: string;
+  readonly evidencePrecision: string | null;
+  /**
+   * `accepted` is reachable only for an episode this service admitted
+   * deterministically from evidence it verified. It carries no accepting
+   * principal on purpose: no human accepted it, and an `acceptedByPrincipalId`
+   * of null on a current version is exactly what tells a reader the authority
+   * is an observation rather than a human decision.
+   */
+  readonly acceptance: 'proposed' | 'accepted';
+  readonly acceptedAtMs: number | null;
   readonly applicabilityJson: string;
   readonly observedUnderJson: string;
   readonly observedAtMs: number;
@@ -403,9 +445,11 @@ export interface MemoryProposeCommit extends GraphCommitBase {
   readonly expectedHead: string | null;
   readonly sourceAnchorIds: readonly string[];
   readonly contradictionVersionIds: readonly string[];
+  readonly supportVersionIds: readonly string[];
   readonly candidateCap: number;
 }
 
+/** Commits a proposal or episode with its evidence links and receipt; returns null when guards prevent a write. */
 export async function commitMemoryPropose(
   graph: Graph,
   commit: MemoryProposeCommit,
@@ -414,8 +458,10 @@ export async function commitMemoryPropose(
     ...commit,
     sourceAnchorIds: [...commit.sourceAnchorIds],
     contradictionVersionIds: [...commit.contradictionVersionIds],
+    supportVersionIds: [...commit.supportVersionIds],
     sourceAnchorCount: commit.sourceAnchorIds.length,
     contradictionCount: commit.contradictionVersionIds.length,
+    supportCount: commit.supportVersionIds.length,
   });
 }
 
@@ -494,6 +540,7 @@ OPTIONAL MATCH (existing:Entity:OperationReceipt {id: $receiptId})
 WITH p, existing
 WHERE existing IS NULL
 MATCH (p)-[:HAS_MEMORY]->(m:Entity:Memory {id: $memoryId})
+WHERE m.kind = $kind
 MATCH (m)-[:HAS_VERSION]->(head:Entity:MemoryVersion {id: $expectedHead})
 WHERE head.acceptance = 'accepted'
 MATCH (anchor:Entity:SourceAnchor)
@@ -504,22 +551,28 @@ OPTIONAL MATCH (other:Entity:MemoryVersion)
 WHERE other.id IN $contradictionVersionIds
 WITH p, m, head, anchors, collect(DISTINCT other) AS contradictions
 WHERE size(contradictions) = $contradictionCount
+OPTIONAL MATCH (supportNode:Entity:MemoryVersion)
+WHERE supportNode.id IN $supportVersionIds
+WITH p, m, head, anchors, contradictions, collect(DISTINCT supportNode) AS supports
+WHERE size(supports) = $supportCount
 OPTIONAL MATCH (m)-[cur:CURRENT]->(head)
-WITH p, m, head, anchors, contradictions, cur
+WITH p, m, head, anchors, contradictions, supports, cur
 WHERE cur IS NOT NULL
 OPTIONAL MATCH (m)-[:HAS_VERSION]->(collision:Entity:MemoryVersion {id: $versionId})
-WITH p, m, head, anchors, contradictions, cur, collision
+WITH p, m, head, anchors, contradictions, supports, cur, collision
 WHERE collision IS NULL
 CREATE (v:Entity:MemoryVersion)
 SET v.id = $versionId,
     v.memory_id = $memoryId,
-    v.kind = 'semantic',
+    v.kind = $kind,
+    v.content_json = $contentJson,
     v.subtype = $subtype,
     v.statement = $statement,
     v.applicability_json = $applicabilityJson,
     v.observed_under_json = $observedUnderJson,
     v.acceptance = 'accepted',
-    v.delegation = 'authored',
+    v.delegation = $delegation,
+    v.evidence_precision = $evidencePrecision,
     v.author_principal_id = $actorPrincipalId,
     v.accepted_by_principal_id = $actorPrincipalId,
     v.created_at_ms = $nowMs,
@@ -534,6 +587,7 @@ CREATE (m)-[:HAS_VERSION]->(v)
 CREATE (v)-[:SUPERSEDES]->(head)
 FOREACH (anchor IN anchors | CREATE (v)-[:SOURCED_FROM]->(anchor))
 FOREACH (other IN contradictions | CREATE (v)-[:CONTRADICTS]->(other))
+FOREACH (support IN supports | CREATE (v)-[:SUPPORTED_BY]->(support))
 SET head.acceptance = 'superseded',
     head.superseded_at_ms = $nowMs,
     head.superseded_by_version_id = $versionId
@@ -548,6 +602,7 @@ SET event.id = $eventIdPrefix + toString(eventSeq),
     event.seq = eventSeq,
     event.memory_id = $memoryId,
     event.version_id = $versionId,
+    event.memory_kind = $kind,
     event.superseded_version_id = $expectedHead,
     event.privacy_revision = toInteger($privacyRevision),
     event.committed_at_ms = $nowMs,
@@ -572,8 +627,18 @@ export interface MemoryCorrectCommit extends GraphCommitBase {
   readonly memoryId: string;
   readonly versionId: string;
   readonly expectedHead: string;
+  /**
+   * The head's own kind. A correction may not change the kind of a memory
+   * identity: a requirement cannot silently become a procedure, because every
+   * task requirement bound to it would follow the pointer to a different kind
+   * of obligation. The statement refuses rather than rewriting the identity.
+   */
+  readonly kind: string;
+  readonly contentJson: string;
   readonly subtype: string;
   readonly statement: string;
+  readonly delegation: string;
+  readonly evidencePrecision: string | null;
   readonly applicabilityJson: string;
   readonly observedUnderJson: string;
   readonly observedAtMs: number;
@@ -581,8 +646,10 @@ export interface MemoryCorrectCommit extends GraphCommitBase {
   readonly reason: string;
   readonly sourceAnchorIds: readonly string[];
   readonly contradictionVersionIds: readonly string[];
+  readonly supportVersionIds: readonly string[];
 }
 
+/** Atomically supersedes the expected current version with a correction and receipt, or returns null on a guard miss. */
 export async function commitMemoryCorrect(
   graph: Graph,
   commit: MemoryCorrectCommit,
@@ -591,8 +658,10 @@ export async function commitMemoryCorrect(
     ...commit,
     sourceAnchorIds: [...commit.sourceAnchorIds],
     contradictionVersionIds: [...commit.contradictionVersionIds],
+    supportVersionIds: [...commit.supportVersionIds],
     sourceAnchorCount: commit.sourceAnchorIds.length,
     contradictionCount: commit.contradictionVersionIds.length,
+    supportCount: commit.supportVersionIds.length,
   });
 }
 
@@ -606,6 +675,7 @@ WHERE existing IS NULL
 MATCH (p)-[:HAS_TASK]->(t:Entity:Task {id: $taskId})
 WHERE t.revision = $expectedTaskRevision AND t.state = 'open'
 MATCH (p)-[:HAS_MEMORY]->(m:Entity:Memory {id: $memoryId})
+WHERE m.kind = $obligationKind
 OPTIONAL MATCH (t)-[:REQUIRES]->(already:Entity:Memory)
 WITH p, t, m, collect(DISTINCT already.id) AS boundMemoryIds
 WHERE size(boundMemoryIds) < $maxRequirements
@@ -644,6 +714,12 @@ export interface TaskRequireCommit extends GraphCommitBase {
   readonly expectedTaskRevision: string;
   readonly newRevision: string;
   readonly maxRequirements: number;
+  /**
+   * Only a semantic memory can govern a task. An episode records what happened
+   * and a procedure proposes how to act; neither is an obligation, so binding
+   * one as a requirement would let advice and history govern a task.
+   */
+  readonly obligationKind: string;
 }
 
 export async function commitTaskRequire(
@@ -726,6 +802,7 @@ WHERE $focus IS NULL
    OR toLower(coalesce(curv.statement, '')) CONTAINS toLower($focus)
    OR any(c IN cands WHERE c.acceptance = 'proposed' AND toLower(coalesce(c.statement, '')) CONTAINS toLower($focus))
 RETURN m.id AS memory_id, m.kind AS kind, curv.id AS current_version_id,
+       curv.kind AS current_kind,
        [c IN cands WHERE c.acceptance = 'proposed' | c.id] AS candidate_version_ids,
        m.created_at_ms AS created_at_ms
 ORDER BY created_at_ms DESC, memory_id ASC
@@ -741,6 +818,7 @@ WHERE $focus IS NULL
    OR toLower(coalesce(curv.statement, '')) CONTAINS toLower($focus)
    OR any(c IN cands WHERE c.acceptance = 'proposed' AND toLower(coalesce(c.statement, '')) CONTAINS toLower($focus))
 RETURN m.id AS memory_id, m.kind AS kind, curv.id AS current_version_id,
+       curv.kind AS current_kind,
        [c IN cands WHERE c.acceptance = 'proposed' | c.id] AS candidate_version_ids,
        m.created_at_ms AS created_at_ms
 ORDER BY created_at_ms DESC, memory_id ASC
@@ -750,10 +828,13 @@ export interface MemoryHeadRow {
   readonly memory_id: string | null;
   readonly kind: string | null;
   readonly current_version_id: string | null;
+  /** The kind the current version recorded; it must agree with the identity. */
+  readonly current_kind: string | null;
   readonly candidate_version_ids: readonly string[];
   readonly created_at_ms: number | null;
 }
 
+/** Reads a bounded page of project memory heads filtered by task, identity, kind and focus. */
 export async function readScopedMemoryHeadRows(
   graph: Graph,
   params: {
@@ -780,6 +861,7 @@ export async function readScopedMemoryHeadRows(
     memory_id: asString(row.memory_id),
     kind: asString(row.kind),
     current_version_id: asString(row.current_version_id),
+    current_kind: asString(row.current_kind),
     candidate_version_ids: asStringList(row.candidate_version_ids),
     created_at_ms: asInteger(row.created_at_ms),
   }));
@@ -792,10 +874,13 @@ OPTIONAL MATCH (m)-[cur:CURRENT]->(v)
 OPTIONAL MATCH (v)-[:SOURCED_FROM]->(a:Entity:SourceAnchor)
 OPTIONAL MATCH (v)-[:CONTRADICTS]->(c:Entity:MemoryVersion)
 RETURN v.id AS version_id, v.memory_id AS memory_id, v.kind AS kind, v.subtype AS subtype,
-       v.statement AS statement, v.applicability_json AS applicability_json,
+       v.statement AS statement, v.content_json AS content_json,
+       v.applicability_json AS applicability_json,
        v.observed_under_json AS observed_under_json, v.acceptance AS acceptance,
-       v.delegation AS delegation, v.author_principal_id AS author_principal_id,
+       v.delegation AS delegation, v.evidence_precision AS evidence_precision,
+       v.author_principal_id AS author_principal_id,
        v.accepted_by_principal_id AS accepted_by_principal_id,
+       v.accept_reason AS accept_reason,
        v.supersedes_version_id AS supersedes_version_id,
        v.created_at_ms AS created_at_ms, v.observed_at_ms AS observed_at_ms,
        (cur IS NOT NULL) AS is_current,
@@ -808,12 +893,15 @@ export interface VersionDetailRow {
   readonly kind: string | null;
   readonly subtype: string | null;
   readonly statement: string | null;
+  readonly content_json: string | null;
   readonly applicability_json: string | null;
   readonly observed_under_json: string | null;
   readonly acceptance: string | null;
   readonly delegation: string | null;
+  readonly evidence_precision: string | null;
   readonly author_principal_id: string | null;
   readonly accepted_by_principal_id: string | null;
+  readonly accept_reason: string | null;
   readonly supersedes_version_id: string | null;
   readonly created_at_ms: number | null;
   readonly observed_at_ms: number | null;
@@ -822,6 +910,7 @@ export interface VersionDetailRow {
   readonly contradicts_ids: readonly string[];
 }
 
+/** Reads stored content, provenance and authority details for the selected version IDs. */
 export async function readVersionDetailRows(graph: Graph, versionIds: readonly string[]): Promise<VersionDetailRow[]> {
   if (versionIds.length === 0) {
     return [];
@@ -835,12 +924,15 @@ export async function readVersionDetailRows(graph: Graph, versionIds: readonly s
     kind: asString(row.kind),
     subtype: asString(row.subtype),
     statement: asString(row.statement),
+    content_json: asString(row.content_json),
     applicability_json: asString(row.applicability_json),
     observed_under_json: asString(row.observed_under_json),
     acceptance: asString(row.acceptance),
     delegation: asString(row.delegation),
+    evidence_precision: asString(row.evidence_precision),
     author_principal_id: asString(row.author_principal_id),
     accepted_by_principal_id: asString(row.accepted_by_principal_id),
+    accept_reason: asString(row.accept_reason),
     supersedes_version_id: asString(row.supersedes_version_id),
     created_at_ms: asInteger(row.created_at_ms),
     observed_at_ms: asInteger(row.observed_at_ms),
@@ -850,20 +942,73 @@ export async function readVersionDetailRows(graph: Graph, versionIds: readonly s
   }));
 }
 
+/**
+ * Resolves the episodes a set of versions cite as supporting reuse.
+ *
+ * One bounded query for the whole page: the `SUPPORTED_BY` edges are followed
+ * one step only, and each supporting version reports the outcome *it* recorded.
+ * A procedure therefore cannot present a success its evidence never had, and a
+ * later correction of a supporting episode is visible here as a different
+ * outcome rather than being smoothed over.
+ */
+const READ_VERSION_SUPPORTS = `MATCH (v:Entity:MemoryVersion)-[:SUPPORTED_BY]->(s:Entity:MemoryVersion)
+WHERE v.id IN $versionIds
+RETURN v.id AS version_id, s.id AS support_version_id, s.memory_id AS support_memory_id,
+       s.kind AS support_kind, s.content_json AS support_content_json,
+       s.observed_under_json AS support_observed_under_json,
+       s.observed_at_ms AS support_observed_at_ms, s.acceptance AS support_acceptance`;
+
+export interface VersionSupportRow {
+  readonly version_id: string | null;
+  readonly support_version_id: string | null;
+  readonly support_memory_id: string | null;
+  readonly support_kind: string | null;
+  readonly support_content_json: string | null;
+  readonly support_observed_under_json: string | null;
+  readonly support_observed_at_ms: number | null;
+  readonly support_acceptance: string | null;
+}
+
+/** Reads directly linked supporting episode versions for the selected version IDs. */
+export async function readVersionSupportRows(
+  graph: Graph,
+  versionIds: readonly string[],
+): Promise<VersionSupportRow[]> {
+  if (versionIds.length === 0) {
+    return [];
+  }
+  const reply = await graph.roQuery<Record<string, unknown>>(READ_VERSION_SUPPORTS, {
+    params: { versionIds: [...versionIds] },
+  });
+  return (reply.data ?? []).map((row) => ({
+    version_id: asString(row.version_id),
+    support_version_id: asString(row.support_version_id),
+    support_memory_id: asString(row.support_memory_id),
+    support_kind: asString(row.support_kind),
+    support_content_json: asString(row.support_content_json),
+    support_observed_under_json: asString(row.support_observed_under_json),
+    support_observed_at_ms: asInteger(row.support_observed_at_ms),
+    support_acceptance: asString(row.support_acceptance),
+  }));
+}
+
 const READ_MEMORY_STATE = `MATCH (p:Entity:ProjectRoot {id: $projectRootId})
 OPTIONAL MATCH (p)-[:HAS_MEMORY]->(m:Entity:Memory {id: $memoryId})
 OPTIONAL MATCH (m)-[cur:CURRENT]->(curv:Entity:MemoryVersion)
 OPTIONAL MATCH (m)-[:HAS_VERSION]->(proposed:Entity:MemoryVersion)
 WHERE proposed.acceptance = 'proposed'
-RETURN m.id AS memory_id, collect(DISTINCT curv.id) AS current_version_ids,
+RETURN m.id AS memory_id, m.kind AS kind, collect(DISTINCT curv.id) AS current_version_ids,
        collect(DISTINCT proposed.id) AS proposed_version_ids`;
 
 export interface MemoryStateRow {
   readonly memoryExists: boolean;
+  /** The kind the identity was created with; a correction may not change it. */
+  readonly kind: string | null;
   readonly currentVersionIds: readonly string[];
   readonly proposedVersionIds: readonly string[];
 }
 
+/** Reads a project memory identity, its kind and its current and proposed version IDs. */
 export async function readMemoryState(graph: Graph, projectRootId: string, memoryId: string): Promise<MemoryStateRow> {
   const reply = await graph.roQuery<Record<string, unknown>>(READ_MEMORY_STATE, {
     params: { projectRootId, memoryId },
@@ -871,26 +1016,33 @@ export async function readMemoryState(graph: Graph, projectRootId: string, memor
   const row = reply.data?.[0];
   return {
     memoryExists: asString(row?.memory_id) !== null,
+    kind: asString(row?.kind),
     currentVersionIds: asStringList(row?.current_version_ids),
     proposedVersionIds: asStringList(row?.proposed_version_ids),
   };
 }
 
 const READ_VERSION_STATE = `MATCH (v:Entity:MemoryVersion {id: $versionId})
-RETURN v.acceptance AS acceptance, v.memory_id AS memory_id`;
+RETURN v.acceptance AS acceptance, v.memory_id AS memory_id, v.kind AS kind`;
 
 export interface VersionStateRow {
   readonly acceptance: string | null;
   readonly memoryId: string | null;
+  readonly kind: string | null;
 }
 
+/** Returns a version's acceptance, owning memory and kind, or null when it is absent. */
 export async function readVersionState(graph: Graph, versionId: string): Promise<VersionStateRow | null> {
   const reply = await graph.roQuery<Record<string, unknown>>(READ_VERSION_STATE, { params: { versionId } });
   const row = reply.data?.[0];
   if (row === undefined) {
     return null;
   }
-  return { acceptance: asString(row.acceptance), memoryId: asString(row.memory_id) };
+  return {
+    acceptance: asString(row.acceptance),
+    memoryId: asString(row.memory_id),
+    kind: asString(row.kind),
+  };
 }
 
 const READ_TASK_STATE = `MATCH (p:Entity:ProjectRoot {id: $projectRootId})

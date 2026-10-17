@@ -28,11 +28,13 @@ _Avoid_: Execution lock, sandbox permission.
 
 **Capture**: Recording supported visible work under an approved policy. Capturing a statement does not accept it as reusable truth.
 
-**Episode**: A source-backed attempt and observed outcome under stated conditions. An unknown outcome stays unknown.
+**Episode**: A source-backed attempt and observed outcome under stated conditions. An unknown outcome stays unknown, and an outcome records what happened to one action, never the success of the wider task.
+
+**Evidence precision**: How firmly an episode's outcome was established. `authored` means somebody asserted it and stays asserted however often it is repeated; `observed` means this service resolved it from evidence it verified itself. A caller may ask for observation; only the service grants it, and unsupported evidence is refused rather than recorded as something weaker.
 
 **Semantic memory**: An accepted requirement, decision or scoped fact with provenance. An agent assertion is initially a proposal, and a proposal governs nothing until a human accepts it.
 
-**Procedure**: A reusable sequence with explicit prerequisites, parameters and supporting outcomes. Validation requires evidence of compatible reuse.
+**Procedure**: A reusable sequence with explicit prerequisites, parameters and supporting outcomes. Validation requires evidence of compatible reuse. A human-accepted candidate is current, not validated: acceptance and validation are different decisions.
 
 **Intent document**: The immutable captured form of one proposal or correction: its statement, applicability, observed conditions and cited sources. An operation references that document instead of restating its content.
 

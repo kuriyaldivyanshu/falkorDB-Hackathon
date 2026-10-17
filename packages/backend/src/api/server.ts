@@ -109,6 +109,7 @@ export function createApiServer(deps: ApiServerDeps): ApiServerHandle {
   return handle;
 }
 
+/** Builds the HTTP app with authenticated operation routes and safe error responses. */
 function buildApp(deps: ApiServerDeps): FastifyInstance {
   const { service } = deps;
   const app = Fastify({
@@ -255,6 +256,13 @@ function buildApp(deps: ApiServerDeps): FastifyInstance {
     ok(reply, await service.memories.propose(call, body));
   });
 
+  app.post(ROUTES.memoryEpisodes, async (request, reply) => {
+    const body = readObject(request.body, 'episode recording');
+    const projectId = readStringField(body, 'projectId');
+    const call = await service.auth.authenticate(authorizationOf(request), { projectId });
+    ok(reply, await service.memories.recordEpisode(call, body));
+  });
+
   app.get<{ Params: { memoryId: string } }>(ROUTES.memory(':memoryId'), async (request, reply) => {
     const query = readObject(request.query ?? {}, 'memory query');
     const projectId = readStringField(query, 'projectId');
@@ -317,7 +325,6 @@ function buildApp(deps: ApiServerDeps): FastifyInstance {
   // Known product operations that are not in this build answer explicitly
   // rather than falling through as an anonymous 404.
   const unavailable: ReadonlyArray<{ readonly operation: Parameters<typeof unsupportedOperation>[0]; readonly path: string }> = [
-    { operation: 'memory.episode.record', path: ROUTES.memoryEpisodes },
     { operation: 'claim.status', path: ROUTES.claimStatus },
     { operation: 'context.prepare', path: ROUTES.context },
     { operation: 'context.occurrence', path: ROUTES.contextOccurrences },

@@ -29,6 +29,7 @@ export const OPERATION_IDS = [
   'memory.accept',
   'memory.correct',
   'memory.episode.record',
+  'memory.procedure.validate',
   'task.create',
   'task.require',
   'claim.acquire',
