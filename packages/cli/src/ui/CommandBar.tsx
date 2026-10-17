@@ -7,27 +7,33 @@ export interface CommandBarProps {
   readonly onSubmit: () => void;
   readonly disabled: boolean;
   readonly placeholder: string;
+  /** Why the bar is refusing input, or null when it accepts it. */
+  readonly disabledReason?: string | null;
+  /** One line of guidance, supplied by the host so the bar cannot describe a
+   *  dispatch path the host has removed. */
+  readonly hint?: string;
 }
 
 /**
- * The single action available at this milestone: send one development command.
+ * The single input line.
  *
- * The input is this process's own text. It is submitted to the backend and the
- * answer is rendered as received; nothing here decides whether the work
- * succeeded.
+ * The hint comes from the host rather than being written here, because the bar
+ * is reused across mount points and a hard-coded description of what Enter does
+ * outlives the dispatch path it described. When there is no command surface, it
+ * says so instead of implying that text will be sent.
  */
-export function CommandBar({ value, onChange, onSubmit, disabled, placeholder }: CommandBarProps) {
+export function CommandBar({ value, onChange, onSubmit, disabled, placeholder, disabledReason, hint }: CommandBarProps) {
   if (disabled) {
     return (
       <Box>
-        <Text dimColor>Not connected — no command can be sent.</Text>
+        <Text dimColor>{disabledReason ?? 'Not connected — no command can be sent.'}</Text>
       </Box>
     );
   }
 
   return (
     <Box flexDirection="column">
-      <Text dimColor>Type text and press Enter to send one development.echo command.</Text>
+      {hint !== undefined && hint.length > 0 && <Text dimColor>{hint}</Text>}
       <Box>
         <Text>{'> '}</Text>
         <TextInput

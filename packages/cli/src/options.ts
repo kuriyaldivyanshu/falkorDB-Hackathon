@@ -70,6 +70,7 @@ export type CliCommand =
   | 'admit'
   | 'inspect'
   | 'run:prepare'
+  | 'command'
   | 'run:start'
   | 'run:inspect'
   | 'run:cancel'
@@ -92,6 +93,7 @@ export interface StartRunRequest {
 }
 
 export interface CliInvocation {
+  readonly selectedProfileId?: string | null;
   readonly contextWindowTokens: number | null;
   readonly command: CliCommand;
   readonly projectId: string | null;
@@ -207,7 +209,8 @@ Commands:
   init                Validate the owner session and list authorized projects.
   admit               Preview and explicitly accept the initial fixture goal/criteria.
   inspect             Read current task/criteria/source authority, or a receipt.
-  run:prepare         Prepare real profile/candidate IDs without inference. Requires
+  command "<slash>"   Run one registered terminal command without the TUI.
+  run:prepare         Prepare the selected profile/candidate without inference. Requires
                       --project and --context-window (declared model capacity).
   run:start           Ask the backend to start one Builder run. Requires --project,
                       --task, --profile, --workspace, --request-id and both
@@ -244,7 +247,7 @@ Options:
   --show-store-readiness  Print per-component store readiness with health.
   --project <id>          Target project for run:start.
   --task <id>             Accepted task id for run:start.
-  --profile <id>          Provider profile id for run:start.
+  --profile <id>          Selected provider profile for run:prepare/run:start.
   --workspace <id>        Registered candidate workspace id for run:start.
   --request-id <uuid>     Durable idempotency key for run:start. Reuse on retry.
   --expect-revision <n>   Optimistic concurrency against current authority.
@@ -287,6 +290,7 @@ export function parseCliArgs(argv: readonly string[]): CliInvocation {
   const { values, positionals } = parsed;
   const common = {
     projectId: values.project ?? null,
+    selectedProfileId: values.profile ?? null,
     requestId: values.request ?? null,
     requestRecordPath: values['request-record'] ?? (positionals[0]?.startsWith('tactical:') ? '.threadline/checkpoint.json' : '.threadline/admission.json'),
     acceptedFixtureDigest: values['accept-fixture'] ?? null,
@@ -318,6 +322,7 @@ export function parseCliArgs(argv: readonly string[]): CliInvocation {
     return { ...common, command: name, echoText: null, start: null, runId: null, cancelReason: null };
   }
 
+  if(name==='command'){return {...common,command:'command',echoText:positionals.slice(1).join(' '),start:null,runId:null,cancelReason:null};}
   if (name === 'run:start') {
     return {
       command: name,

@@ -105,6 +105,7 @@ export async function ensureCoreSchema(deps: MigrationDeps): Promise<MigrationRe
     await migrateCheckpointState(deps);
     await migrateCheckpointIntent(deps);
     await migrateCheckpointOutcomes(deps);
+    await migrateContextFacts(deps);
     await grantApplicationPrivileges(deps);
     return { status: current, durationMs: Date.now() - startedAt };
   }
@@ -149,6 +150,7 @@ export async function ensureCoreSchema(deps: MigrationDeps): Promise<MigrationRe
   await migrateCheckpointState(deps);
   await migrateCheckpointIntent(deps);
   await migrateCheckpointOutcomes(deps);
+    await migrateContextFacts(deps);
   await grantApplicationPrivileges(deps);
 
   const applied = await readSchemaStatus(deps.migrationDb);
@@ -356,4 +358,26 @@ async function migrateCheckpointOutcomes(deps:MigrationDeps):Promise<void> {
     await tx.rows(CHECKPOINT_OUTCOMES_SQL);
     await tx.rows("INSERT INTO threadline.schema_migrations(id,store,version,checksum) VALUES(gen_random_uuid(),'postgres',6,$1)",[checksum]);
   });
+}
+
+// M05 reuses the fenced packet/delivery/message tables; earlier versions stay immutable.
+const CONTEXT_FACTS_SQL = `ALTER TABLE threadline.context_packets ADD COLUMN owner_user_id uuid REFERENCES threadline.users(id);
+ALTER TABLE threadline.context_deliveries ADD COLUMN attempt_id uuid,
+ ADD COLUMN lifecycle text CHECK(lifecycle IN ('staged','journaled','dispatch_observed','outcome_unknown','terminal_observed')),
+ ADD COLUMN occurrence_json jsonb, ADD COLUMN transition_json jsonb;
+CREATE UNIQUE INDEX context_occurrence_attempt ON threadline.context_deliveries(tenant_id,project_id,context_packet_id,attempt_id);
+ALTER TABLE threadline.provider_profiles ADD COLUMN selection_operation_id uuid, ADD COLUMN selection_digest char(64);
+CREATE UNIQUE INDEX profile_selection_intent ON threadline.provider_profiles(tenant_id,project_id,owner_user_id,selection_operation_id);
+ALTER TABLE threadline.project_messages ADD COLUMN input_kind text, ADD COLUMN inference_consent text,
+ ADD COLUMN task_graph_id uuid;
+CREATE INDEX context_packet_task_owner ON threadline.context_packets(tenant_id,project_id,task_graph_id,owner_user_id,created_at DESC);`;
+async function migrateContextFacts(deps: MigrationDeps): Promise<void> {
+ await deps.migrationDb.withTransaction(async tx => {
+  await tx.rows('SELECT pg_advisory_xact_lock(73010402)');
+  const checksum=sha256Hex(CONTEXT_FACTS_SQL);
+  const rows=await tx.rows<{checksum:string}>("SELECT checksum FROM threadline.schema_migrations WHERE store='postgres' AND version=7");
+  if(rows[0]) { if(rows[0].checksum.trim()!==checksum) throw new ThreadlineError('schema_incompatible','Context migration checksum differs.'); return; }
+  await tx.rows(CONTEXT_FACTS_SQL);
+  await tx.rows("INSERT INTO threadline.schema_migrations(id,store,version,checksum) VALUES(gen_random_uuid(),'postgres',7,$1)",[checksum]);
+ });
 }

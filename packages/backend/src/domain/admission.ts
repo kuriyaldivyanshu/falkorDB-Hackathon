@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { ThreadlineError, isAdmissionReceipt, isGoalAdmissionInput, type AcceptedAuthority,
+import { ThreadlineError, isAdmissionReceipt, isGoalAdmissionInput, isUuid, type AcceptedAuthority,
   type AuthorityView, type GoalAdmissionInput, type GoalAdmissionResult, type AdmissionReceipt } from '@threadline/shared';
 import type { Graph } from 'falkordb';
 import type { Logger } from '../log.js';
@@ -148,14 +148,25 @@ export async function readCurrentAuthority(deps: AdmissionDeps, principal: Authe
     throw new ThreadlineError('authority_unavailable','Current goal/task/source topology is missing, duplicated or changed during read.');
   const source=await requireSource(deps,principal,project,row.source_message_id);
   if (row.source_digest!==source.body_digest || row.goal_text!==source.body) throw new ThreadlineError('authority_unavailable','Current goal provenance does not match its original source.');
-  const c=await graph.roQuery<{constraint_id:string;version_id:string;revision:number;current_revision:number;field:string;value:number;source_id:string;declared_source_id:string}>(READ_CONSTRAINTS_CYPHER,{params:{task_id:a.taskId}});
+  const c=await graph.roQuery<{constraint_id:string;version_id:string;revision:number;current_revision:number;field:string;value:number;source_id:string;declared_source_id:string;source_message_id:string|null;source_digest:string|null}>(READ_CONSTRAINTS_CYPHER,{params:{task_id:a.taskId}});
   const k=await graph.roQuery<{criterion_id:string;ref:string;text:string;required:boolean}>(READ_CRITERIA_CYPHER,{params:{task_id:a.taskId}});
   if (c.data?.length!==a.constraints.length || k.data?.length!==a.criteria.length) throw new ThreadlineError('authority_unavailable','Required constraint or criterion bindings are incomplete or duplicated.');
   for (const expected of a.constraints) {
     const matches=c.data.filter(v=>v.constraint_id===expected.constraintId);
     const value=matches[0];
-    if(matches.length!==1 || value===undefined || value.version_id!==expected.versionId || value.revision!==expected.revision || value.current_revision!==expected.revision || value.field!==expected.field || value.value!==expected.value || value.source_id!==expected.sourceId || value.declared_source_id!==expected.sourceId)
+    if(matches.length!==1 || value===undefined || value.version_id!==expected.versionId || value.revision!==expected.revision || value.current_revision!==expected.revision || value.field!==expected.field || value.value!==expected.value || value.source_id!==expected.sourceId || value.declared_source_id!==expected.sourceId || !isUuid(value.source_message_id) || typeof value.source_digest!=='string' || !/^[a-f0-9]{64}$/.test(value.source_digest))
       throw new ThreadlineError('authority_unavailable','A constraint has no unique matching current version.');
+  }
+  const goalSource={sourceId:row.source_id,sourceMessageId:row.source_message_id,contentDigest:row.source_digest,recordVersion:String(row.goal_revision)};
+  const constraintSources=[];
+  for(const expected of a.constraints){
+    const value=c.data?.find(v=>v.constraint_id===expected.constraintId);
+    if(!value || !isUuid(value.source_message_id) || typeof value.source_digest!=='string')
+      throw new ThreadlineError('authority_unavailable','A constraint Source is unavailable.');
+    const message=await requireSource(deps,principal,project,value.source_message_id);
+    if(message.body_digest!==value.source_digest)throw new ThreadlineError('authority_unavailable','A constraint Source digest does not match its message.');
+    constraintSources.push({constraintId:expected.constraintId,sourceId:value.source_id,sourceMessageId:value.source_message_id,
+      contentDigest:value.source_digest,recordVersion:String(value.revision)});
   }
   for (const expected of a.criteria) {
     const matches=k.data.filter(v=>v.criterion_id===expected.criterionId);
@@ -163,7 +174,9 @@ export async function readCurrentAuthority(deps: AdmissionDeps, principal: Authe
       throw new ThreadlineError('authority_unavailable','A required criterion is missing or inconsistent.');
   }
   return {...a,goalText:row.goal_text,projectSlug:project.slug,graphKey:project.graphKey,
-    taskStateId:row.state_id,sourceMessageIds:[row.source_message_id],taskRevision:row.task_revision,taskStatus:row.task_status};
+    goalSource,constraintSources,taskStateId:row.state_id,
+    sourceMessageIds:[...new Set([row.source_message_id,...constraintSources.map(source=>source.sourceMessageId)])],
+    taskRevision:row.task_revision,taskStatus:row.task_status};
 }
 
 export async function reconcilePendingAdmissions(deps: AdmissionDeps, tenantId: string, projectId: string, _now: Date): Promise<{resolved:number;unresolved:number;quarantined:number}> {

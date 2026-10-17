@@ -1,6 +1,6 @@
 # Threadline Agent B checklist — Harness and Frontend
 
-**Updated 16 October 2026. M00–M03 are merged; M04 is locally integrated and verified. M05 onward remain proposed.** This is one lane of the [master code-first checklist](track2-implementation-checklist.md), not a separate product or branch. Read master sections 1–4 before editing. Use the same task IDs in your handoff. Master status is authoritative; reconcile this lane view at each milestone.
+**Updated 17 October 2026. M00–M04 are merged; M05 is locally integrated and verified, uncommitted. M06 onward remain proposed.** This is one lane of the [master code-first checklist](track2-implementation-checklist.md), not a separate product or branch. Read master sections 1–4 before editing. Use the same task IDs in your handoff. Master status is authoritative; reconcile this lane view at each milestone.
 
 Work beside [Agent A](track2-agent-a-checklist.md) from the same recorded base and integration checkout. Do not create branches, commit, push, reset or merge during parallel coding. The integration owner creates one combined branch/commit only after both lanes and joint checks are ready.
 
@@ -117,27 +117,21 @@ Earlier lane-only test results used stale M00 dist and are superseded by the com
 
 ### M05 — Bounded graph retrieval and context construction
 
-**Depends on:** M03 and M04; real model loop M02. **Combined milestone result:** The next request contains exact current authority plus relevant bounded sourced memory, without replaying the old transcript.
+**Verified locally — 17 October 2026.** Combined real-store, injected-provider and PTY checks supersede the earlier partial handoffs. [M05 integration evidence and limitations](review/m05-integration-verification.md). M05 is uncommitted; no paid inference was used.
 
-- [ ] **M05B01** Replace the single current memory block on request reconstruction instead of appending another copy per refresh.
-- [ ] **M05B02** Keep valid tool-call/result pairs in bounded recent working history; prune an entire obsolete episode or replace it with an attributed record, not an orphaned tool response.
-- [ ] **M05B03** Include instructions, tool schemas, current input, history and memory in whole-request budget accounting; use a compatible tokenizer or conservative labelled estimate.
-- [ ] **M05B04** Wire search/refresh/source retrieval to the dispatcher with exact returned Sources and policy limits.
-- [ ] **M05B05** Record context submission occurrence IDs tied to each model attempt; same packet in two turns has two delivery records, persistence retry of one occurrence deduplicates.
-- [ ] **M05B06** Implement plain context-inspector text: current requirement/revision, included failure/advice reasons, Source ranges and omitted counts.
-- [ ] **M05B07** Test request rendering with many individually small retrieval calls so cumulative growth cannot bypass the next input limit.
+- [x] **M05B01** Replace the single current memory block on request reconstruction instead of appending another copy per refresh.
+- [x] **M05B02** Keep valid tool-call/result pairs in bounded recent working history; prune an entire obsolete episode or replace it with an attributed record, not an orphaned tool response.
+- [x] **M05B03** Include instructions, tool schemas, current input, history and memory in whole-request budget accounting; use a compatible tokenizer or conservative labelled estimate.
+- [x] **M05B04** Wire search/refresh/source retrieval to the dispatcher with exact returned Sources and policy limits.
+- [x] **M05B05** Record context submission occurrence IDs tied to each model attempt; same packet in two turns has two delivery records, persistence retry of one occurrence deduplicates.
+- [x] **M05B06** Implement plain context-inspector text: current requirement/revision, included failure/advice reasons, Source ranges and omitted counts.
+- [x] **M05B07** Test request rendering with many individually small retrieval calls so cumulative growth cannot bypass the next input limit.
+- [x] **M05B08** Implement the small command registry, typed parser, generated /help and /hotkeys, capability-aware prefix completion and unknown-slash rejection; use Pi catalog/completion patterns with Ink, not its runtime.
+- [x] **M05B09** Wire all M05 commands in the terminal command contract: setup/model, init/admit/task/status/session, run prepare/start/inspect/cancel, tactical/checkpoint/plan/recover, refresh/context/compact/search/source/history/replay and quit; share typed clients with CLI and preserve existing aliases.
+- [x] **M05B10** Build reusable Ink selector/forms and compact header/activity/inspector/input layout; model selection is prospective, mutations preserve stable retry IDs/base revisions, and masked credentials never enter history.
+- [x] **M05B11** Replace normal TUI development echo with durable explicit /send and plain-text instruction semantics; show inference consent/billing, refuse unsupported busy follow-up, retain drafts and never send unknown slash input to a model.
 
-**Before branch readiness:** coordinate with Agent A, then complete this milestone’s joint checks in [master section 5](track2-implementation-checklist.md#5-milestone-sequence). Proposed single combined commit: `feat: assemble bounded task context from graph memory`.
-
-
-#### Incremental terminal contract — additional gates
-
-See [command behavior, backend dependencies and Pi reuse](track2-terminal-command-contract.md). These new gates are proposed; prior completion marks do not cover them.
-
-- [ ] **M05B08** Implement the small command registry, typed parser, generated /help and /hotkeys, capability-aware prefix completion and unknown-slash rejection; use Pi catalog/completion patterns with Ink, not its runtime.
-- [ ] **M05B09** Wire all M05 commands in the terminal command contract: setup/model, init/admit/task/status/session, run prepare/start/inspect/cancel, tactical/checkpoint/plan/recover, refresh/context/compact/search/source/history/replay and quit; share typed clients with CLI and preserve existing aliases.
-- [ ] **M05B10** Build reusable Ink selector/forms and compact header/activity/inspector/input layout; model selection is prospective, mutations preserve stable retry IDs/base revisions, and masked credentials never enter history.
-- [ ] **M05B11** Replace normal TUI development echo with durable explicit /send and plain-text instruction semantics; show inference consent/billing, refuse unsupported busy follow-up, retain drafts and never send unknown slash input to a model.
+**Joint gates:** M05J01–J06 are verified in the [master checklist](track2-implementation-checklist.md#5-milestone-sequence). Procedures, protected completion and fresh successors retain their later milestone gates.
 
 ### M06 — Guarded patches, snapshots and contained registered commands
 

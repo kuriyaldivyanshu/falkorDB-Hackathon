@@ -243,7 +243,7 @@ export function registerRunRoutes(app: FastifyInstance, deps: RouteDeps): void {
     const body = request.body;
     if (!isRecord(body) || typeof body['projectId'] !== 'string' || !isUuid(body['projectId']) || typeof body['contextWindowTokens'] !== 'number')
       throw new ThreadlineError('invalid_request', 'projectId and declared contextWindowTokens are required.');
-    return reply.send(await runtime().prepare(principal, body['projectId'], body['contextWindowTokens']));
+    return reply.send(await runtime().prepare(principal, body['projectId'], body['contextWindowTokens'], typeof body['profileId']==='string'?body['profileId']:undefined));
   });
   app.post(ROUTES.runStart, async (request, reply) => {
     const principal = await requireServices(deps).authenticate(readHeader(request.headers.authorization));

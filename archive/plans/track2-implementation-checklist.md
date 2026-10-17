@@ -1,6 +1,6 @@
 # Threadline code-first implementation checklist
 
-**Updated 16 October 2026. M00–M03 are merged; M04 is locally integrated and verified. M05 onward remain proposed. Two full-time contributors.** This is the execution checklist for the complete `archive/plans/` collection. It changes build order following the user's instruction: **start with working backend/frontend code, then persistence and the model/tool flow, then containment, protected verification, recovery evidence and packaging.** The [development blueprint](track2-development-blueprint.md) still controls product scope and trust contracts; this checklist supersedes its preflight-first sequencing only.
+**Updated 17 October 2026. M00–M04 are merged; M05 is locally integrated and verified, uncommitted. M06 onward remain proposed. Two full-time contributors.** This is the execution checklist for the complete `archive/plans/` collection. It changes build order following the user's instruction: **start with working backend/frontend code, then persistence and the model/tool flow, then containment, protected verification, recovery evidence and packaging.** The [development blueprint](track2-development-blueprint.md) still controls product scope and trust contracts; this checklist supersedes its preflight-first sequencing only.
 
 Implementation boxes start unchecked and are updated only from verified evidence. A plan, stub, diagram or passing documentation check does not finish a runtime task. Use actual code/output/evidence before checking a box. No Git branch, commit, push, merge, package publication or implementation is performed by creating this document.
 
@@ -116,7 +116,7 @@ Before a merge or branch switch later, ensure any remaining unrelated work is pr
 
 Milestones M00–M13 form the MVP path. Work inside a milestone is parallel where file ownership and inputs allow. The joint block finishes the batch and triggers the section 4 workflow. Later milestones may be developed behind disabled interfaces, but their acceptance depends on the stated earlier features.
 
-Human commands ship alongside backend capabilities under the [terminal command and UI contract](track2-terminal-command-contract.md); follow its M05.1–M05.3 integration slices. M10 consolidates already-working controls rather than first adding them. New command gates are unchecked additions, not changes to historical M04 acceptance.
+Human commands ship alongside backend capabilities under the [terminal command and UI contract](track2-terminal-command-contract.md); follow its M05.1–M05.3 integration slices. M10 consolidates already-working controls rather than first adding them. M05 command gates are verified with M05; later command gates remain unchecked. Historical M04 acceptance is unchanged.
 
 The first checkpoint is intentionally a working service/TUI, not a checker/lockfile/preflight project. M02 starts with real read-only model tools. Actual command exposure is M06; protected completion is M08. No calendar estimate is imposed without a deadline.
 
@@ -316,51 +316,53 @@ The first checkpoint is intentionally a working service/TUI, not a checker/lockf
 
 **Depends on:** M03 and M04; real model loop M02. **Combined result:** The next request contains exact current authority plus relevant bounded sourced memory, without replaying the old transcript.
 
-**Proposed combined commit:** `feat: assemble bounded task context from graph memory`.
+**Suggested combined commit (not created):** `feat: assemble bounded task context from graph memory`.
+
+**Verified locally — 17 October 2026:** all 29 M05 gates below passed affected checks against real stores and an injected provider. [Implementation, command inventory, evidence and limits](review/m05-integration-verification.md). M00–M04 are merged; M05 remains uncommitted. Procedures and protected proof acceptance remain M09/M08; the M05 selector admits no unvalidated procedures or completion proof.
 
 #### Variant A — Memory/Coordinator
 
-- [ ] **M05A01** Implement indexed current-task closure from stable goals/constraints/criteria, TaskState, candidate and required Sources; do not rank mandatory authority by similarity.
-- [ ] **M05A02** Resolve current governing versions, graph epoch/generation/revision and membership/source scope before selection; recheck version guards before admission.
-- [ ] **M05A03** Implement P0 exact authority/unresolved effects, P1 current blockers/checklist/diagnostics, P2 compatible advice and P3 bulk references, with reasons and source/version bindings.
-- [ ] **M05A04** Implement at most three hops/64 optional candidates, four advisory failures and two procedures, using declared compatibility rather than global recency.
-- [ ] **M05A05** Differentiate exact proof from advice: proof requires current candidate/criteria/environment/revision; advice requires relevant paths/signature/task family/preconditions and never completes work.
-- [ ] **M05A06** Implement immutable packet manifest with selected items, exact/excerpt/reference representations, template/policy version, token count precision, inclusion reasons and omission counts.
-- [ ] **M05A07** Enforce 6,000 default/8,000 maximum packet and whole-request limits, preserving output/headroom. Exact mandatory overflow blocks or requires accepted narrower scope/compatible budget.
-- [ ] **M05A08** Implement source deduplication by scope/version/digest; do not merge unrelated candidates/failures or treat repeat messages as corroboration.
-- [ ] **M05A09** Implement task-relevant `memory.retrieve(mode=search)` with bounded output and cumulative next-request allocation; no unrestricted Cypher, vector database or classifier API.
+- [x] **M05A01** Implement indexed current-task closure from stable goals/constraints/criteria, TaskState, candidate and required Sources; do not rank mandatory authority by similarity.
+- [x] **M05A02** Resolve current governing versions, graph epoch/generation/revision and membership/source scope before selection; recheck version guards before admission.
+- [x] **M05A03** Implement P0 exact authority/unresolved effects, P1 current blockers/checklist/diagnostics, P2 compatible advice and P3 bulk references, with reasons and source/version bindings.
+- [x] **M05A04** Implement at most three hops/64 optional candidates, four advisory failures and two procedures, using declared compatibility rather than global recency.
+- [x] **M05A05** Differentiate exact proof from advice: proof requires current candidate/criteria/environment/revision; advice requires relevant paths/signature/task family/preconditions and never completes work.
+- [x] **M05A06** Implement immutable packet manifest with selected items, exact/excerpt/reference representations, template/policy version, token count precision, inclusion reasons and omission counts.
+- [x] **M05A07** Enforce 6,000 default/8,000 maximum packet and whole-request limits, preserving output/headroom. Exact mandatory overflow blocks or requires accepted narrower scope/compatible budget.
+- [x] **M05A08** Implement source deduplication by scope/version/digest; do not merge unrelated candidates/failures or treat repeat messages as corroboration.
+- [x] **M05A09** Implement task-relevant `memory.retrieve(mode=search)` with bounded output and cumulative next-request allocation; no unrestricted Cypher, vector database or classifier API.
 
 #### Variant B — Harness/Frontend
 
-- [ ] **M05B01** Replace the single current memory block on request reconstruction instead of appending another copy per refresh.
-- [ ] **M05B02** Keep valid tool-call/result pairs in bounded recent working history; prune an entire obsolete episode or replace it with an attributed record, not an orphaned tool response.
-- [ ] **M05B03** Include instructions, tool schemas, current input, history and memory in whole-request budget accounting; use a compatible tokenizer or conservative labelled estimate.
-- [ ] **M05B04** Wire search/refresh/source retrieval to the dispatcher with exact returned Sources and policy limits.
-- [ ] **M05B05** Record context submission occurrence IDs tied to each model attempt; same packet in two turns has two delivery records, persistence retry of one occurrence deduplicates.
-- [ ] **M05B06** Implement plain context-inspector text: current requirement/revision, included failure/advice reasons, Source ranges and omitted counts.
-- [ ] **M05B07** Test request rendering with many individually small retrieval calls so cumulative growth cannot bypass the next input limit.
+- [x] **M05B01** Replace the single current memory block on request reconstruction instead of appending another copy per refresh.
+- [x] **M05B02** Keep valid tool-call/result pairs in bounded recent working history; prune an entire obsolete episode or replace it with an attributed record, not an orphaned tool response.
+- [x] **M05B03** Include instructions, tool schemas, current input, history and memory in whole-request budget accounting; use a compatible tokenizer or conservative labelled estimate.
+- [x] **M05B04** Wire search/refresh/source retrieval to the dispatcher with exact returned Sources and policy limits.
+- [x] **M05B05** Record context submission occurrence IDs tied to each model attempt; same packet in two turns has two delivery records, persistence retry of one occurrence deduplicates.
+- [x] **M05B06** Implement plain context-inspector text: current requirement/revision, included failure/advice reasons, Source ranges and omitted counts.
+- [x] **M05B07** Test request rendering with many individually small retrieval calls so cumulative growth cannot bypass the next input limit.
 
 #### Joint integration and branch readiness
 
-- [ ] **M05J01** Inspect an actual submitted provider input artifact and verify exact current accepted criteria, one current memory block and no full inherited transcript.
-- [ ] **M05J02** Use synthetic relevant error plus noisy successful logs: include the diagnostic/invocation/candidate, omit bulk with visible counts and retain source access.
-- [ ] **M05J03** Force mandatory overflow, stale current-version pointers and unauthorized Source references; no provider request proceeds.
-- [ ] **M05J04** Run repeated refresh/search and observe bounded packet/input usage with no extra summarizer call.
-- [ ] **M05J05** Compare compatible advice versus stale proof on a changed candidate/requirement; only exact current evidence can be accepted later.
+- [x] **M05J01** Inspect an actual submitted provider input artifact and verify exact current accepted criteria, one current memory block and no full inherited transcript.
+- [x] **M05J02** Use synthetic relevant error plus noisy successful logs: include the diagnostic/invocation/candidate, omit bulk with visible counts and retain source access.
+- [x] **M05J03** Force mandatory overflow, stale current-version pointers and unauthorized Source references; no provider request proceeds.
+- [x] **M05J04** Run repeated refresh/search and observe bounded packet/input usage with no extra summarizer call.
+- [x] **M05J05** Compare compatible advice versus stale proof on a changed candidate/requirement; only exact current evidence can be accepted later.
 
 
 #### Incremental terminal contract — additional gates
 
-See [command behavior, backend dependencies and Pi reuse](track2-terminal-command-contract.md). These new gates are proposed; prior completion marks do not cover them.
+See [command behavior, backend dependencies and Pi reuse](track2-terminal-command-contract.md). These gates are verified in the assembled M05 implementation; see the dated evidence below.
 
-- [ ] **M05A10** Publish versioned authenticated operation-capability metadata and typed client bindings for the M05 command catalog; reuse existing routes and preserve per-call authorization.
-- [ ] **M05A11** Implement authorized model/profile discovery and prospective immutable profile selection; prepare/start binds selected provider/model/billing/limits, denies stale selection and never changes an active run or probes paid inference automatically.
-- [ ] **M05A12** Expose existing checkpoint/plan/recovery plus bounded refresh/context/compact/search through explicit typed human operations; define durable plain-text/follow-up admission, refusal while busy, and initial instruction Sources without silently accepting requirement changes.
-- [ ] **M05B08** Implement the small command registry, typed parser, generated /help and /hotkeys, capability-aware prefix completion and unknown-slash rejection; use Pi catalog/completion patterns with Ink, not its runtime.
-- [ ] **M05B09** Wire all M05 commands in the terminal command contract: setup/model, init/admit/task/status/session, run prepare/start/inspect/cancel, tactical/checkpoint/plan/recover, refresh/context/compact/search/source/history/replay and quit; share typed clients with CLI and preserve existing aliases.
-- [ ] **M05B10** Build reusable Ink selector/forms and compact header/activity/inspector/input layout; model selection is prospective, mutations preserve stable retry IDs/base revisions, and masked credentials never enter history.
-- [ ] **M05B11** Replace normal TUI development echo with durable explicit /send and plain-text instruction semantics; show inference consent/billing, refuse unsupported busy follow-up, retain drafts and never send unknown slash input to a model.
-- [ ] **M05J06** Verify each M05 command through real backend/client/TUI composition, help/completion availability, selected-model start binding, zero inference on read/compact/setup, authorization, exact retries, stale conflicts, bounded context and actual terminal restoration; publish implemented versus planned command inventory.
+- [x] **M05A10** Publish versioned authenticated operation-capability metadata and typed client bindings for the M05 command catalog; reuse existing routes and preserve per-call authorization.
+- [x] **M05A11** Implement authorized model/profile discovery and prospective immutable profile selection; prepare/start binds selected provider/model/billing/limits, denies stale selection and never changes an active run or probes paid inference automatically.
+- [x] **M05A12** Expose existing checkpoint/plan/recovery plus bounded refresh/context/compact/search through explicit typed human operations; define durable plain-text/follow-up admission, refusal while busy, and initial instruction Sources without silently accepting requirement changes.
+- [x] **M05B08** Implement the small command registry, typed parser, generated /help and /hotkeys, capability-aware prefix completion and unknown-slash rejection; use Pi catalog/completion patterns with Ink, not its runtime.
+- [x] **M05B09** Wire all M05 commands in the terminal command contract: setup/model, init/admit/task/status/session, run prepare/start/inspect/cancel, tactical/checkpoint/plan/recover, refresh/context/compact/search/source/history/replay and quit; share typed clients with CLI and preserve existing aliases.
+- [x] **M05B10** Build reusable Ink selector/forms and compact header/activity/inspector/input layout; model selection is prospective, mutations preserve stable retry IDs/base revisions, and masked credentials never enter history.
+- [x] **M05B11** Replace normal TUI development echo with durable explicit /send and plain-text instruction semantics; show inference consent/billing, refuse unsupported busy follow-up, retain drafts and never send unknown slash input to a model.
+- [x] **M05J06** Verify each M05 command through real backend/client/TUI composition, help/completion availability, selected-model start binding, zero inference on read/compact/setup, authorization, exact retries, stale conflicts, bounded context and actual terminal restoration; publish implemented versus planned command inventory.
 
 ### M06 — Guarded patches, snapshots and contained registered commands
 

@@ -92,6 +92,8 @@ export interface ExecutionRegistry {
     modelId: string;
     adapterVersion: string;
     settings: Readonly<Record<string, unknown>>;
+    selectionOperationId?: string;
+    selectionDigest?: string;
   }): Promise<ProviderProfileView>;
   registerWorkspace(params: {
     tenantId: string;
@@ -217,8 +219,8 @@ export function createExecutionRegistry(deps: ExecutionRegistryDeps): ExecutionR
         await tx.rows(
           `INSERT INTO threadline.provider_profiles
              (tenant_id, project_id, id, owner_user_id, provider_account_id, name,
-              model_id, adapter_version, effort, settings, config_digest, created_at)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULL, $9, $10, $11)`,
+              model_id, adapter_version, effort, settings, config_digest, created_at, selection_operation_id,selection_digest)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULL, $9, $10, $11,$12,$13)`,
           [
             params.tenantId,
             params.projectId,
@@ -231,6 +233,8 @@ export function createExecutionRegistry(deps: ExecutionRegistryDeps): ExecutionR
             JSON.stringify(params.settings),
             configDigest,
             clock(),
+            params.selectionOperationId??null,
+            params.selectionDigest??null,
           ],
         );
       });

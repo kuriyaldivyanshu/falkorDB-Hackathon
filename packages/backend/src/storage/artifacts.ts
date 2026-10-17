@@ -45,6 +45,7 @@ const ARTIFACT_MEDIA_TYPES: Readonly<Record<string, string>> = {
   registered_command_output: 'application/octet-stream',
   diagnostic_output: 'application/octet-stream',
   episode: 'application/json',
+  context_packet: 'application/json',
 };
 
 function mediaTypeFor(kind: ArtifactKind, override?: string): string {

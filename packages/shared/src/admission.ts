@@ -135,6 +135,10 @@ export interface AuthorityView {
   readonly goalVersionId: Uuid;
   readonly goalRevision: number;
   readonly goalText: string;
+  /** Graph Source and SQL message identities for the accepted goal text. */
+  readonly goalSource: AuthoritySourceBinding;
+  /** Per-constraint provenance, resolved from each current graph Source edge. */
+  readonly constraintSources: readonly ConstraintSourceBinding[];
   readonly sourceMessageIds: readonly Uuid[];
   readonly constraints: readonly AcceptedConstraintRef[];
   readonly criteria: readonly AcceptedCriterionRef[];
@@ -142,6 +146,18 @@ export interface AuthorityView {
   readonly taskStateId: Uuid;
   readonly taskRevision: number;
   readonly taskStatus: string;
+}
+
+/** Maps a graph Source identity to the exact SQL message and digest it names. */
+export interface AuthoritySourceBinding {
+  readonly sourceId: Uuid;
+  readonly sourceMessageId: Uuid;
+  readonly contentDigest: string;
+  readonly recordVersion: string;
+}
+
+export interface ConstraintSourceBinding extends AuthoritySourceBinding {
+  readonly constraintId: Uuid;
 }
 
 export interface PrincipalView {
@@ -218,9 +234,27 @@ export function isGoalAdmissionResult(value: unknown): value is GoalAdmissionRes
 }
 
 export function isAuthorityView(value: unknown): value is AuthorityView {
-  return isAcceptedAuthority(value) && object(value) && typeof value.projectSlug === 'string' &&
-    typeof value.graphKey === 'string' && typeof value.goalText === 'string' &&
-    Array.isArray(value.sourceMessageIds) && value.sourceMessageIds.length > 0 && value.sourceMessageIds.every(isUuid);
+  if (!isAcceptedAuthority(value) || !object(value) || typeof value.projectSlug !== 'string' ||
+      typeof value.graphKey !== 'string' || typeof value.goalText !== 'string' ||
+      !isAuthoritySourceBinding(value.goalSource) || !Array.isArray(value.constraintSources) ||
+      value.constraintSources.length !== value.constraints.length || !Array.isArray(value.sourceMessageIds) ||
+      value.sourceMessageIds.length === 0 || !value.sourceMessageIds.every(isUuid)) return false;
+  const sourceMessageIds = value.sourceMessageIds;
+  const goalSource = value.goalSource;
+  return sourceMessageIds.includes(goalSource.sourceMessageId) &&
+    value.constraintSources.every((binding) => isConstraintSourceBinding(binding) &&
+      value.constraints.some((constraint) => constraint.constraintId === binding.constraintId && constraint.sourceId === binding.sourceId) &&
+      sourceMessageIds.includes(binding.sourceMessageId));
+}
+
+function isAuthoritySourceBinding(value: unknown): value is AuthoritySourceBinding {
+  return object(value) && isUuid(value.sourceId) && isUuid(value.sourceMessageId) &&
+    typeof value.contentDigest === 'string' && /^[a-f0-9]{64}$/.test(value.contentDigest) &&
+    typeof value.recordVersion === 'string' && /^[0-9]+$/.test(value.recordVersion);
+}
+
+function isConstraintSourceBinding(value: unknown): value is ConstraintSourceBinding {
+  return isAuthoritySourceBinding(value) && object(value) && isUuid(value.constraintId);
 }
 
 export function isPrincipalView(value: unknown): value is PrincipalView {
