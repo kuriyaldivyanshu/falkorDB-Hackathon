@@ -2,12 +2,19 @@ import type { Graph } from 'falkordb';
 
 import {
   ThreadlineError,
+  authorMemoryContent,
+  memoryContentSchema,
+  memorySupportSchema,
   memoryVersionSchema,
   parseContract,
   type Applicability,
+  type EpisodeEvidencePrecision,
+  type EpisodeOutcome,
+  type MemoryAuthoring,
   type MemoryContent,
   type MemoryDocument,
   type MemoryOperationResult,
+  type MemorySupport,
   type MemoryVersion,
   type ObservedUnder,
   type OperationState,
@@ -20,6 +27,7 @@ import {
   readProjectRoot,
   type ProjectRootView,
   type VersionDetailRow,
+  type VersionSupportRow,
 } from '../storage/memoryGraph.js';
 import type { TxClient } from '../storage/pg.js';
 import type { AuthenticatedCall } from './auth.js';
@@ -89,7 +97,12 @@ export interface MemoryRequestFacts {
   readonly memoryMode: 'create' | 'attach';
   /** The memory the caller named, or `null` when it asked for a new one. */
   readonly requestedMemoryId: string | null;
-  readonly content: MemoryContent;
+  /**
+   * The authored form, never the resolved one. A procedure's state and review
+   * reference are decided by this service, so including them here would make an
+   * exact retry disagree with the admission it is retrying.
+   */
+  readonly content: MemoryAuthoring;
   readonly applicability: Applicability;
   readonly observedUnder: ObservedUnder;
   readonly sourceIds: readonly string[];
@@ -97,6 +110,8 @@ export interface MemoryRequestFacts {
   readonly originTaskId: string | null;
   readonly expectedHead: string | null;
   readonly reason: string | null;
+  /** Evidence precision the caller asked for; `null` when it asked for none. */
+  readonly requestedEvidencePrecision: EpisodeEvidencePrecision | null;
 }
 
 /**
@@ -118,17 +133,29 @@ export function memoryRequestDigest(facts: MemoryRequestFacts): string {
     originTaskId: facts.originTaskId,
     expectedHead: facts.expectedHead,
     reason: facts.reason,
+    requestedEvidencePrecision: facts.requestedEvidencePrecision ?? undefined,
   });
 }
 
-/** The same facts, projected from a captured intent document. */
+/**
+ * The same facts, projected from a captured intent document.
+ *
+ * An episode is projected by {@link episodeDocumentRequestFacts} instead: its
+ * facts are an evidence classification rather than an authored statement, and
+ * routing it through this projection would silently drop that difference.
+ */
 export function memoryDocumentRequestFacts(projectId: string, document: MemoryDocument): MemoryRequestFacts {
+  if (document.operationKind === 'memory.episode.record') {
+    throw new ThreadlineError('internal_error', 'An episode document is projected by episodeDocumentRequestFacts.');
+  }
   return {
     kind: document.operationKind,
     projectId,
     memoryMode: document.memoryMode,
     requestedMemoryId: document.memoryMode === 'create' ? null : document.memoryId,
-    content: document.content,
+    // Projected back to the authored form, so a digest never covers a decision
+    // this service made rather than the caller.
+    content: authorMemoryContent(document.content),
     applicability: document.applicability,
     observedUnder: document.observedUnder,
     sourceIds: document.sourceIds,
@@ -136,6 +163,67 @@ export function memoryDocumentRequestFacts(projectId: string, document: MemoryDo
     originTaskId: document.originTaskId,
     expectedHead: document.expectedHead,
     reason: document.reason,
+    requestedEvidencePrecision: document.requestedEvidencePrecision ?? null,
+  };
+}
+
+/**
+ * The durable facts one episode intent was admitted from.
+ *
+ * Separate from {@link MemoryRequestFacts} because an episode is not a proposal:
+ * it carries the evidence precision the caller *asked* for and nothing about a
+ * memory identity the caller may choose. The precision the server granted is
+ * resolved from the cited evidence and recorded in the captured document, so an
+ * exact retry still matches its first admission even if eligibility later moves.
+ */
+export interface EpisodeRequestFacts {
+  readonly kind: 'memory.episode.record';
+  readonly projectId: string;
+  readonly action: string;
+  readonly outcome: EpisodeOutcome;
+  readonly observation: string;
+  readonly uncertainty: string | null;
+  readonly applicability: Applicability;
+  readonly observedUnder: ObservedUnder;
+  readonly sourceIds: readonly string[];
+  readonly originTaskId: string | null;
+  readonly requestedEvidencePrecision: EpisodeEvidencePrecision | null;
+}
+
+/** One canonical request digest for an episode intent, shared by admission and delivery. */
+export function episodeRequestDigest(facts: EpisodeRequestFacts): string {
+  return canonicalDigest({
+    kind: facts.kind,
+    projectId: facts.projectId,
+    action: facts.action,
+    outcome: facts.outcome,
+    observation: facts.observation,
+    uncertainty: facts.uncertainty,
+    applicability: facts.applicability,
+    observedUnder: facts.observedUnder,
+    sourceIds: [...facts.sourceIds],
+    originTaskId: facts.originTaskId,
+    requestedEvidencePrecision: facts.requestedEvidencePrecision,
+  });
+}
+
+/** The same episode facts, projected from a captured intent document. */
+export function episodeDocumentRequestFacts(projectId: string, document: MemoryDocument): EpisodeRequestFacts {
+  if (document.content.kind !== 'episodic') {
+    throw new ThreadlineError('internal_error', 'An episode intent document does not carry episodic content.');
+  }
+  return {
+    kind: 'memory.episode.record',
+    projectId,
+    action: document.content.action,
+    outcome: document.content.outcome,
+    observation: document.content.observation,
+    uncertainty: document.content.uncertainty,
+    applicability: document.applicability,
+    observedUnder: document.observedUnder,
+    sourceIds: document.sourceIds,
+    originTaskId: document.originTaskId,
+    requestedEvidencePrecision: document.requestedEvidencePrecision ?? null,
   };
 }
 
@@ -146,8 +234,19 @@ export function memoryDocumentRequestFacts(projectId: string, document: MemoryDo
  */
 export const MEMORY_DOCUMENT_MAX_BYTES = 128 * 1024;
 
-/** Renders one stored version row as the wire contract, refusing broken JSON. */
-export function toMemoryVersion(detail: VersionDetailRow): MemoryVersion {
+/**
+ * Renders one stored version row as the wire contract, refusing broken JSON.
+ *
+ * The version's own `content_json` is authoritative, because that is what the
+ * correction chain preserved: a superseded procedure still shows its own steps
+ * and a superseded episode still shows the outcome and uncertainty it recorded.
+ * A row written before this column existed is reconstructed from its semantic
+ * summary, which is exact for the only kind that could be written then.
+ *
+ * `supports` is supplied by the caller because it needs one bounded extra
+ * query for the whole page rather than one per version.
+ */
+export function toMemoryVersion(detail: VersionDetailRow, supports: readonly MemorySupport[] = []): MemoryVersion {
   const applicability = parseStoredJson(detail.applicability_json, 'applicability');
   const observedUnder = parseStoredJson(detail.observed_under_json, 'observed context');
   return parseContract(
@@ -156,7 +255,7 @@ export function toMemoryVersion(detail: VersionDetailRow): MemoryVersion {
       versionId: detail.version_id,
       memoryId: detail.memory_id,
       kind: detail.kind,
-      content: { kind: 'semantic', subtype: detail.subtype, statement: detail.statement },
+      content: storedContentOf(detail),
       acceptance: detail.acceptance,
       authorPrincipalId: detail.author_principal_id,
       authorSessionId: null,
@@ -170,9 +269,117 @@ export function toMemoryVersion(detail: VersionDetailRow): MemoryVersion {
       supersedesVersionId: detail.supersedes_version_id ?? null,
       contradictsVersionIds: [...detail.contradicts_ids].sort(),
       delegation: detail.delegation,
+      evidencePrecision: detail.evidence_precision ?? null,
+      supports: [...supports],
+      acceptReason: detail.accept_reason ?? null,
     },
     'memory version',
   );
+}
+
+/**
+ * The stored content of a version, validated against the one contract.
+ *
+ * A `content_json` that does not validate is reported as unavailable authority
+ * rather than silently replaced: a version whose stored steps cannot be read
+ * must not be presented as something smaller than it is.
+ */
+function storedContentOf(detail: VersionDetailRow): MemoryContent {
+  if (detail.content_json === null) {
+    return {
+      kind: 'semantic',
+      subtype: (detail.subtype ?? 'fact') as 'requirement' | 'decision' | 'fact',
+      statement: detail.statement ?? '',
+    };
+  }
+  const parsed = parseContract(
+    memoryContentSchema,
+    parseStoredJson(detail.content_json, 'memory content'),
+    'stored memory content',
+  );
+  if (parsed.kind !== detail.kind) {
+    throw new ThreadlineError(
+      'authority_unavailable',
+      'A stored memory version records a kind that disagrees with its identity.',
+    );
+  }
+  return parsed;
+}
+
+/**
+ * Resolves the episodes a page of versions cites as supporting reuse.
+ *
+ * Each reference reports the outcome the referenced episode *actually* recorded
+ * and the conditions it was observed under. An episode that is not readable, is
+ * no longer episodic, or has no stored outcome makes the reference an explicit
+ * refusal rather than an omission, because silently dropping support would
+ * understate what a procedure is known to rest on.
+ */
+export function resolveVersionSupports(
+  rows: readonly VersionSupportRow[],
+  versionIds: readonly string[],
+): ReadonlyMap<string, MemorySupport[]> {
+  const byVersion = new Map<string, VersionSupportRow[]>();
+  for (const row of rows) {
+    const versionId = row.version_id ?? '';
+    const bucket = byVersion.get(versionId);
+    if (bucket === undefined) {
+      byVersion.set(versionId, [row]);
+    } else {
+      bucket.push(row);
+    }
+  }
+  const resolved = new Map<string, MemorySupport[]>();
+  for (const versionId of versionIds) {
+    const bucket = byVersion.get(versionId);
+    if (bucket === undefined || bucket.length === 0) {
+      continue;
+    }
+    resolved.set(
+      versionId,
+      bucket.map((row) => toMemorySupport(row)).sort((left, right) =>
+        left.versionId.localeCompare(right.versionId),
+      ),
+    );
+  }
+  return resolved;
+}
+
+/** Builds a support view from stored episodic content, refusing absent or non-episodic content. */
+function toMemorySupport(row: VersionSupportRow): MemorySupport {
+  const versionId = row.support_version_id ?? '';
+  const memoryId = row.support_memory_id ?? '';
+  const content =
+    row.support_content_json === null
+      ? null
+      : (safeParseStoredContent(row.support_content_json) as MemoryContent | null);
+  if (content === null || content.kind !== 'episodic') {
+    throw new ThreadlineError(
+      'authority_unavailable',
+      'A supporting reference does not resolve to a stored episodic version.',
+      { supportVersionId: versionId },
+    );
+  }
+  return parseContract(
+    memorySupportSchema,
+    {
+      versionId,
+      memoryId,
+      outcome: content.outcome,
+      observedUnder: parseStoredJson(row.support_observed_under_json ?? '', 'supporting observed context'),
+      observedAtMs: row.support_observed_at_ms ?? 0,
+    },
+    'memory support',
+  );
+}
+
+/** Parses stored content without refusing the whole read over one row. */
+function safeParseStoredContent(text: string): unknown {
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    return null;
+  }
 }
 
 function parseStoredJson(text: string | null, label: string): unknown {

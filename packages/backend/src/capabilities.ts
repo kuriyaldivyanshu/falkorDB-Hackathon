@@ -32,6 +32,7 @@ export const SUPPORTED_OPERATION_IDS: readonly OperationId[] = [
   'memory.propose',
   'memory.accept',
   'memory.correct',
+  'memory.episode.record',
   'task.create',
   'task.require',
 ];
@@ -79,7 +80,7 @@ const OPERATION_TABLE: Readonly<Record<OperationId, OperationDefinition>> = {
     scope: 'both',
   },
   'memory.propose': {
-    summary: 'Capture a candidate semantic memory version from cited sources.',
+    summary: 'Capture a candidate semantic or procedural memory version from cited sources.',
     effect: 'write',
     scope: 'both',
   },
@@ -94,10 +95,16 @@ const OPERATION_TABLE: Readonly<Record<OperationId, OperationDefinition>> = {
     scope: 'human',
   },
   'memory.episode.record': {
-    summary: 'Record one observed episode with honest completeness.',
+    summary: 'Record one attempted action and the outcome established for it, with server-resolved evidence precision.',
     effect: 'write',
-    scope: 'producer',
-    unavailable: 'Observed episodes are not implemented in this build.',
+    scope: 'both',
+  },
+  'memory.procedure.validate': {
+    summary: 'Move a procedure from candidate to validated reuse.',
+    effect: 'write',
+    scope: 'human',
+    unavailable:
+      'Validated reuse needs a declared review plus compatible observed reuse; a human-accepted candidate is not validated reuse.',
   },
   'task.create': {
     summary: 'Create a task with a bounded title and optional family.',
@@ -182,6 +189,7 @@ const OPERATION_TABLE: Readonly<Record<OperationId, OperationDefinition>> = {
   },
 };
 
+/** Reports implemented operations and the current limits of the native adapter. */
 export function buildCapabilityReport(): CapabilityReport {
   const operations: OperationCapability[] = (Object.keys(OPERATION_TABLE) as OperationId[]).map((id) => {
     const definition = OPERATION_TABLE[id];
@@ -219,7 +227,7 @@ export function buildCapabilityReport(): CapabilityReport {
       captureCoverage: 'Native configuration and capture are not installed or qualified by this build.',
       modelMutations: false,
       detail:
-        'The Codex adapter is probed in N03. Until then this service accepts human-authored and producer-verified sources only.',
+        'The Codex adapter is probed in N03. Until then this service accepts human-authored and producer-recorded sources only, and no episode is admitted as observed unless a human recorded complete outcome evidence.',
     },
   };
 }
