@@ -71,11 +71,18 @@ input (`memory:propose`, `memory:correct`) arrives as one bounded JSON document
 of at most 256 KiB, read from a file or from standard input, and is validated by
 the shared input contract rather than by a wide set of flags.
 
+`memory:propose` and `memory:correct` accept semantic and procedural content.
+An episodic proposal is refused, because an episode is recorded through
+`POST /v2/memories/episodes` where the service resolves its evidence precision;
+a procedure cannot write its own `procedureState` or `reviewRef`. A human-accepted
+procedure stays `candidate`: acceptance is not validated reuse, and
+`memory.procedure.validate` remains unavailable.
+
 Exit status is `0` for a successful read or a committed operation, `1` for a
 refusal or failure, `2` for a usage error, and `3` when the operation still has
 no durable outcome. `--json` prints exactly one machine-readable result;
 `--wait` follows an operation to a settled state and still reports a refusal as a
-refusal.
+refusal. A refusal names the offending field of the input document.
 
 Two more commands added by the same assignment:
 
@@ -88,8 +95,10 @@ threadline codex:preview --project <uuid> [--codex-home <path>] [--executable <p
 acceptance or generic proxy tool, refuses to start if the credential cannot see
 the configured project, and never falls back to reading SQL or source files
 during an outage. `codex:preview` renders the Codex profile that starts `mcp`,
-writes nothing and contains no credential. See
-[docs/cli-memory-and-mcp.md](cli-memory-and-mcp.md) for the full workflow.
+writes nothing and contains no credential. Episodes and procedures are readable
+through `memory:query --kind episodic|procedural` and `memory:inspect`. See
+[docs/cli-memory-and-mcp.md](cli-memory-and-mcp.md) for the full workflow and
+[docs/memory-kinds.md](memory-kinds.md) for the memory-kind contracts.
 
 ### Privilege model
 
@@ -143,7 +152,16 @@ Operation progress is observable through `GET /v2/operations/:operationId?projec
 
 ## Unavailable until their batch
 
-Observed episodes, reusable procedures, bounded context preparation, claims and handoffs, native enrollment and capture, history import, deletion jobs and export are reported unavailable by `threadline capabilities` with the batch that delivers them. There is no hidden legacy command path.
+Episode admission and procedural candidates with human review are implemented;
+see [docs/memory-kinds.md](memory-kinds.md). Still reported unavailable by
+`threadline capabilities`, each with the batch that delivers it: validated
+procedural reuse, bounded context preparation and occurrence recording, claims
+and handoffs, native enrollment and capture, history import, deletion jobs and
+export. There is no hidden legacy command path.
+
+The client surface has one matching gap: episode recording is served by
+`POST /v2/memories/episodes` but has no CLI command yet, and there is nothing for
+a CLI command to call for procedure validation.
 
 ## Native qualification
 

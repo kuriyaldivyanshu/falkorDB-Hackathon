@@ -884,10 +884,29 @@ main(process.argv.slice(2))
     process.exitCode = code;
   })
   .catch((error: unknown) => {
-    if (error instanceof ThreadlineError) {
-      process.stderr.write(`threadline: ${error.code}: ${error.message}\n`);
-    } else {
-      process.stderr.write(`threadline: ${error instanceof Error ? error.message : String(error)}\n`);
-    }
+    process.stderr.write(`threadline: ${describeFailure(error)}\n`);
     process.exitCode = EXIT_FAILURE;
   });
+
+/**
+ * A safe one-line description of a failure.
+ *
+ * The shared error payload's details are primitives by contract, so a bounded
+ * field path can be shown: "which field of your document was wrong" is the
+ * difference between a usable refusal and a guess. Nothing else is echoed, so a
+ * credential or a submitted body can never reach a diagnostic.
+ */
+function describeFailure(error: unknown): string {
+  if (!(error instanceof ThreadlineError)) {
+    return error instanceof Error ? error.message : String(error);
+  }
+  const head = `${error.code}: ${error.message}`;
+  const details = error.details;
+  if (details === undefined || Object.keys(details).length === 0) {
+    return head;
+  }
+  const rendered = Object.entries(details)
+    .map(([key, value]) => `${key}=${String(value).slice(0, 80)}`)
+    .join(' ');
+  return `${head} (${rendered})`;
+}

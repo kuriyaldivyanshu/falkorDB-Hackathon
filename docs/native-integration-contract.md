@@ -15,6 +15,13 @@ preview are now implemented and reachable (`threadline mcp`,
 `threadline codex:preview`). The three unqualified native runtime gates below are
 unchanged; nothing in this checkpoint promotes them.
 
+Unchanged by `b-mcp-read-02` after merging `a-n02b-evidence-02`: episode
+admission and procedural candidates with human review now exist in the backend,
+and they change nothing here. `memory:propose`/`memory:accept` carry a procedure
+through the human-reviewed path and stop at `procedureState: "candidate"`;
+validated reuse, bounded context, native capture and strong native identity
+remain unavailable, and this server stays read-only.
+
 ## Evidence classes
 
 Every finding below is labelled with one of:
@@ -431,24 +438,42 @@ Qualification checkpoint (`b-codex-qualification-01`):
   model comprehension.
 
 Client-surface checkpoint (`b-mcp-read-02`), against a real isolated
-PostgreSQL/FalkorDB stack running the unchanged merged backend:
+PostgreSQL/FalkorDB stack. Re-run after merging Agent A's episode/procedure work
+(`a-n02b-evidence-02`) into this branch, so these results describe the **combined**
+code rather than the pre-merge baseline:
 
-- `npm run build` (`tsc -b`) passes.
+- `npm run build` (`tsc -b`) passes after the merge.
 - 45 CLI checks: task and source creation, a proposal that does not govern,
   human acceptance under an expected-head guard, requirement binding, current
-  reads, a 600 → 60 second correction with the superseded version and its
+  reads, a 600 -> 60 second correction with the superseded version and its
   evidence retained, exact-retry and mismatched-retry behaviour, stale-head and
   stale-task-revision refusals, and the `0/1/2/3` exit statuses.
+- 15 shared-schema compatibility checks against the **new** contracts: capability
+  output reports `memory.episode.record` supported and
+  `memory.procedure.validate` unavailable; `memory:propose` refuses episodic
+  content with a bounded typed error naming the field; a procedure proposal and
+  human acceptance commit; the accepted procedure is still `candidate`; a
+  procedure that writes its own `procedureState` is refused; and the MCP tools
+  parse the new stored shapes (`supportedBy`, server-resolved `procedureState`)
+  and answer a kind-filtered procedural query.
 - 24 MCP checks through an authored JSON-RPC client: handshake, the exact
   six-tool read-only surface, a real backend read through each tool, refusal of
   a mutation-shaped tool name, refusal of unknown/project/tenant override
   arguments, invalid-identifier and excessive-limit refusals, bounded source
   reads, an out-of-project memory refused, and 8 concurrent reads without
   cross-request leakage.
-- Resilience: 5 mid-session outage checks (`service_unavailable`, no fallback),
-  3 graph-outage checks (`storage_unavailable`, no memory served from SQL or
-  files), 3 authorization-failure checks (no transport opened for an
+- Resilience: 5 mid-session HTTP-outage checks (`service_unavailable`, no
+  fallback), 3 authorization-failure checks (no transport opened for an
   unauthorized binding) and 3 restart/reconnect checks.
+- Established-connection graph outage, with **no restart between the outage and
+  the recovery observation**: the service holds a live graph connection proven by
+  a real read, the FalkorDB container is stopped, the same process answers two
+  further reads and one MCP tool call with `storage_unavailable: FalkorDB is
+  disconnected or reconnecting.`, serves no version content from SQL or files,
+  stays alive, and — after the container is restored — answers reads again and
+  reports `ready` on that same process. An earlier pre-merge run of this same
+  sequence aborted the process; see the assignment record for that defect and its
+  now-observed resolution.
 - Preview: 21 checks covering determinism, the real entry point, no rendered
   hook entry, absence of any credential, `absent`/`owned`/`edited`/`foreign`
   ownership classification with a foreign file left byte-identical, safe

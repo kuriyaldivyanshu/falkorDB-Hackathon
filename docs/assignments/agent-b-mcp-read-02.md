@@ -296,7 +296,10 @@ avoided a second custom general-purpose protocol stack.
   or stack detail and without falling back to another storage path. Graph
   outage (the assignment-owned FalkorDB container stopped): a memory read
   answered `storage_unavailable` and served no version content from SQL or
-  files. Authorization failure (a reader credential pointed at a project it
+  files. **Superseded:** this pre-merge line used a harness that restarted the
+  service while the graph was down, so it evidences a bounded MCP error, not
+  outage survival. The post-merge established-connection run is the survival
+  evidence. Authorization failure (a reader credential pointed at a project it
   cannot see): the server never opened a transport, no protocol message was
   written, and the refusal named `scope_denied`. Restart and reconnect: two
   fresh processes each completed the handshake and each re-verified its binding
@@ -374,7 +377,12 @@ Containers `threadline-b-mcp-read-02-postgres` and
 `/tmp/threadline-b-mcp-read-02-checks`. Nothing outside those names is
 assignment-owned.
 
-### Backend defect reported to the coordinator (not fixed here)
+### Backend defect reported to the coordinator (superseded — see below)
+
+Reported before the merge; observed as fixed by Agent A's `a-n02b-evidence-02`.
+The exact reproduction, the verbatim pre-merge stack and the limitations of the
+original finding are in **Backend defect: exact reproduction, resolution and
+limitations** below. The original text is kept here as the first report.
 
 While running the graph-outage check, the unchanged merged backend **aborted
 the whole process** when the assignment-owned FalkorDB container was stopped:
@@ -401,20 +409,169 @@ emission path the single listener covers.
 
 This is in `packages/backend/src/storage/graph.ts`, which is owner A's module
 and read-only for this assignment, so it was reported rather than fixed.
-Reproduction is reliable: stop the container while the service holds a live
-connection. Twelve deliberate read attempts against a stopped container did
-**not** reproduce the abort, so the trigger depends on connection state; the
-graph-outage check therefore restarts the service while the graph is down, which
-keeps this checkpoint's MCP results about the MCP surface rather than about that
-backend defect.
+
+Correction to the first report, recorded here rather than quietly edited away:
+the line above originally said reproduction was reliable. It was not. Twelve
+deliberate read attempts against a stopped container did **not** abort the
+process; the abort reproduced reliably only with an MCP-driven read sequence in
+flight. The harness's restart-while-graph-down workaround was then removed
+entirely and replaced by the established-connection run below, so no result in
+this record depends on it.
+
+### Merge of Agent A's corrected work into this branch
+
+`origin/main` advanced to `4bdf80145cd546e0e78dc2bf9375c4a40ec06359` (merge of
+PR #12, `threadline/a-n02b-evidence-02`). This branch was updated with a normal
+merge commit `147ed1068dfa7eed7e8ce55ea8313686c1a35a0a`; no file needed manual
+resolution and no history was rewritten. Nothing on this branch was merged,
+published or retired.
+
+Compatibility was checked as **contract** compatibility, not only as a clean Git
+merge. There is no new SQL migration (the applied schema is still version 4), and
+the service was restarted against the **existing** isolated database — no reset,
+no re-initialisation — where the migration ledger for versions 1-4 still verifies.
+The new shared contracts changed the meaning of existing fields rather than
+adding routes alone, and the client follows them:
+
+- `proposeMemoryInputSchema.content` and `correctMemoryInputSchema.content` now
+  use `memoryAuthoringSchema` (semantic or procedural only). The CLI passes the
+  caller's JSON document through that shared schema, so it picked the narrowing
+  up without a code change.
+- `proceduralAuthoringSchema` is strict: `procedureState` and `reviewRef` are
+  server-resolved and a caller that sends them is refused, not silently ignored.
+- The stored form gained `episodicContentSchema.evidencePrecision` and
+  `proceduralContentSchema.supportedBy`. The MCP tools validate responses with
+  the shared `memoryViewSchema`/`memoryQueryResultSchema`, so they parse the new
+  shapes; this was verified against a real procedure and not assumed.
+
+One client change was needed. A refused proposal used to print only the error
+code and message, hiding the field path the shared payload already carries. The
+failure line now renders the payload's bounded primitive details, so a rejected
+document says which field was wrong without echoing the document back.
+
+### What the merge changed for this checkpoint's product surface
+
+Implemented now: episode admission (`memory.episode.record`, route
+`POST /v2/memories/episodes`) and procedural candidates with human review. A
+procedure is proposed and accepted through the existing `memory:propose` /
+`memory:accept` path and stays `procedureState: "candidate"`.
+
+Unavailable and stated as such: validated procedural reuse
+(`memory.procedure.validate`), bounded context preparation and occurrence
+recording, claims, handoffs, native enrollment and capture, history import,
+deletion and export. Strong native identity is still unqualified, so the MCP
+server stays read-only and model-issued writes stay disabled.
+
+Client-surface gaps this merge exposed, left for the next client batch rather
+than expanded into here: episode recording has a served route but no CLI command
+(`threadline memory:episode:record` would be the consistent spelling), and there
+is nothing for a CLI command to call for procedure validation while the
+capability is unavailable. `memory:propose` correctly refuses episodic content,
+because an episode resolves its own evidence precision.
+
+### Re-verification after the merge
+
+`npm run build` passes. A consolidated run against the merged backend passed
+**128 checks with 0 failures**: CLI 45, shared-schema compatibility 15, MCP 24,
+authorization failure 2, mid-session HTTP outage 5, graph outage 3, restart and
+reconnect 3, preview 21, installed-binary offline 10. Transcript:
+`/tmp/threadline-b-mcp-read-data-02/logs/verification-merged.txt`.
+
+**Established-connection graph outage and recovery, with no restart in between.**
+The service holds a live graph connection proven by a real read; the
+assignment-owned FalkorDB container is stopped; the *same* process (pid 68479)
+answers two further reads and one MCP tool call with `storage_unavailable:
+FalkorDB is disconnected or reconnecting.`, serves no version content from SQL
+or files, and stays alive; the container is then restored and that same process
+answers reads again and reports `ready`. Recorded verbatim in
+`/tmp/threadline-b-mcp-read-data-02/logs/graph-outage-established.txt`.
+
+This deliberately replaces the earlier harness. The pre-merge run obtained its
+graph-outage result by restarting the service while the graph was down, which
+made the MCP side look healthy but proved nothing about survival; it is not
+cited as outage-survival evidence anywhere, and the earlier three-check
+"graph outage" line in the pre-merge result above should be read as "the MCP
+surface returns a bounded error when the backend is up and the graph is
+unavailable", not as survival evidence.
+
+**Authored verification versus installed runtime compatibility is unchanged.**
+The MCP checks above are an authored JSON-RPC client speaking to Threadline's own
+server; they prove Threadline's transport, tool surface, refusals and bounds.
+They say nothing about Codex generating `tools/call` metadata, a model reading
+the result, native hook runtime execution or identity correlation. The only
+installed-binary evidence is the offline `codex -p threadline mcp list --json`
+inspection, and `debug prompt-input` still did not start the optional server in
+an isolated home.
+
+### Backend defect: exact reproduction, resolution and limitations
+
+Reported by this assignment before the merge; now observed as fixed by
+`a-n02b-evidence-02` (`4c26199 Fix graph connection recovery and installation
+target safety`). The exact pre-merge reproduction, kept here so Agent A can
+re-run or refine it:
+
+1. Start the service against the merged-at-the-time backend with FalkorDB **up**
+   and perform at least one real read, so it holds an established connection.
+2. `docker stop <assignment-owned falkordb container>`.
+3. Issue reads from a second client.
+
+Observed pre-merge result, verbatim from the service log:
+
+```text
+{"level":"warn","message":"FalkorDB connection reported an error; the store will reconnect on the next call.","errorName":"Error"}
+{"level":"warn","message":"FalkorDB connection reported an error; the store will reconnect on the next call.","errorName":"Error"}
+{"level":"warn","message":"FalkorDB connection reported an error; the store will reconnect on the next call.","errorName":"Error"}
+node:events:485
+      throw er; // Unhandled 'error' event
+      ^
+SocketClosedUnexpectedlyError: Socket closed unexpectedly
+    at Socket.<anonymous> (node_modules/@redis/client/dist/lib/client/socket.js:250:33)
+    at Object.onceWrapper (node:events:622:26)
+    at Socket.emit (node:events:507:28)
+    at TCP.<anonymous> (node:net:351:12)
+Emitted 'error' event on FalkorDB instance at:
+    at Class.<anonymous> (node_modules/falkordb/dist/src/falkordb.js:49:42)
+```
+
+Three warnings are logged and then the process aborts, so the single
+`live.on('error', …)` listener covered the first emissions and a later emission
+found no listener. The service is `packages/backend/src/storage/graph.ts`, which
+this assignment may not edit, so it was reported rather than fixed.
+
+Limitations of the original finding, stated so it is not over-read:
+
+- It was **not** deterministic. Twelve consecutive CLI reads against a stopped
+  container did not abort the process; the abort reproduced reliably only when an
+  MCP-driven read sequence was in flight.
+- The exact emission that escaped the listener was not isolated; the stack only
+  shows that the error was re-emitted on a `FalkorDB` instance.
+- The original three-check "graph outage" result was obtained with the service
+  restarted while the graph was down. It is **not** survival evidence, and it is
+  now superseded by the established-connection run above.
+
+Post-merge, the same established-connection sequence does not abort the service
+and the process recovers on its own. That is a client-observed result, not a
+claim about every failover path.
+
+### Narrow backend observation after the merge (reported, not fixed)
+
+`threadline status` still prints, in its `Guarantees` line, that "Episodes,
+procedures, context and native integration are not implemented and are stated
+unavailable in capabilities". The capability table now reports
+`memory.episode.record` as supported, so that prose is stale relative to the
+table it summarises. It is a `healthGuarantees.note` string in the backend and
+this assignment does not edit backend source; reported for the backend owner.
 
 ### Recovery and artifact paths
 
 The complete assignment prompt and contract are in the first half of this file.
 The verification scripts live outside the repository, in
-`/tmp/threadline-b-mcp-read-02-checks/` (`cli-acceptance.sh`,
-`mcp-acceptance.sh`, `mcp-client.mjs`, `mcp-resilience.mjs`, `outage-driver.sh`,
-`graphoutage-driver.sh`, `preview-checks.sh`, `offline-binary.sh`). They are
-reproducible but disposable: no permanent package test suite was added, by
-instruction, so a later batch that changes these paths must reproduce equivalent
-checks.
+`/tmp/threadline-b-mcp-read-02-checks/` (`run-all.sh`, `cli-acceptance.sh`,
+`schema-compat.sh`, `mcp-acceptance.sh`, `mcp-client.mjs`, `mcp-resilience.mjs`,
+`outage-driver.sh`, `graph-outage-established.sh`, `preview-checks.sh`,
+`offline-binary.sh`). `run-all.sh` runs all of them and writes one transcript.
+`graph-outage-established.sh` is the only graph-outage harness; the earlier
+restart-based `graphoutage-driver.sh` was deleted so it cannot be mistaken for
+the survival check. They are reproducible but disposable: no permanent package
+test suite was added, by instruction, so a later batch that changes these paths
+must reproduce equivalent checks.
