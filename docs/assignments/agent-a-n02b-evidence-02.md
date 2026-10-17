@@ -258,3 +258,44 @@ While establishing whether an API route existed for PR creation, a single probe 
 - Retire when idle: containers `threadline-a-n02b-evidence-02-postgres` and `threadline-a-n02b-evidence-02-falkordb`, volumes `threadline-a-n02b-evidence-02-pg-data` and `threadline-a-n02b-evidence-02-falkordb-data`, directories `/tmp/threadline-a-n02b-evidence-data-02` and `/tmp/threadline-a-n02b-evidence-02-checks`, the `threadline serve` process on `127.0.0.1:47832`, and worktree `/tmp/threadline-a-n02b-evidence-02`. Removing the data root destroys the generated credentials. No resource outside those names is assignment-owned.
 - **Do not retire this worktree until the PR is raised and reviewed.** Review fixes belong on this branch. The next checkpoint starts from a fresh worktree and branch after this PR merges.
 - The `carried-over/a-n02b-semantic-01/` directory under the checks root holds the previous assignment's check scripts and transcript, preserved before its resources were disposed. A later batch may want them; the directory is inside the temporary root and is not tracked.
+
+## Coordinator takeover: socket lifecycle and setup safety
+
+The user assigned the unfinished pre-merge fixes to the coordinator on 18 October 2026. Agent A's source edits were preserved and completed in this same worktree. This is review work for the existing checkpoint, not a new feature milestone.
+
+### Scope and dependency reservation
+
+The coordinator extends this checkpoint's writable paths to `packages/backend/package.json`, the matching backend entries in `package-lock.json`, and [storage recovery documentation](../storage-recovery.md). Agent B still owns CLI changes; its lockfile additions must be integrated serially. There are no SQL migration or native configuration changes.
+
+### Reproduction and corrections
+
+- The isolated service reported `ready` and `graphReachable: true` after roughly 30 minutes with its FalkorDB container stopped. Graph I/O blocked the worker while stale success remained visible. The earlier one-client mitigation reduced factory calls but retained the factory's startup error window and unbounded reply waits.
+- The final store owns its emitter before socket creation, reuses the pinned FalkorDB Graph/Single command implementation over a declared node-redis client, refuses offline queuing, and bounds both connection and complete-reply waits. Submitted writes with lost replies are ambiguous and retain receipt reconciliation. No global exception handler or dependency file patch is used.
+- Readiness begins false and checks transport state and completed-probe freshness. Backlog counts represent pending, leased and ambiguous work separately.
+- The installation guard originally compared API host/port instead of PostgreSQL host/port, and treated all file-read failures as absence. Those comparisons/refusals are corrected. Concise refusal messages retain the replacement instruction within the CLI's bounded error output. Comments no longer promise rollback of SQL/source mutations after setup passes the guard.
+- Temporary verification defects were corrected: owner-token argument shape in status calls, unbounded HTTP waits, accepting a successful graph read during a confirmed outage, hard-coded retry keys across runs, and implicit root resolution in fixture commands. Every modifying fixture/setup command now pins this assignment's home. The coordinator's real installation/credentials were not read or modified during takeover verification.
+
+### Verification and handoff
+
+Final results are recorded below after all checks finish. Temporary focused checks and transcripts live under `/tmp/threadline-a-n02b-evidence-02-checks/takeover-*`. A failed queue-timeout-only silent-socket check preceded the complete-reply deadline fix; only final reruns establish acceptance. One initial outage run was interrupted and is not counted as a completed suite.
+
+
+Final verification on the completed source:
+
+- `npm run build`: PASS (`tsc -b`).
+- Existing `verify.mjs`: **121/121 PASS**.
+- Existing `phase2.mjs`: **30/30 PASS** (including PostgreSQL restart and graph outage/recovery).
+- Existing `phase3.mjs`: **22/22 PASS** (receipt replay, exact counters, fail-closed duplicate authority and support provenance).
+- Corrected `outage-acceptance.mjs 3`: **75/75 PASS**, three established-connection outage/recovery cycles, SQL source/history usable, graph reads 503, waiting operations visible, original receipts/idempotency preserved, clean shutdown.
+- Expanded `install-safety.mjs`: **51/51 PASS**, synthetic roots only: explicit/environment/fallback root resolution, fresh/repeat setup, database and database-host mismatch, wrong SQL credentials, malformed/unreadable config, explicit replacement and an untouched synthetic sentinel installation.
+- `takeover-lifecycle.mjs`: **28/28 PASS**, concurrent startup, twenty startup/flap/close rounds, 39 successful and 21 refused concurrent probes, silent initial handshake, established silent socket deadline, clean reply decoding after reconnect. The failed queue-timeout-only variant hung on the established silent socket before the full-reply deadline was added.
+- `takeover-startup.mjs`: **6/6 PASS**, full service started with graph unavailable, truthful graph guarantees, SQL history available, graph read 503, recovery without service restart and clean exit.
+- Total: **333 focused checks, zero failures in final reruns**. Three changed Markdown files passed headings/fences/local-link checks; `git diff --check` passed. No permanent tests were added.
+
+Safe transcript digests are in `/tmp/threadline-a-n02b-evidence-02-checks/takeover-SHA256SUMS.txt`; the named `takeover-*.txt` files contain final outcomes. These temporary artifacts supplement this tracked summary. They are not required to learn the observed results from a fresh checkout.
+
+Limits: no actual submitted graph commit reply was deliberately dropped in the final run; normal receipts and committed-operation replay were checked, and timeouts/socket loss remain conservatively ambiguous in the worker. This bridge qualifies standalone storage only. The earlier coordinator configuration restoration is not claimed to be byte-identical; no real user installation was a target of the takeover checks. No before/after performance benchmark is claimed.
+
+The assignment HTTP service is stopped after verification. Its two original assignment-owned database containers remain running, and the worktree, source/data root, synthetic credentials and check artifacts remain for review. Nothing from B's stack or the baseline installation was stopped or modified. Retire these only after merge/recovery gates.
+
+Integration: normal follow-up commit/push on `threadline/a-n02b-evidence-02`; no force push or merge. B must integrate the backend dependency/lockfile edits serially, rerun the combined build/CLI/MCP checks, and link the new storage-safety instructions from its owned setup docs. The coordinator updates the checklist after review/merge.

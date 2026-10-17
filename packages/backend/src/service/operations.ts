@@ -104,6 +104,7 @@ const MAX_TASK_REQUIREMENTS = 16;
 const OBLIGATION_MEMORY_KIND = 'semantic';
 
 const GRAPH_READY_TTL_MS = 5 * 60_000;
+const COMMAND_PROBE_GRACE_MS = 5_000;
 const GRAPH_PROBE_TTL_MS = 2_000;
 const RETRY_BASE_MS = 2_000;
 const RETRY_MAX_MS = 60_000;
@@ -150,7 +151,7 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
   const projectChains = new Map<string, Promise<void>>();
   const graphReadyUntilMs = new Map<string, number>();
 
-  let graphReachable = true;
+  let graphReachable = false;
   let graphProbedAtMs = 0;
   let lastSettledAtMs: number | null = null;
   let lastErrorCode: string | null = null;
@@ -171,7 +172,6 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
     if (nowMs - graphProbedAtMs < GRAPH_PROBE_TTL_MS) {
       return graphReachable;
     }
-    graphProbedAtMs = nowMs;
     try {
       await deps.graphStore.ping();
       if (!graphReachable) {
@@ -182,6 +182,7 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
         });
       }
       graphReachable = true;
+      graphProbedAtMs = clock().getTime();
     } catch (error) {
       if (graphReachable) {
         logger.log({
@@ -191,6 +192,7 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
         });
       }
       graphReachable = false;
+      graphProbedAtMs = clock().getTime();
     }
     return graphReachable;
   };
@@ -287,12 +289,19 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
     await refreshBacklog().catch((error: unknown) => {
       recordError('worker_backlog', error);
     });
-    if (inFlight.size >= deps.limits.workerSlots) {
-      await waitForCapacity();
-      return;
-    }
+    // Readiness is refreshed *before* the capacity gate, not after it. A worker
+    // that is saturated is very often saturated because it is holding an
+    // operation blocked on a graph that has stopped answering — and returning
+    // from the capacity gate first meant it never re-probed, so it reported the
+    // graph as reachable while it was blocked on that same graph. The probe is
+    // TTL-cached and fails fast when the graph is down, so moving it ahead of
+    // the gate costs nothing and keeps the reported state true under load.
     if (!(await probeGraph())) {
       await sleep(deps.limits.workerPollMs);
+      return;
+    }
+    if (inFlight.size >= deps.limits.workerSlots) {
+      await waitForCapacity();
       return;
     }
     const capacity = Math.max(1, deps.limits.workerSlots - inFlight.size);
@@ -2217,6 +2226,9 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
 
   const status = (): OperationWorkerStatus => {
     const nowMs = clock().getTime();
+    // Never promote an old success while graph work/probing is stalled.
+    const reachable = graphReachable && deps.graphStore.connected &&
+      nowMs - graphProbedAtMs <= GRAPH_PROBE_TTL_MS + COMMAND_PROBE_GRACE_MS;
     const parts = [
       `Leased worker ${running ? 'running' : 'stopped'}: ${String(backlog.pending)} pending, ${String(backlog.leased)} leased, ${String(backlog.ambiguous)} ambiguous`,
     ];
@@ -2226,7 +2238,7 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
     if (inFlight.size > 0) {
       parts.push(`${String(inFlight.size)} in flight`);
     }
-    if (!graphReachable) {
+    if (!reachable) {
       parts.push('graph probe failing');
     }
     if (lastErrorCode !== null) {
@@ -2235,7 +2247,7 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
     return {
       running,
       workerId: running ? workerId : null,
-      graphReachable,
+      graphReachable: reachable,
       inFlight: inFlight.size,
       pending: backlog.pending,
       leased: backlog.leased,
@@ -2563,7 +2575,7 @@ function classifyGraphFailure(error: unknown): 'constraint' | 'not_submitted' | 
   if (/constraint/i.test(text)) {
     return 'constraint';
   }
-  if (/ECONNREFUSED|ENOTFOUND|EHOSTUNREACH|EAI_AGAIN|Connection is closed|Connection refused|socket closed/i.test(text)) {
+  if (/ECONNREFUSED|ENOTFOUND|EHOSTUNREACH|EAI_AGAIN|ClientOfflineError|ClientClosedError|Connection is closed|Connection refused/i.test(text)) {
     return 'not_submitted';
   }
   return 'ambiguous';

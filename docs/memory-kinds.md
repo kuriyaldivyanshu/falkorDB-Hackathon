@@ -265,3 +265,6 @@ curl -sS "http://127.0.0.1:47832/v2/memories?projectId=…&kind=episodic" \
 
 No claim in this document is made about any of those. The capability report is
 the authority on what this build supports, and it changes with the build.
+## Storage recovery
+
+See [storage recovery and installation safety](storage-recovery.md) for connection deadlines, outage readiness, receipt reconciliation and the initialization target guard.
