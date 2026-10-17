@@ -260,7 +260,7 @@ export function createContextService(deps: {
         if(previous[0].agent_session_id!==scope.agentSessionId||old.logicalRequestId!==o.logicalRequestId||old.packetDigest!==o.packetDigest||old.attemptNo!==o.attemptNo)throw new ThreadlineError('authority_conflict','Context occurrence retry conflicts.');
         return old;
       }
-      const packetRows=await rows<PacketRow>(scope,'SELECT id,content_artifact_id,trim(content_digest) AS content_digest FROM threadline.context_packets WHERE tenant_id=$1 AND project_id=$2 AND id=$3 AND owner_user_id=$4 AND graph_epoch=$5 AND task_revision=$6',[scope.tenantId,scope.projectId,o.packetId,scope.userId,a.graphEpoch,a.taskRevision]);
+      const packetRows=await rows<PacketRow>(scope,'SELECT id,content_artifact_id,trim(content_digest) AS content_digest FROM threadline.context_packets WHERE tenant_id=$1 AND project_id=$2 AND id=$3 AND owner_user_id=$4 AND graph_epoch=$5 AND task_revision=$6 AND requirement_revision=$7',[scope.tenantId,scope.projectId,o.packetId,scope.userId,a.graphEpoch,a.taskRevision,a.requirementRevision]);
       const packetRow=packetRows[0];if(!packetRow||packetRow.content_digest!==o.packetDigest)throw new ThreadlineError('authority_conflict','Occurrence packet is stale or its digest differs.');
       if(!scope.agentSessionId)throw new ThreadlineError('invalid_request','A bound agent session is required.');
       const request=await rows<{id:string;input_artifact_id:string;api:string;attempt_no:number;logical_request_id:string}>(scope,`SELECT m.id,m.input_artifact_id,m.attempt_no,m.logical_request_id,p.settings->>'api' AS api FROM threadline.model_requests m JOIN threadline.agent_sessions s ON s.tenant_id=m.tenant_id AND s.id=m.agent_session_id

@@ -1,6 +1,6 @@
 # M05 bounded context and terminal integration evidence
 
-Verified 17 October 2026 against `main` base `cbf2733` (M04 merged). M05 is locally integrated and verified, **uncommitted**. This report supersedes the earlier A/B partial handoffs; the master and lane checklists use the same task descriptions and completion state. No branch, staging, commit, push or external model inference was performed.
+Verified 17 October 2026 against `main` base `cbf2733` (M04 merged). At verification time, M05 was locally integrated and verified, **uncommitted**. This report supersedes the earlier A/B partial handoffs; the master and lane checklists use the same task descriptions and completion state. No branch, staging, commit, push or external model inference was performed during verification.
 
 ## Implemented behavior
 
@@ -63,4 +63,4 @@ Earlier temporary A/B module checks remain useful history but do not replace the
 
 ## Remaining release boundaries
 
-All M05A01–A12, M05B01–B11 and M05J01–J06 are verified locally within the limitations above. This does not complete cross-milestone privacy/export/recovery acceptance or packaging audits. M06 is the next implementation phase. No M05 PR exists from this work, no paid test is newly authorized, and no subscription integration is claimed.
+All M05A01–A12, M05B01–B11 and M05J01–J06 are verified locally within the limitations above. This does not complete cross-milestone privacy/export/recovery acceptance or packaging audits. M06 is the next implementation phase. M05 was subsequently committed as `5d4fd61e8fd341acb2642b1819679b344015b15a` on the M05 PR branch and is included in [PR #6](https://github.com/kuriyaldivyanshu/falkorDB-Hackathon/pull/6). No paid test is newly authorized, and no subscription integration is claimed.
