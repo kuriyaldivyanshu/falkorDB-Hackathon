@@ -135,7 +135,7 @@ npm run serve    # runs the loopback memory service
 npm run status   # prints health, component readiness and storage state using the local credential
 ```
 
-See [docs/local-development.md](docs/local-development.md) for configuration and the full command surface. The agent work sequence, current status and completion criteria are in [the development checklist](docs/development-checklist.md).
+See [docs/local-development.md](docs/local-development.md) for configuration and the full command surface. The agent work sequence, current status and completion criteria are in [the development checklist](docs/development-checklist.md). Parallel assignments follow [the worktree and PR rulebook](docs/parallel-work-rulebook.md).
 
 ## Hackathon demonstration
 
