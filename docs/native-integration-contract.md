@@ -7,8 +7,10 @@ exact checks required before a later assignment may enable more.
 
 Status: **qualification and preparation, plus a reachable read-only MCP server.**
 The native adapter stays unavailable in public capabilities, and N03
-(session-to-session memory) is not complete. No Threadline command installs
-native configuration, starts inference or writes memory in this build.
+(session-to-session memory) is not complete. Human-run `memory:propose`,
+`memory:accept` and `memory:correct` commands can write memory. No Threadline
+command installs native configuration or starts inference, and the MCP server
+cannot write memory on a model's behalf.
 
 Updated by `b-mcp-read-02`: the stdio MCP server and the MCP-only configuration
 preview are now implemented and reachable (`threadline mcp`,

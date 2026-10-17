@@ -56,7 +56,7 @@ threadline task:requirements --project <uuid> <taskId>
 
 threadline memory:propose --input <file|-> [--wait]
 threadline memory:accept --project <uuid> <memoryId> --version <versionId> \
-        --idempotency-key <key> [--expect-current <versionId>|none] [--reason <text>]
+        --idempotency-key <key> --expect-current <versionId|none> [--reason <text>]
 threadline memory:correct --input <file|-> [--wait]
 threadline memory:inspect --project <uuid> <memoryId>
 threadline memory:query --project <uuid> [--task <id>] [--kind <kind>] [--focus <text>] [--limit <n>]
@@ -64,9 +64,11 @@ threadline memory:query --project <uuid> [--task <id>] [--kind <kind>] [--focus 
 threadline operation:inspect --project <uuid> <operationId>
 ```
 
-Two rules hold across the mutations. An expected version and an idempotency key
-are always supplied by the caller: the CLI never derives an expected head, never
-invents a key and never retries a guarded mutation on its own. Content-bearing
+An idempotency key is always supplied by the caller. Mutations with a head or
+revision to guard also require the caller's expected version or revision. For
+`memory:accept`, use `--expect-current none` for the first acceptance and
+`--expect-current <versionId>` for a guarded update. The CLI never derives an
+expected head, invents a key or retries a guarded mutation on its own. Content-bearing
 input (`memory:propose`, `memory:correct`) arrives as one bounded JSON document
 of at most 256 KiB, read from a file or from standard input, and is validated by
 the shared input contract rather than by a wide set of flags.

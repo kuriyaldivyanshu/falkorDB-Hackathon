@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -289,7 +289,7 @@ async function runMemoryCommand(client: ApiClient, invocation: CliInvocation): P
         expectedCurrentVersionId:
           invocation.expectCurrentVersionId === 'none'
             ? null
-            : (invocation.expectCurrentVersionId ?? null),
+            : invocation.expectCurrentVersionId,
         ...(invocation.reason === null ? {} : { reason: invocation.reason }),
         idempotencyKey: invocation.idempotencyKey ?? '',
       });
@@ -418,7 +418,7 @@ function operationExit(state: string): number {
   if (state === 'committed') {
     return EXIT_OK;
   }
-  if (state === 'pending' || state === 'leased') {
+  if (state === 'pending' || state === 'leased' || state === 'ambiguous') {
     return EXIT_PENDING;
   }
   return EXIT_FAILURE;
@@ -434,31 +434,44 @@ function readInputDocument<T>(input: string | null): T {
   if (input === null) {
     throw new UsageError('--input is required.');
   }
-  let text: string;
+  let bytes: Buffer;
   if (input === '-') {
     try {
-      text = readFileSync(0, 'utf8');
+      const buffer = Buffer.alloc(MAX_INPUT_DOCUMENT_BYTES + 1);
+      let total = 0;
+      while (total < buffer.length) {
+        const count = readSync(0, buffer, total, Math.min(64 * 1024, buffer.length - total), null);
+        if (count === 0) {
+          break;
+        }
+        total += count;
+      }
+      bytes = buffer.subarray(0, total);
     } catch {
       throw new UsageError('Standard input could not be read for --input.');
     }
   } else {
     const path = resolve(input);
-    let bytes: number;
+    let size: number;
     try {
-      bytes = readFileSync(path).byteLength;
+      size = statSync(path).size;
     } catch {
       throw new UsageError(`--input file could not be read: ${path}`);
     }
-    if (bytes > MAX_INPUT_DOCUMENT_BYTES) {
+    if (size > MAX_INPUT_DOCUMENT_BYTES) {
       throw new UsageError(`--input must be at most ${String(MAX_INPUT_DOCUMENT_BYTES)} bytes.`);
     }
-    text = readFileSync(path, 'utf8');
+    try {
+      bytes = readFileSync(path);
+    } catch {
+      throw new UsageError(`--input file could not be read: ${path}`);
+    }
   }
-  if (Buffer.byteLength(text, 'utf8') > MAX_INPUT_DOCUMENT_BYTES) {
+  if (bytes.byteLength > MAX_INPUT_DOCUMENT_BYTES) {
     throw new UsageError(`--input must be at most ${String(MAX_INPUT_DOCUMENT_BYTES)} bytes.`);
   }
   try {
-    return JSON.parse(text) as T;
+    return JSON.parse(bytes.toString('utf8')) as T;
   } catch {
     throw new UsageError('--input is not valid JSON.');
   }
@@ -885,7 +898,7 @@ main(process.argv.slice(2))
   })
   .catch((error: unknown) => {
     process.stderr.write(`threadline: ${describeFailure(error)}\n`);
-    process.exitCode = EXIT_FAILURE;
+    process.exitCode = error instanceof UsageError ? EXIT_USAGE : EXIT_FAILURE;
   });
 
 /**

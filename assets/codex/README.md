@@ -17,8 +17,8 @@ without running anything.
   `threadline codex:preview`. This is the profile shape this build actually
   produces: the stdio MCP server and no hook entry.
 
-Both preview sets are generated, not hand-edited, so the checked-in examples
-cannot drift from their renderers:
+Both checked-in preview sets are snapshots of their renderers, generated with
+these inputs:
 
 ```js
 // preview/  (qualification renderer, MCP + hooks)

@@ -30,11 +30,12 @@ which is one reason writes stay human-only.
 Everything below uses the local owner credential from the installation root. Run
 it against a service you started yourself; it is a real workflow, not a fixture.
 
-Set the project once:
+The shell examples use `jq` to capture returned identifiers. Set the project once:
 
 ```sh
 export THREADLINE_HOME="$HOME/.threadline"
-threadline project:add --root "$PWD" --label "inventory-export" --json
+PROJECT=$(threadline project:add --root "$PWD" --label "inventory-export" --json \
+  | jq -er '.project.projectId')
 ```
 
 ### 1. Capture the evidence first
@@ -49,8 +50,9 @@ The exporter must refresh stale inventory within 600 seconds of the last
 successful poll.
 EOF
 
-threadline source:append --project "$PROJECT" --kind human_note \
-  --file /tmp/freshness-600.md --origin authored:freshness-600 --json
+SOURCE=$(threadline source:append --project "$PROJECT" --kind human_note \
+  --file /tmp/freshness-600.md --origin authored:freshness-600 --json \
+  | jq -er '.outcomes[0].sourceId')
 ```
 
 `source:append` derives its delivery identity from the file content, so
@@ -60,11 +62,13 @@ identity refuses.
 ### 2. Create a task and read its revision
 
 ```sh
-threadline task:create --project "$PROJECT" \
+TASK_RESULT=$(threadline task:create --project "$PROJECT" \
   --title "Inventory exporter freshness" --family inventory-export \
-  --idempotency-key cli-task-1 --wait --json
+  --idempotency-key cli-task-1 --wait --json)
+TASK=$(printf '%s\n' "$TASK_RESULT" | jq -er '.taskId')
 
-threadline task:inspect --project "$PROJECT" "$TASK" --json
+REVISION=$(threadline task:inspect --project "$PROJECT" "$TASK" --json \
+  | jq -er '.revision')
 ```
 
 The task carries an opaque `revision`. It is an equality guard, not a counter:
@@ -87,7 +91,9 @@ cat > /tmp/propose.json <<EOF
  "sourceIds":["$SOURCE"],"idempotencyKey":"cli-propose-1"}
 EOF
 
-threadline memory:propose --input /tmp/propose.json --wait --json
+PROPOSAL=$(threadline memory:propose --input /tmp/propose.json --wait --json)
+MEMORY=$(printf '%s\n' "$PROPOSAL" | jq -er '.memoryId')
+VERSION=$(printf '%s\n' "$PROPOSAL" | jq -er '.versionId')
 ```
 
 The result is `state: "committed"` — committed to the *graph as a candidate*.
@@ -132,7 +138,20 @@ The task requirement now resolves to the accepted version.
 
 ### 5. Correct the requirement under the expected-head guard
 
+Capture the correction evidence as a second source before citing it:
+
 ```sh
+cat > /tmp/freshness-60.md <<'EOF'
+Inventory exporter correction, reviewed 2026-10-18.
+
+The regional pilot shortened the freshness window: the exporter must refresh
+stale inventory within 60 seconds of the last successful poll.
+EOF
+
+SOURCE_2=$(threadline source:append --project "$PROJECT" --kind human_note \
+  --file /tmp/freshness-60.md --origin authored:freshness-60 --json \
+  | jq -er '.outcomes[0].sourceId')
+
 cat > /tmp/correct.json <<EOF
 {"projectId":"$PROJECT","memoryId":"$MEMORY","expectedCurrentVersionId":"$VERSION",
  "content":{"kind":"semantic","subtype":"requirement",
@@ -144,7 +163,8 @@ cat > /tmp/correct.json <<EOF
  "idempotencyKey":"cli-correct-1"}
 EOF
 
-threadline memory:correct --input /tmp/correct.json --wait --json
+CORRECTION=$(threadline memory:correct --input /tmp/correct.json --wait --json)
+OPERATION=$(printf '%s\n' "$CORRECTION" | jq -er '.operationId')
 ```
 
 The current pointer moves to the new version. `memory:inspect` shows
@@ -173,7 +193,7 @@ carries the graph receipt with its event sequence as a decimal string.
 | `0` | The read succeeded, or the operation committed |
 | `1` | Refused, rejected or failed |
 | `2` | Usage error |
-| `3` | The operation still has no durable outcome (`pending` or `leased`) |
+| `3` | The operation still has no durable outcome (`pending`, `leased` or `ambiguous`) |
 
 In `--json` mode each command prints exactly one machine-readable result. A
 pending outcome is never printed as a success, and `--wait` never converts a

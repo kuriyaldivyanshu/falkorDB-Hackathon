@@ -12,9 +12,10 @@ import { parseArgs, type ParseArgsOptionsConfig } from 'node:util';
  * (`source:append`, `memory:correct`), a whole-object read repeats the noun
  * (`task:requirements`), and a process command is a bare word (`serve`, `mcp`).
  *
- * Two rules govern every mutation command. An expected version and an
- * idempotency key are always supplied by the caller — the CLI never derives an
- * expected head, never invents an idempotency key and never retries a guarded
+ * Every mutation requires a caller-supplied idempotency key. Mutations with a
+ * head or revision to guard also require the caller's expected version or
+ * revision — the CLI never derives an expected head, never invents an
+ * idempotency key and never retries a guarded
  * mutation on its own. Content-bearing input arrives as one bounded JSON
  * document validated by the shared contract, rather than as a wide set of
  * loosely related flags.
@@ -237,7 +238,7 @@ Semantic memory:
                        shared proposeMemoryInput contract and must cite at least one
                        source. A proposal governs nothing until a human accepts it.
   memory:accept --project <id> <memoryId> --version <versionId>
-                --idempotency-key <key> [--expect-current <versionId>|none]
+                --idempotency-key <key> --expect-current <versionId|none>
                 [--reason <text>] [--wait]
                        Explicit human acceptance of one proposed version. This is the
                        only step that makes a proposal authoritative.
@@ -285,7 +286,7 @@ Exit status:
   0  success, or a committed operation
   1  refused, rejected or failed
   2  usage error
-  3  the operation has no durable outcome yet (still pending or leased)
+  3  the operation has no durable outcome yet (pending, leased or ambiguous)
 
 Idempotency:
   Retry a mutation with the same --idempotency-key and the same payload to read
@@ -443,6 +444,7 @@ export function parseCliArgs(argv: readonly string[]): CliInvocation {
       requireOption('--project', values.project);
       requirePositionalId(command, positionals, 'memoryId');
       requireOption('--version', values.version);
+      requireOption('--expect-current', values['expect-current']);
       requireOption('--idempotency-key', values['idempotency-key']);
       break;
     case 'memory:inspect':
