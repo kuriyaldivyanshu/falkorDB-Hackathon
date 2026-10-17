@@ -192,6 +192,7 @@ export type MemoryVersion = z.infer<typeof memoryVersionSchema>;
 export const memoryViewSchema = z.object({
   memoryId: uuidSchema,
   kind: z.enum(MEMORY_KINDS),
+  /** The task whose requirements this read traversed; `null` for a project-wide read. */
   taskId: uuidSchema.nullable(),
   current: memoryVersionSchema.nullable(),
   candidates: z.array(memoryVersionSchema).max(8),
@@ -210,7 +211,10 @@ export const proposeMemoryInputSchema = z.object({
   content: memoryContentSchema,
   applicability: applicabilitySchema,
   observedUnder: observedUnderSchema,
-  sourceIds: z.array(uuidSchema).max(MEMORY_LIMITS.maxSourceClosure),
+  /** Bounded direct evidence closure; a semantic version must cite at least one. */
+  sourceIds: z.array(uuidSchema).min(1).max(MEMORY_LIMITS.maxSourceClosure),
+  /** Declared contradictions. Recorded as declared; never inferred or resolved. */
+  contradictsVersionIds: z.array(uuidSchema).max(8).optional(),
   expectedCurrentVersionId: uuidSchema.nullable().optional(),
   idempotencyKey: byteBoundedText(200),
 });
@@ -236,7 +240,10 @@ export const correctMemoryInputSchema = z.object({
   content: memoryContentSchema,
   applicability: applicabilitySchema,
   observedUnder: observedUnderSchema,
-  sourceIds: z.array(uuidSchema).max(MEMORY_LIMITS.maxSourceClosure),
+  /** Bounded direct evidence closure; a semantic version must cite at least one. */
+  sourceIds: z.array(uuidSchema).min(1).max(MEMORY_LIMITS.maxSourceClosure),
+  /** Declared contradictions. Recorded as declared; never inferred or resolved. */
+  contradictsVersionIds: z.array(uuidSchema).max(8).optional(),
   reason: byteBoundedText(512),
   idempotencyKey: byteBoundedText(200),
 });
@@ -322,3 +329,98 @@ export const memoryOperationResultSchema = z.object({
   errorDetail: z.string().nullable(),
 });
 export type MemoryOperationResult = z.infer<typeof memoryOperationResultSchema>;
+
+/** A bounded page of memory views, newest identity first. */
+export const memoryQueryResultSchema = z.object({
+  memories: z.array(memoryViewSchema).max(50),
+  /** True when the bounded scan stopped before this project/task set was exhausted. */
+  hasMore: z.boolean(),
+});
+export type MemoryQueryResult = z.infer<typeof memoryQueryResultSchema>;
+
+/**
+ * How a required Memory resolves right now.
+ *
+ * `current` is the single accepted head. A requirement with no head, or with
+ * more than one `CURRENT` edge observed, is reported explicitly rather than
+ * picking a winner — a read never invents authority.
+ */
+export const MEMORY_REQUIREMENT_STATES = ['current', 'missing_current', 'duplicate_current'] as const;
+export type MemoryRequirementState = (typeof MEMORY_REQUIREMENT_STATES)[number];
+
+export const taskRequirementResolutionSchema = z.object({
+  memoryId: uuidSchema,
+  kind: z.enum(MEMORY_KINDS),
+  state: z.enum(MEMORY_REQUIREMENT_STATES),
+  current: memoryVersionSchema.nullable(),
+});
+export type TaskRequirementResolution = z.infer<typeof taskRequirementResolutionSchema>;
+
+/** The exact current requirement versions for a task, with the task revision read. */
+export const taskRequirementsViewSchema = z.object({
+  taskId: uuidSchema,
+  revision: z.string().min(1).max(64),
+  requirements: z.array(taskRequirementResolutionSchema).max(16),
+});
+export type TaskRequirementsView = z.infer<typeof taskRequirementsViewSchema>;
+
+/** Result of admitting a task intent; the task view carries the revision. */
+export const taskOperationResultSchema = z.object({
+  operationId: uuidSchema,
+  state: operationStateSchema,
+  taskId: uuidSchema,
+  /** Present for a requirement binding. */
+  memoryId: uuidSchema.nullable(),
+  errorCode: z.string().nullable(),
+  errorDetail: z.string().nullable(),
+});
+export type TaskOperationResult = z.infer<typeof taskOperationResultSchema>;
+
+/**
+ * The durable canonical form of a memory proposal or correction.
+ *
+ * This is not a request body. A content-bearing memory intent is captured as
+ * one immutable `memory_proposal` Source holding exactly this document, and the
+ * operation row references that source; the commit worker re-reads and
+ * validates the document before writing anything. One definition serves the
+ * admitting service and the worker, so the captured content cannot drift from
+ * what was committed.
+ */
+export const MEMORY_DOCUMENT_VERSION = 1;
+
+export const memoryDocumentSchema = z.object({
+  documentVersion: z.literal(MEMORY_DOCUMENT_VERSION),
+  operationKind: z.enum(['memory.propose', 'memory.correct']),
+  memoryId: uuidSchema,
+  /** `create` mints a new Memory identity; `attach` proposes onto an existing one. */
+  memoryMode: z.enum(['create', 'attach']),
+  versionId: uuidSchema,
+  content: memoryContentSchema,
+  applicability: applicabilitySchema,
+  observedUnder: observedUnderSchema,
+  sourceIds: z.array(uuidSchema).min(1).max(MEMORY_LIMITS.maxSourceClosure),
+  contradictsVersionIds: z.array(uuidSchema).max(8),
+  originTaskId: uuidSchema.nullable(),
+  expectedHead: uuidSchema.nullable(),
+  reason: byteBoundedText(512).nullable(),
+});
+export type MemoryDocument = z.infer<typeof memoryDocumentSchema>;
+
+/** Deterministic serialization: one construction site, fixed member order. */
+export function encodeMemoryDocument(document: MemoryDocument): string {
+  return JSON.stringify({
+    documentVersion: document.documentVersion,
+    operationKind: document.operationKind,
+    memoryId: document.memoryId,
+    memoryMode: document.memoryMode,
+    versionId: document.versionId,
+    content: document.content,
+    applicability: document.applicability,
+    observedUnder: document.observedUnder,
+    sourceIds: [...document.sourceIds],
+    contradictsVersionIds: [...document.contradictsVersionIds],
+    originTaskId: document.originTaskId,
+    expectedHead: document.expectedHead,
+    reason: document.reason,
+  });
+}

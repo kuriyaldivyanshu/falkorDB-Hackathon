@@ -28,6 +28,12 @@ export const SUPPORTED_OPERATION_IDS: readonly OperationId[] = [
   'source.read',
   'history.page',
   'operation.inspect',
+  'memory.query',
+  'memory.propose',
+  'memory.accept',
+  'memory.correct',
+  'task.create',
+  'task.require',
 ];
 
 interface OperationDefinition {
@@ -68,46 +74,40 @@ const OPERATION_TABLE: Readonly<Record<OperationId, OperationDefinition>> = {
   'source.read': { summary: 'Read one bounded byte range of a source.', effect: 'read', scope: 'both' },
   'history.page': { summary: 'Page through ingested sources in project order.', effect: 'read', scope: 'both' },
   'memory.query': {
-    summary: 'Read current accepted memory and candidates for a task.',
+    summary: 'Read current accepted memory and proposed candidates for a project or task.',
     effect: 'read',
     scope: 'both',
-    unavailable: 'Accepted memory services and their graph contract land in N02B.',
   },
   'memory.propose': {
-    summary: 'Record a candidate memory from model output.',
+    summary: 'Capture a candidate semantic memory version from cited sources.',
     effect: 'write',
-    scope: 'producer',
-    unavailable: 'Accepted memory services and their graph contract land in N02B.',
+    scope: 'both',
   },
   'memory.accept': {
-    summary: 'Accept a candidate as current memory as a human actor.',
+    summary: 'Explicitly accept one proposed version as current memory as a human actor.',
     effect: 'write',
     scope: 'human',
-    unavailable: 'Accepted memory services and their graph contract land in N02B.',
   },
   'memory.correct': {
-    summary: 'Record a human correction that supersedes a memory version.',
+    summary: 'Record a human correction that supersedes the current memory version.',
     effect: 'write',
     scope: 'human',
-    unavailable: 'Accepted memory services and their graph contract land in N02B.',
   },
   'memory.episode.record': {
     summary: 'Record one observed episode with honest completeness.',
     effect: 'write',
     scope: 'producer',
-    unavailable: 'Observed episodes land with the N02B memory services.',
+    unavailable: 'Observed episodes are not implemented in this build.',
   },
   'task.create': {
-    summary: 'Create a task with an objective and completion criteria.',
+    summary: 'Create a task with a bounded title and optional family.',
     effect: 'write',
     scope: 'both',
-    unavailable: 'Task authority and requirements land in N02B.',
   },
   'task.require': {
-    summary: 'Resolve the exact current requirement versions for a task.',
-    effect: 'read',
+    summary: 'Bind a required memory identity to a task and resolve current requirement versions.',
+    effect: 'write',
     scope: 'both',
-    unavailable: 'Task authority and requirements land in N02B.',
   },
   'claim.acquire': {
     summary: 'Acquire a bounded exclusive claim over a task.',

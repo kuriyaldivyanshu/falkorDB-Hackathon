@@ -4,8 +4,12 @@ import type { Graph } from 'falkordb';
 
 import {
   ThreadlineError,
+  memoryContentFits,
+  memoryDocumentSchema,
   operationViewSchema,
+  parseContract,
   type DecimalString,
+  type MemoryDocument,
   type OperationKind,
   type OperationState,
   type OperationView,
@@ -14,14 +18,26 @@ import {
 import type { ServiceLimits } from '../config.js';
 import type { Logger } from '../log.js';
 import { silentLogger } from '../log.js';
+import { canonicalDigest } from '../storage/digest.js';
+import type { SourceFileStore } from '../storage/files.js';
 import type { GraphStore } from '../storage/graph.js';
 import {
+  commitMemoryAccept,
+  commitMemoryCorrect,
+  commitMemoryPropose,
   commitSourceAnchor,
+  commitTaskCreate,
+  commitTaskRequire,
+  countMemoryVersions,
+  countSourceAnchors,
   ensureProjectRoot,
   eventIdPrefixFor,
   projectRootIdFor,
+  readMemoryState,
   readOperationReceipt,
   readProjectRoot,
+  readTaskState,
+  readVersionState,
   receiptIdFor,
   type OperationReceiptView,
   type ProjectRootView,
@@ -29,6 +45,7 @@ import {
 import type { SqlDatabase } from '../storage/pg.js';
 import { MEMORY_GRAPH_SCHEMA_VERSION } from '../version.js';
 import type { AuthenticatedCall } from './auth.js';
+import { MEMORY_DOCUMENT_MAX_BYTES, memoryDocumentRequestFacts, memoryRequestDigest } from './semanticSupport.js';
 
 /**
  * The leased operation worker and the operation inspection read.
@@ -57,7 +74,19 @@ import type { AuthenticatedCall } from './auth.js';
  */
 
 /** Operation kinds this build's worker knows how to commit. */
-export const SUPPORTED_OPERATION_KINDS: readonly string[] = ['source.append'];
+export const SUPPORTED_OPERATION_KINDS: readonly string[] = [
+  'source.append',
+  'task.create',
+  'memory.propose',
+  'memory.accept',
+  'memory.correct',
+  'task.require',
+];
+
+/** Bounded candidate proposals per memory; matches the accepted view bound. */
+const MAX_PROPOSED_CANDIDATES = 8;
+/** Bounded requirements per task; matches the accepted view bound. */
+const MAX_TASK_REQUIREMENTS = 16;
 
 const GRAPH_READY_TTL_MS = 5 * 60_000;
 const GRAPH_PROBE_TTL_MS = 2_000;
@@ -81,6 +110,7 @@ export interface OperationWorkerStatus {
 export interface OperationsWorkerDeps {
   readonly db: SqlDatabase;
   readonly graphStore: GraphStore;
+  readonly files: SourceFileStore;
   readonly limits: ServiceLimits;
   readonly clock?: () => Date;
   readonly logger?: Logger;
@@ -290,13 +320,13 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
 
   const deliverOperation = async (operation: ClaimedOperation): Promise<void> => {
     const { row, leaseToken } = operation;
-    const facts = await loadOperationFacts(row);
-
-    if (facts.refusal !== null) {
-      await settleRefused(row, leaseToken, facts.refusal.code, facts.refusal.detail);
+    const preparation = await prepareDelivery(row);
+    if (preparation.prepared === 'outcome') {
+      await settleOutcome(row, leaseToken, preparation.outcome);
       return;
     }
-    const { project, source } = facts;
+    const { plan } = preparation;
+    const { project } = plan;
 
     const projectRootId = projectRootIdFor(row.project_id);
     const graphEpoch = row.graph_epoch;
@@ -304,17 +334,6 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
     // stays one: converting it to a JavaScript number would round it and the
     // rounded value cannot be converted back.
     const privacyRevision = row.privacy_revision;
-    const sourceId = row.intent_source_id;
-    if (sourceId === null || row.kind !== 'source.append') {
-      // Already refused above; this narrows the type for the commit path.
-      await settleRefused(
-        row,
-        leaseToken,
-        'unsupported_operation_kind',
-        'This build commits source-backed source.append intents only.',
-      );
-      return;
-    }
 
     const ready = await ensureGraphReady(project.graph_key);
     if (!ready) {
@@ -406,22 +425,37 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
       return;
     }
 
+    const context: CommitTimeContext = {
+      projectRootId,
+      graphEpoch,
+      privacyRevision,
+      receiptId,
+      eventIdPrefix: eventIdPrefixFor(graphEpoch),
+      operationId: row.id,
+      requestDigest: row.request_digest,
+      actorPrincipalId: plan.actorPrincipalId,
+      nowMs: () => clock().getTime(),
+      graphSchemaVersion: MEMORY_GRAPH_SCHEMA_VERSION,
+    };
+
+    // Kind-specific graph preconditions run only for an operation whose own
+    // receipt does not already exist: a replayed acceptance must not be refused
+    // by a head its own earlier commit already moved.
+    let precondition: PlanOutcome | null = null;
+    try {
+      precondition = await plan.precheck(graph, context);
+    } catch (error) {
+      await retryAfterGraphFailure(operation, error);
+      return;
+    }
+    if (precondition !== null) {
+      await settleOutcome(row, leaseToken, precondition);
+      return;
+    }
+
     let eventSeq: DecimalString | null = null;
     try {
-      eventSeq = await commitSourceAnchor(graph, {
-        projectRootId,
-        graphEpoch,
-        privacyRevision,
-        receiptId,
-        eventIdPrefix: eventIdPrefixFor(graphEpoch),
-        operationId: row.id,
-        sourceId,
-        sourceDigest: source.digest,
-        sourceKind: source.kind,
-        requestDigest: row.request_digest,
-        nowMs: clock().getTime(),
-        graphSchemaVersion: MEMORY_GRAPH_SCHEMA_VERSION,
-      });
+      eventSeq = await plan.commit(graph, context);
     } catch (error) {
       await retryAfterGraphFailure(operation, error);
       return;
@@ -438,7 +472,7 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
     }
 
     // The statement wrote nothing: either the receipt appeared underneath us
-    // (a concurrent reconciler) or a root guard refused. Diagnose; never guess.
+    // (a concurrent reconciler) or a guard refused. Diagnose; never guess.
     const after = await readReceiptSafely(graph, receiptId);
     if (after.failed) {
       await retryAfterGraphFailure(operation, after.error);
@@ -485,6 +519,19 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
       await settleRefused(row, leaseToken, 'graph_root_inactive', 'The project graph root is not active.');
       return;
     }
+
+    let diagnostic: PlanOutcome | null = null;
+    try {
+      diagnostic = await plan.diagnose(graph, context);
+    } catch (error) {
+      await retryAfterGraphFailure(operation, error);
+      return;
+    }
+    if (diagnostic !== null) {
+      await settleOutcome(row, leaseToken, diagnostic);
+      return;
+    }
+
     await retry(
       row,
       leaseToken,
@@ -564,86 +611,1031 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
     return graphKey;
   };
 
-  const loadOperationFacts = async (
+  /**
+   * Loads the durable facts every kind shares: the project record this intent
+   * was admitted against, the recorded payload and the acting principal.
+   * Epoch, privacy revision and project state are re-derived here at delivery
+   * time — never from the request that created the intent.
+   */
+  const loadBaseFacts = async (
     row: ClaimedOperationRow,
   ): Promise<
-    | { readonly refusal: null; readonly project: ProjectFactRow; readonly source: SourceFactRow }
-    | { readonly refusal: { readonly code: string; readonly detail: string } }
+    | {
+        readonly refusal: null;
+        readonly project: ProjectFactRow;
+        readonly payload: Record<string, unknown>;
+        readonly actorPrincipalId: string;
+      }
+    | { readonly refusal: PlanOutcomeRefuse }
   > => {
-    if (row.kind !== 'source.append' || row.intent_source_id === null) {
-      return {
-        refusal: {
-          code: 'unsupported_operation_kind',
-          detail: 'This build commits source-backed source.append intents only.',
-        },
-      };
-    }
-    const facts = await deps.db.withTenantTransaction(row.tenant_id, async (tx) => {
+    const loaded = await deps.db.withTenantTransaction(row.tenant_id, async (tx) => {
       const projects = await tx.rows<ProjectFactRow>(
         `SELECT state, graph_key, graph_epoch, privacy_revision::text AS privacy_revision
            FROM threadline_memory.projects
           WHERE tenant_id = $1 AND id = $2`,
         [row.tenant_id, row.project_id],
       );
-      const sources = await tx.rows<SourceFactRow>(
-        `SELECT kind, digest, availability, visibility
-           FROM threadline_memory.sources
+      const operations = await tx.rows<{
+        payload: Record<string, unknown> | null;
+        actor_principal_id: string;
+      }>(
+        `SELECT payload, actor_principal_id
+           FROM threadline_memory.operations
           WHERE tenant_id = $1 AND project_id = $2 AND id = $3`,
-        [row.tenant_id, row.project_id, row.intent_source_id],
+        [row.tenant_id, row.project_id, row.id],
       );
-      return { project: projects[0] ?? null, source: sources[0] ?? null };
+      return { project: projects[0] ?? null, operation: operations[0] ?? null };
     });
-    if (facts.project === null) {
+    if (loaded.project === null) {
       return {
-        refusal: { code: 'project_unavailable', detail: 'The project record is not readable or was removed.' },
+        refusal: refuseIntent('project_unavailable', 'The project record is not readable or was removed.'),
       };
     }
-    if (facts.project.state !== 'active') {
+    if (loaded.project.state !== 'active') {
       return {
-        refusal: {
-          code: 'project_not_active',
-          detail: `The project is ${facts.project.state}; no graph admission is performed.`,
+        refusal: refuseIntent(
+          'project_not_active',
+          `The project is ${loaded.project.state}; no graph admission is performed.`,
+        ),
+      };
+    }
+    if (row.graph_epoch !== loaded.project.graph_epoch) {
+      return {
+        refusal: refuseIntent(
+          'graph_epoch_mismatch',
+          'The intent carries an older graph epoch than the project record; it was not admitted.',
+        ),
+      };
+    }
+    if (row.privacy_revision !== loaded.project.privacy_revision) {
+      return {
+        refusal: refuseIntent(
+          'privacy_revision_advanced',
+          'The project privacy revision advanced past this intent; it was not admitted.',
+        ),
+      };
+    }
+    if (loaded.operation === null) {
+      return { refusal: refuseIntent('operation_unreadable', 'The operation row is not readable.') };
+    }
+    return {
+      refusal: null,
+      project: loaded.project,
+      payload: loaded.operation.payload ?? {},
+      actorPrincipalId: loaded.operation.actor_principal_id,
+    };
+  };
+
+  const readSourceFileFacts = async (
+    row: ClaimedOperationRow,
+    sourceIds: readonly string[],
+  ): Promise<SourceFileFactsRow[]> => {
+    if (sourceIds.length === 0) {
+      return [];
+    }
+    return deps.db.withTenantTransaction(row.tenant_id, (tx) =>
+      tx.rows<SourceFileFactsRow>(
+        `SELECT id, kind, digest, byte_size::text AS byte_size, storage_key, availability, visibility
+           FROM threadline_memory.sources
+          WHERE tenant_id = $1 AND project_id = $2 AND id = ANY($3::uuid[])`,
+        [row.tenant_id, row.project_id, [...sourceIds]],
+      ),
+    );
+  };
+
+  /**
+   * Reads and validates the captured intent document for a memory intent.
+   *
+   * The document is the only place proposal content lives. It is read through
+   * the immutable source-byte store, which verifies the whole object against
+   * the digest SQL recorded, and re-validated against the shared document
+   * contract before any graph write is attempted.
+   */
+  const readIntentDocument = async (
+    row: ClaimedOperationRow,
+    documentSourceId: string,
+  ): Promise<
+    | { readonly refusal: null; readonly document: MemoryDocument }
+    | { readonly refusal: PlanOutcomeRefuse }
+  > => {
+    const facts = (await readSourceFileFacts(row, [documentSourceId]))[0] ?? null;
+    if (facts === null) {
+      return {
+        refusal: refuseIntent('intent_document_missing', 'The captured intent document is not present in the ledger.'),
+      };
+    }
+    if (facts.availability !== 'available' || facts.visibility !== 'project') {
+      return {
+        refusal: refuseIntent(
+          'intent_document_unavailable',
+          'The captured intent document is not available for admission.',
+        ),
+      };
+    }
+    const byteSize = Number(facts.byte_size);
+    if (!Number.isSafeInteger(byteSize) || byteSize <= 0 || byteSize > MEMORY_DOCUMENT_MAX_BYTES) {
+      return {
+        refusal: refuseIntent(
+          'intent_document_invalid',
+          'The captured intent document size is outside the admitted bound.',
+        ),
+      };
+    }
+    let bytes: Buffer;
+    try {
+      bytes = await deps.files.read({
+        tenantId: row.tenant_id,
+        projectId: row.project_id,
+        storageKey: facts.storage_key,
+        digest: facts.digest,
+        byteSize,
+        maxBytes: MEMORY_DOCUMENT_MAX_BYTES,
+      });
+    } catch {
+      return {
+        refusal: refuseIntent(
+          'intent_document_unreadable',
+          'The captured intent document bytes are not readable; nothing was committed.',
+        ),
+      };
+    }
+    try {
+      const document = parseContract(
+        memoryDocumentSchema,
+        JSON.parse(bytes.toString('utf8')) as unknown,
+        'memory document',
+      );
+      return { refusal: null, document };
+    } catch {
+      return {
+        refusal: refuseIntent(
+          'intent_document_invalid',
+          'The captured intent document did not validate; nothing was committed.',
+        ),
+      };
+    }
+  };
+
+  /**
+   * Cross-checks the captured document against the recorded operation and
+   * re-derives the canonical request digest. The recorded digest and the
+   * durable intent must agree; a mismatch refuses instead of writing content
+   * the ledger did not admit.
+   */
+  const verifyMemoryDocument = (
+    row: ClaimedOperationRow,
+    document: MemoryDocument,
+  ): PlanOutcomeRefuse | null => {
+    if (
+      document.operationKind !== row.kind ||
+      document.memoryId !== row.intent_memory_id ||
+      document.versionId !== row.intent_version_id ||
+      document.expectedHead !== (row.expected_head_token ?? null) ||
+      (document.originTaskId !== null &&
+        row.intent_task_id !== null &&
+        document.originTaskId !== row.intent_task_id)
+    ) {
+      return refuseIntent(
+        'intent_integrity_mismatch',
+        'The captured intent document does not match the recorded operation; nothing was committed.',
+      );
+    }
+    if (document.content.kind !== 'semantic' || !memoryContentFits(document.content)) {
+      return refuseIntent('unsupported_memory_kind', 'This build commits semantic memory versions only.');
+    }
+    const derived = memoryRequestDigest(memoryDocumentRequestFacts(row.project_id, document));
+    if (derived !== row.request_digest) {
+      return refuseIntent(
+        'intent_integrity_mismatch',
+        'The captured intent does not match its request digest; nothing was committed.',
+      );
+    }
+    return null;
+  };
+
+  /**
+   * The evidence gate for a semantic version: every cited source must exist in
+   * the project scope, be project-visible and available, and have a committed
+   * graph anchor. A pending anchor is a temporary wait; a rejected anchor is a
+   * terminal refusal. Missing and unreadable evidence produce the same
+   * refusal, so a refusal never confirms that an inaccessible source exists.
+   */
+  const requireEvidenceAdmissible = async (
+    row: ClaimedOperationRow,
+    actorPrincipalId: string,
+    documentSourceId: string,
+    evidenceIds: readonly string[],
+  ): Promise<PlanOutcome | null> => {
+    const loaded = await deps.db.withTenantTransaction(row.tenant_id, async (tx) => {
+      const evidence = await tx.rows<EvidenceFactsRow>(
+        `SELECT id, availability, visibility
+           FROM threadline_memory.sources
+          WHERE tenant_id = $1 AND project_id = $2 AND id = ANY($3::uuid[])
+            AND (visibility = 'project' OR owner_principal_id = $4)`,
+        [row.tenant_id, row.project_id, [...evidenceIds], actorPrincipalId],
+      );
+      const anchors = await tx.rows<AnchorStateRow>(
+        `SELECT id, state, error_code
+           FROM threadline_memory.operations
+          WHERE tenant_id = $1 AND project_id = $2 AND kind = 'source.append' AND id = ANY($3::uuid[])`,
+        [row.tenant_id, row.project_id, [documentSourceId, ...evidenceIds]],
+      );
+      return { evidence, anchors };
+    });
+    const evidenceById = new Map(loaded.evidence.map((entry) => [entry.id, entry]));
+    const anchorsById = new Map(loaded.anchors.map((entry) => [entry.id, entry]));
+    for (const id of evidenceIds) {
+      const facts = evidenceById.get(id);
+      if (facts === undefined || facts.visibility !== 'project') {
+        return refuseIntent(
+          'evidence_not_readable',
+          'A cited source is not present in this project scope or cannot be admitted as evidence.',
+        );
+      }
+      if (facts.availability !== 'available') {
+        return refuseIntent('source_unavailable', 'A cited source is not available for admission as evidence.');
+      }
+      const anchor = anchorsById.get(id);
+      if (anchor === undefined) {
+        return refuseIntent('evidence_anchor_missing', 'A cited source has no recorded admission intent.');
+      }
+      if (anchor.state === 'rejected' || anchor.state === 'cancelled') {
+        return refuseIntent(
+          'evidence_anchor_rejected',
+          'A cited source was never admitted to project memory; the intent cannot cite it.',
+        );
+      }
+      if (anchor.state !== 'committed') {
+        return retryPending('dependency_pending', 'A cited source is still being admitted; the intent waits for it.');
+      }
+    }
+    const own = anchorsById.get(documentSourceId);
+    if (own === undefined) {
+      return refuseIntent('intent_document_missing', 'The captured intent document has no recorded admission intent.');
+    }
+    if (own.state === 'rejected' || own.state === 'cancelled') {
+      return refuseIntent('intent_document_rejected', 'The captured intent document was never admitted to project memory.');
+    }
+    if (own.state !== 'committed') {
+      return retryPending(
+        'dependency_pending',
+        'The captured intent document is still being admitted; the intent waits for its own anchor.',
+      );
+    }
+    return null;
+  };
+
+  const readPendingMemoryIntents = async (
+    row: ClaimedOperationRow,
+    memoryId: string,
+    versionId: string | null,
+    expectedHead: string | null,
+  ): Promise<PendingIntentRow[]> =>
+    deps.db.withTenantTransaction(row.tenant_id, (tx) =>
+      tx.rows<PendingIntentRow>(PENDING_MEMORY_INTENTS_SQL, [
+        row.tenant_id,
+        row.project_id,
+        row.id,
+        memoryId,
+        versionId,
+        expectedHead,
+      ]),
+    );
+
+  const readLatestVersionIntent = async (
+    row: ClaimedOperationRow,
+    versionId: string,
+  ): Promise<PendingIntentRow | null> => {
+    const rows = await deps.db.withTenantTransaction(row.tenant_id, (tx) =>
+      tx.rows<PendingIntentRow>(LATEST_VERSION_INTENT_SQL, [row.tenant_id, row.project_id, versionId]),
+    );
+    return rows[0] ?? null;
+  };
+
+  const readPendingTaskIntents = async (
+    row: ClaimedOperationRow,
+    taskId: string,
+    memoryId: string,
+  ): Promise<PendingIntentRow[]> =>
+    deps.db.withTenantTransaction(row.tenant_id, (tx) =>
+      tx.rows<PendingIntentRow>(PENDING_TASK_INTENTS_SQL, [
+        row.tenant_id,
+        row.project_id,
+        row.id,
+        taskId,
+        memoryId,
+      ]),
+    );
+
+  const prepareSourceAppend = async (row: ClaimedOperationRow): Promise<Preparation> => {
+    const sourceId = row.intent_source_id;
+    if (sourceId === null) {
+      return {
+        prepared: 'outcome',
+        outcome: refuseIntent('unsupported_operation_kind', 'This build commits source-backed source.append intents only.'),
+      };
+    }
+    const base = await loadBaseFacts(row);
+    if (base.refusal !== null) {
+      return { prepared: 'outcome', outcome: base.refusal };
+    }
+    const source = (await readSourceFileFacts(row, [sourceId]))[0] ?? null;
+    if (source === null) {
+      return {
+        prepared: 'outcome',
+        outcome: refuseIntent('source_missing', 'The source this intent names is not present in the ledger.'),
+      };
+    }
+    if (source.availability !== 'available') {
+      return {
+        prepared: 'outcome',
+        outcome: refuseIntent(
+          source.availability === 'deleted' ? 'source_deleted' : 'source_unavailable',
+          `The source is ${source.availability}; it cannot be admitted to project memory.`,
+        ),
+      };
+    }
+    if (source.visibility !== 'project') {
+      return {
+        prepared: 'outcome',
+        outcome: refuseIntent(
+          'private_source_not_admitted',
+          'Principal-visibility sources are never admitted to project graph memory.',
+        ),
+      };
+    }
+    return {
+      prepared: 'plan',
+      plan: {
+        project: base.project,
+        actorPrincipalId: base.actorPrincipalId,
+        precheck: () => Promise.resolve(null),
+        commit: (graph, context) =>
+          commitSourceAnchor(graph, {
+            projectRootId: context.projectRootId,
+            graphEpoch: context.graphEpoch,
+            privacyRevision: context.privacyRevision,
+            receiptId: context.receiptId,
+            eventIdPrefix: context.eventIdPrefix,
+            operationId: context.operationId,
+            sourceId,
+            sourceDigest: source.digest,
+            sourceKind: source.kind,
+            requestDigest: context.requestDigest,
+            nowMs: context.nowMs(),
+            graphSchemaVersion: context.graphSchemaVersion,
+          }),
+        diagnose: () => Promise.resolve(null),
+      },
+    };
+  };
+
+  const prepareTaskCreate = async (row: ClaimedOperationRow): Promise<Preparation> => {
+    const taskId = row.intent_task_id;
+    if (taskId === null) {
+      return {
+        prepared: 'outcome',
+        outcome: refuseIntent('invalid_intent', 'A task.create intent must name its task identity.'),
+      };
+    }
+    const base = await loadBaseFacts(row);
+    if (base.refusal !== null) {
+      return { prepared: 'outcome', outcome: base.refusal };
+    }
+    const title = base.payload.title;
+    const taskFamily = base.payload.taskFamily;
+    const normalizedFamily = typeof taskFamily === 'string' ? taskFamily : null;
+    if (typeof title !== 'string' || title.length === 0 || (taskFamily !== null && typeof taskFamily !== 'string')) {
+      return { prepared: 'outcome', outcome: refuseIntent('invalid_intent', 'The recorded task payload did not validate.') };
+    }
+    const derived = canonicalDigest({
+      kind: 'task.create',
+      projectId: row.project_id,
+      title,
+      taskFamily: normalizedFamily,
+    });
+    if (derived !== row.request_digest) {
+      return {
+        prepared: 'outcome',
+        outcome: refuseIntent(
+          'intent_integrity_mismatch',
+          'The recorded intent does not match its request digest; nothing was committed.',
+        ),
+      };
+    }
+    return {
+      prepared: 'plan',
+      plan: {
+        project: base.project,
+        actorPrincipalId: base.actorPrincipalId,
+        precheck: () => Promise.resolve(null),
+        commit: (graph, context) =>
+          commitTaskCreate(graph, {
+            projectRootId: context.projectRootId,
+            graphEpoch: context.graphEpoch,
+            privacyRevision: context.privacyRevision,
+            receiptId: context.receiptId,
+            eventIdPrefix: context.eventIdPrefix,
+            operationId: context.operationId,
+            requestDigest: context.requestDigest,
+            actorPrincipalId: context.actorPrincipalId,
+            nowMs: context.nowMs(),
+            graphSchemaVersion: context.graphSchemaVersion,
+            tenantId: row.tenant_id,
+            projectId: row.project_id,
+            taskId,
+            title,
+            taskFamily: normalizedFamily,
+            revision: randomUUID(),
+          }),
+        diagnose: () => Promise.resolve(null),
+      },
+    };
+  };
+
+  const prepareMemoryPropose = async (row: ClaimedOperationRow): Promise<Preparation> => {
+    const documentSourceId = row.intent_source_id;
+    const memoryId = row.intent_memory_id;
+    const versionId = row.intent_version_id;
+    if (documentSourceId === null || memoryId === null || versionId === null) {
+      return {
+        prepared: 'outcome',
+        outcome: refuseIntent(
+          'invalid_intent',
+          'A memory.propose intent must name its content source, memory and version.',
+        ),
+      };
+    }
+    const base = await loadBaseFacts(row);
+    if (base.refusal !== null) {
+      return { prepared: 'outcome', outcome: base.refusal };
+    }
+    const memoryMode = base.payload.memoryMode;
+    if (memoryMode !== 'create' && memoryMode !== 'attach') {
+      return { prepared: 'outcome', outcome: refuseIntent('invalid_intent', 'The recorded proposal payload did not validate.') };
+    }
+    const loaded = await readIntentDocument(row, documentSourceId);
+    if (loaded.refusal !== null) {
+      return { prepared: 'outcome', outcome: loaded.refusal };
+    }
+    const { document } = loaded;
+    if (document.memoryMode !== memoryMode) {
+      return {
+        prepared: 'outcome',
+        outcome: refuseIntent(
+          'intent_integrity_mismatch',
+          'The captured intent document does not match the recorded proposal mode.',
+        ),
+      };
+    }
+    const integrity = verifyMemoryDocument(row, document);
+    if (integrity !== null) {
+      return { prepared: 'outcome', outcome: integrity };
+    }
+    const evidenceOutcome = await requireEvidenceAdmissible(row, base.actorPrincipalId, documentSourceId, document.sourceIds);
+    if (evidenceOutcome !== null) {
+      return { prepared: 'outcome', outcome: evidenceOutcome };
+    }
+    const pendingRows = await readPendingMemoryIntents(row, memoryId, null, null);
+    const projectRootId = projectRootIdFor(row.project_id);
+    return {
+      prepared: 'plan',
+      plan: {
+        project: base.project,
+        actorPrincipalId: base.actorPrincipalId,
+        precheck: async (graph) => {
+          const state = await readMemoryState(graph, projectRootId, memoryId);
+          if (memoryMode === 'create') {
+            if (state.memoryExists) {
+              return refuseIntent('memory_id_conflict', 'The memory identity already exists in the project graph.');
+            }
+            return null;
+          }
+          if (!state.memoryExists) {
+            return pendingRows.some((entry) => createsMemory(entry, memoryId))
+              ? retryPending(
+                  'dependency_pending',
+                  'The memory identity is not admitted yet; the proposal that creates it is still pending.',
+                )
+              : refuseIntent(
+                  'memory_not_available',
+                  'The memory identity this proposal attaches to is not present in the project graph.',
+                );
+          }
+          if (state.proposedVersionIds.length >= MAX_PROPOSED_CANDIDATES) {
+            return refuseIntent(
+              'candidate_limit_reached',
+              `The memory already holds ${String(MAX_PROPOSED_CANDIDATES)} proposed candidates; a further proposal is refused until one is resolved.`,
+            );
+          }
+          return null;
         },
-      };
-    }
-    if (row.graph_epoch !== facts.project.graph_epoch) {
-      return {
-        refusal: {
-          code: 'graph_epoch_mismatch',
-          detail: 'The intent carries an older graph epoch than the project record; it was not admitted.',
+        commit: (graph, context) =>
+          commitMemoryPropose(graph, {
+            projectRootId: context.projectRootId,
+            graphEpoch: context.graphEpoch,
+            privacyRevision: context.privacyRevision,
+            receiptId: context.receiptId,
+            eventIdPrefix: context.eventIdPrefix,
+            operationId: context.operationId,
+            requestDigest: context.requestDigest,
+            actorPrincipalId: context.actorPrincipalId,
+            nowMs: context.nowMs(),
+            graphSchemaVersion: context.graphSchemaVersion,
+            tenantId: row.tenant_id,
+            projectId: row.project_id,
+            memoryId,
+            memoryMode,
+            versionId,
+            subtype: document.content.kind === 'semantic' ? document.content.subtype : 'requirement',
+            statement: document.content.kind === 'semantic' ? document.content.statement : '',
+            applicabilityJson: JSON.stringify(document.applicability),
+            observedUnderJson: JSON.stringify(document.observedUnder),
+            observedAtMs: row.created_at.getTime(),
+            originTaskId: document.originTaskId,
+            expectedHead: document.expectedHead,
+            sourceAnchorIds: document.sourceIds,
+            contradictionVersionIds: document.contradictsVersionIds,
+            candidateCap: MAX_PROPOSED_CANDIDATES,
+          }),
+        diagnose: async (graph) => {
+          const state = await readMemoryState(graph, projectRootId, memoryId);
+          if (memoryMode === 'attach' && state.memoryExists && state.proposedVersionIds.length >= MAX_PROPOSED_CANDIDATES) {
+            return refuseIntent(
+              'candidate_limit_reached',
+              `The memory already holds ${String(MAX_PROPOSED_CANDIDATES)} proposed candidates; a further proposal is refused until one is resolved.`,
+            );
+          }
+          if (memoryMode === 'create' && state.memoryExists) {
+            return state.proposedVersionIds.includes(versionId)
+              ? refuseIntent(
+                  'graph_inconsistent',
+                  'The project graph holds this version without a receipt; refusing to guess an outcome.',
+                )
+              : refuseIntent('memory_id_conflict', 'The memory identity already exists in the project graph.');
+          }
+          const anchorCount = await countSourceAnchors(graph, [documentSourceId, ...document.sourceIds]);
+          if (anchorCount < 1 + document.sourceIds.length) {
+            return refuseIntent('evidence_anchor_missing', 'A cited source anchor is missing from the project graph.');
+          }
+          if (document.contradictsVersionIds.length > 0) {
+            const found = await countMemoryVersions(graph, document.contradictsVersionIds);
+            if (found < document.contradictsVersionIds.length) {
+              return refuseIntent(
+                'contradiction_target_missing',
+                'A declared contradiction target is not present in the project graph.',
+              );
+            }
+          }
+          return null;
         },
+      },
+    };
+  };
+
+  const prepareMemoryAccept = async (row: ClaimedOperationRow): Promise<Preparation> => {
+    const memoryId = row.intent_memory_id;
+    const versionId = row.intent_version_id;
+    if (memoryId === null || versionId === null) {
+      return {
+        prepared: 'outcome',
+        outcome: refuseIntent('invalid_intent', 'A memory.accept intent must name its memory and version.'),
       };
     }
-    if (row.privacy_revision !== facts.project.privacy_revision) {
+    const base = await loadBaseFacts(row);
+    if (base.refusal !== null) {
+      return { prepared: 'outcome', outcome: base.refusal };
+    }
+    const reason = typeof base.payload.reason === 'string' ? base.payload.reason : null;
+    const expectedHead = row.expected_head_token;
+    const derived = canonicalDigest({
+      kind: 'memory.accept',
+      projectId: row.project_id,
+      memoryId,
+      versionId,
+      expectedCurrentVersionId: expectedHead,
+      reason,
+    });
+    if (derived !== row.request_digest) {
       return {
-        refusal: {
-          code: 'privacy_revision_advanced',
-          detail: 'The project privacy revision advanced past this intent; it was not admitted.',
+        prepared: 'outcome',
+        outcome: refuseIntent(
+          'intent_integrity_mismatch',
+          'The recorded intent does not match its request digest; nothing was committed.',
+        ),
+      };
+    }
+    const pendingRows = await readPendingMemoryIntents(row, memoryId, versionId, expectedHead);
+    const versionBeingAdmitted = pendingRows.some((entry) => createsVersion(entry, versionId));
+    const memoryBeingAdmitted = pendingRows.some((entry) => createsMemory(entry, memoryId));
+    const headBecomesCurrent =
+      expectedHead !== null && pendingRows.some((entry) => entry.intent_version_id === expectedHead);
+    const latestVersionIntent = await readLatestVersionIntent(row, versionId);
+    const projectRootId = projectRootIdFor(row.project_id);
+    return {
+      prepared: 'plan',
+      plan: {
+        project: base.project,
+        actorPrincipalId: base.actorPrincipalId,
+        precheck: async (graph) => {
+          const version = await readVersionState(graph, versionId);
+          if (version === null) {
+            if (versionBeingAdmitted || memoryBeingAdmitted) {
+              return retryPending(
+                'dependency_pending',
+                'The version this acceptance names is not admitted yet; a related intent is still pending.',
+              );
+            }
+            if (latestVersionIntent !== null && latestVersionIntent.state === 'rejected') {
+              return refuseIntent(
+                'proposal_rejected',
+                `The intent that would have admitted this version was refused (${latestVersionIntent.error_code ?? 'rejected'}).`,
+              );
+            }
+            if (latestVersionIntent !== null && latestVersionIntent.state === 'committed') {
+              return refuseIntent(
+                'version_not_available',
+                'The ledger records the version as committed but the project graph does not hold it.',
+              );
+            }
+            return refuseIntent(
+              'version_not_available',
+              'This acceptance names a version that was never admitted to project graph memory.',
+            );
+          }
+          if (version.memoryId !== memoryId) {
+            return refuseIntent('intent_integrity_mismatch', 'The named version belongs to a different memory identity.');
+          }
+          const state = await readMemoryState(graph, projectRootId, memoryId);
+          if (!state.memoryExists) {
+            return memoryBeingAdmitted
+              ? retryPending('dependency_pending', 'The memory identity is not admitted yet; a related intent is still pending.')
+              : refuseIntent('memory_not_available', 'The memory identity is not present in the project graph.');
+          }
+          const currents = [...new Set(state.currentVersionIds)];
+          if (currents.length > 1) {
+            return refuseIntent('current_head_ambiguous', 'The memory has more than one current version; authority is ambiguous.');
+          }
+          if (version.acceptance !== 'proposed') {
+            if (version.acceptance === 'accepted' && currents.includes(versionId)) {
+              return refuseIntent('version_already_current', 'The version is already the accepted current version.');
+            }
+            return refuseIntent('version_not_proposed', 'Only a proposed version can be newly accepted.');
+          }
+          const head = currents[0] ?? null;
+          if (head !== expectedHead) {
+            if (headBecomesCurrent) {
+              return retryPending(
+                'dependency_pending',
+                'Another acceptance or correction is about to make the expected head current; this acceptance waits.',
+              );
+            }
+            return refuseIntent(
+              'expected_head_conflict',
+              `The memory's current version does not match the expected head; observed ${head ?? 'no current version'}.`,
+            );
+          }
+          return null;
         },
-      };
-    }
-    if (facts.source === null) {
-      return {
-        refusal: { code: 'source_missing', detail: 'The source this intent names is not present in the ledger.' },
-      };
-    }
-    if (facts.source.availability !== 'available') {
-      return {
-        refusal: {
-          code: facts.source.availability === 'deleted' ? 'source_deleted' : 'source_unavailable',
-          detail: `The source is ${facts.source.availability}; it cannot be admitted to project memory.`,
+        commit: (graph, context) =>
+          commitMemoryAccept(graph, {
+            projectRootId: context.projectRootId,
+            graphEpoch: context.graphEpoch,
+            privacyRevision: context.privacyRevision,
+            receiptId: context.receiptId,
+            eventIdPrefix: context.eventIdPrefix,
+            operationId: context.operationId,
+            requestDigest: context.requestDigest,
+            actorPrincipalId: context.actorPrincipalId,
+            nowMs: context.nowMs(),
+            graphSchemaVersion: context.graphSchemaVersion,
+            memoryId,
+            versionId,
+            expectedHead,
+            reason,
+          }),
+        diagnose: async (graph) => {
+          const version = await readVersionState(graph, versionId);
+          if (version === null) {
+            return refuseIntent('version_not_available', 'The version disappeared before the commit could be confirmed.');
+          }
+          const state = await readMemoryState(graph, projectRootId, memoryId);
+          const currents = [...new Set(state.currentVersionIds)];
+          if (version.acceptance !== 'proposed') {
+            if (version.acceptance === 'accepted' && currents.includes(versionId)) {
+              return refuseIntent(
+                'expected_head_conflict',
+                'Another acceptance made the version current first; this operation lost the race and wrote nothing.',
+              );
+            }
+            return refuseIntent('version_not_proposed', 'Only a proposed version can be newly accepted.');
+          }
+          if (currents.length > 1) {
+            return refuseIntent('current_head_ambiguous', 'The memory has more than one current version; authority is ambiguous.');
+          }
+          const head = currents[0] ?? null;
+          if (head !== expectedHead) {
+            if (headBecomesCurrent) {
+              return retryPending(
+                'dependency_pending',
+                'Another acceptance or correction is about to make the expected head current; this acceptance waits.',
+              );
+            }
+            return refuseIntent(
+              'expected_head_conflict',
+              `The memory's current version does not match the expected head; observed ${head ?? 'no current version'}.`,
+            );
+          }
+          return null;
         },
-      };
-    }
-    if (facts.source.visibility !== 'project') {
+      },
+    };
+  };
+
+  const prepareMemoryCorrect = async (row: ClaimedOperationRow): Promise<Preparation> => {
+    const documentSourceId = row.intent_source_id;
+    const memoryId = row.intent_memory_id;
+    const versionId = row.intent_version_id;
+    if (documentSourceId === null || memoryId === null || versionId === null) {
       return {
-        refusal: {
-          code: 'private_source_not_admitted',
-          detail: 'Principal-visibility sources are never admitted to project graph memory.',
-        },
+        prepared: 'outcome',
+        outcome: refuseIntent(
+          'invalid_intent',
+          'A memory.correct intent must name its content source, memory and version.',
+        ),
       };
     }
-    return { refusal: null, project: facts.project, source: facts.source };
+    const base = await loadBaseFacts(row);
+    if (base.refusal !== null) {
+      return { prepared: 'outcome', outcome: base.refusal };
+    }
+    const loaded = await readIntentDocument(row, documentSourceId);
+    if (loaded.refusal !== null) {
+      return { prepared: 'outcome', outcome: loaded.refusal };
+    }
+    const { document } = loaded;
+    const expectedHead = document.expectedHead;
+    const reason = document.reason;
+    if (document.memoryMode !== 'attach' || expectedHead === null || reason === null) {
+      return {
+        prepared: 'outcome',
+        outcome: refuseIntent('invalid_intent', 'A correction must name the head it supersedes and its reason.'),
+      };
+    }
+    const integrity = verifyMemoryDocument(row, document);
+    if (integrity !== null) {
+      return { prepared: 'outcome', outcome: integrity };
+    }
+    const evidenceOutcome = await requireEvidenceAdmissible(row, base.actorPrincipalId, documentSourceId, document.sourceIds);
+    if (evidenceOutcome !== null) {
+      return { prepared: 'outcome', outcome: evidenceOutcome };
+    }
+    const pendingRows = await readPendingMemoryIntents(row, memoryId, versionId, expectedHead);
+    const memoryBeingAdmitted = pendingRows.some((entry) => createsMemory(entry, memoryId));
+    const headBecomesCurrent = pendingRows.some((entry) => entry.intent_version_id === expectedHead);
+    const projectRootId = projectRootIdFor(row.project_id);
+    return {
+      prepared: 'plan',
+      plan: {
+        project: base.project,
+        actorPrincipalId: base.actorPrincipalId,
+        precheck: async (graph) => {
+          const state = await readMemoryState(graph, projectRootId, memoryId);
+          if (!state.memoryExists) {
+            return memoryBeingAdmitted
+              ? retryPending('dependency_pending', 'The memory identity is not admitted yet; a related intent is still pending.')
+              : refuseIntent('memory_not_available', 'The memory identity is not present in the project graph.');
+          }
+          const currents = [...new Set(state.currentVersionIds)];
+          if (currents.length > 1) {
+            return refuseIntent('current_head_ambiguous', 'The memory has more than one current version; authority is ambiguous.');
+          }
+          const head = currents[0] ?? null;
+          if (head !== expectedHead) {
+            if (headBecomesCurrent) {
+              return retryPending(
+                'dependency_pending',
+                'Another acceptance or correction is about to make the expected head current; this correction waits.',
+              );
+            }
+            return refuseIntent(
+              'expected_head_conflict',
+              `The memory's current version does not match the expected head; observed ${head ?? 'no current version'}.`,
+            );
+          }
+          if (state.proposedVersionIds.includes(versionId)) {
+            return refuseIntent('version_id_conflict', 'The correction version identity already exists in the project graph.');
+          }
+          return null;
+        },
+        commit: (graph, context) =>
+          commitMemoryCorrect(graph, {
+            projectRootId: context.projectRootId,
+            graphEpoch: context.graphEpoch,
+            privacyRevision: context.privacyRevision,
+            receiptId: context.receiptId,
+            eventIdPrefix: context.eventIdPrefix,
+            operationId: context.operationId,
+            requestDigest: context.requestDigest,
+            actorPrincipalId: context.actorPrincipalId,
+            nowMs: context.nowMs(),
+            graphSchemaVersion: context.graphSchemaVersion,
+            tenantId: row.tenant_id,
+            projectId: row.project_id,
+            memoryId,
+            versionId,
+            expectedHead,
+            subtype: document.content.kind === 'semantic' ? document.content.subtype : 'requirement',
+            statement: document.content.kind === 'semantic' ? document.content.statement : '',
+            applicabilityJson: JSON.stringify(document.applicability),
+            observedUnderJson: JSON.stringify(document.observedUnder),
+            observedAtMs: row.created_at.getTime(),
+            originTaskId: document.originTaskId,
+            reason,
+            sourceAnchorIds: document.sourceIds,
+            contradictionVersionIds: document.contradictsVersionIds,
+          }),
+        diagnose: async (graph) => {
+          const version = await readVersionState(graph, versionId);
+          if (version !== null) {
+            return refuseIntent(
+              'graph_inconsistent',
+              'The project graph holds the correction version without a receipt; refusing to guess an outcome.',
+            );
+          }
+          const state = await readMemoryState(graph, projectRootId, memoryId);
+          if (!state.memoryExists) {
+            return refuseIntent('memory_not_available', 'The memory identity is not present in the project graph.');
+          }
+          const currents = [...new Set(state.currentVersionIds)];
+          if (currents.length > 1) {
+            return refuseIntent('current_head_ambiguous', 'The memory has more than one current version; authority is ambiguous.');
+          }
+          const head = currents[0] ?? null;
+          if (head !== expectedHead) {
+            if (headBecomesCurrent) {
+              return retryPending(
+                'dependency_pending',
+                'Another acceptance or correction is about to make the expected head current; this correction waits.',
+              );
+            }
+            return refuseIntent(
+              'expected_head_conflict',
+              `The memory's current version does not match the expected head; observed ${head ?? 'no current version'}.`,
+            );
+          }
+          const anchorCount = await countSourceAnchors(graph, [documentSourceId, ...document.sourceIds]);
+          if (anchorCount < 1 + document.sourceIds.length) {
+            return refuseIntent('evidence_anchor_missing', 'A cited source anchor is missing from the project graph.');
+          }
+          if (document.contradictsVersionIds.length > 0) {
+            const found = await countMemoryVersions(graph, document.contradictsVersionIds);
+            if (found < document.contradictsVersionIds.length) {
+              return refuseIntent(
+                'contradiction_target_missing',
+                'A declared contradiction target is not present in the project graph.',
+              );
+            }
+          }
+          return null;
+        },
+      },
+    };
+  };
+
+  const prepareTaskRequire = async (row: ClaimedOperationRow): Promise<Preparation> => {
+    const taskId = row.intent_task_id;
+    const memoryId = row.intent_memory_id;
+    const expectedRevision = row.expected_task_revision;
+    if (taskId === null || memoryId === null || expectedRevision === null) {
+      return {
+        prepared: 'outcome',
+        outcome: refuseIntent(
+          'invalid_intent',
+          'A task.require intent must name its task, memory and expected task revision.',
+        ),
+      };
+    }
+    const base = await loadBaseFacts(row);
+    if (base.refusal !== null) {
+      return { prepared: 'outcome', outcome: base.refusal };
+    }
+    const derived = canonicalDigest({
+      kind: 'task.require',
+      projectId: row.project_id,
+      taskId,
+      memoryId,
+      expectedTaskRevision: expectedRevision,
+    });
+    if (derived !== row.request_digest) {
+      return {
+        prepared: 'outcome',
+        outcome: refuseIntent(
+          'intent_integrity_mismatch',
+          'The recorded intent does not match its request digest; nothing was committed.',
+        ),
+      };
+    }
+    const pendingRows = await readPendingTaskIntents(row, taskId, memoryId);
+    const taskBeingCreated = pendingRows.some((entry) => createsTask(entry, taskId));
+    const memoryBeingAdmitted = pendingRows.some((entry) => createsMemory(entry, memoryId));
+    const projectRootId = projectRootIdFor(row.project_id);
+    return {
+      prepared: 'plan',
+      plan: {
+        project: base.project,
+        actorPrincipalId: base.actorPrincipalId,
+        precheck: async (graph) => {
+          const state = await readTaskState(graph, projectRootId, taskId);
+          if (!state.taskExists) {
+            return taskBeingCreated
+              ? retryPending('dependency_pending', 'The task is not created yet; its create intent is still pending.')
+              : refuseIntent('task_not_available', 'The task is not present in the project graph.');
+          }
+          if (state.revision !== expectedRevision) {
+            return refuseIntent(
+              'task_revision_conflict',
+              'The task revision advanced past the expected revision; another writer won.',
+            );
+          }
+          if (state.state !== 'open') {
+            return refuseIntent('task_closed', 'The task is closed; new requirements are refused.');
+          }
+          if (state.requiredMemoryIds.includes(memoryId)) {
+            return refuseIntent('requirement_already_bound', 'The task already requires this memory identity.');
+          }
+          if (state.requiredMemoryIds.length >= MAX_TASK_REQUIREMENTS) {
+            return refuseIntent(
+              'requirement_limit_reached',
+              `The task already holds ${String(MAX_TASK_REQUIREMENTS)} requirements; a further binding is refused.`,
+            );
+          }
+          const memory = await readMemoryState(graph, projectRootId, memoryId);
+          if (!memory.memoryExists) {
+            return memoryBeingAdmitted
+              ? retryPending('dependency_pending', 'The memory identity is not admitted yet; a related intent is still pending.')
+              : refuseIntent('memory_not_available', 'The memory identity is not present in the project graph.');
+          }
+          return null;
+        },
+        commit: (graph, context) =>
+          commitTaskRequire(graph, {
+            projectRootId: context.projectRootId,
+            graphEpoch: context.graphEpoch,
+            privacyRevision: context.privacyRevision,
+            receiptId: context.receiptId,
+            eventIdPrefix: context.eventIdPrefix,
+            operationId: context.operationId,
+            requestDigest: context.requestDigest,
+            actorPrincipalId: context.actorPrincipalId,
+            nowMs: context.nowMs(),
+            graphSchemaVersion: context.graphSchemaVersion,
+            taskId,
+            memoryId,
+            expectedTaskRevision: expectedRevision,
+            newRevision: randomUUID(),
+            maxRequirements: MAX_TASK_REQUIREMENTS,
+          }),
+        diagnose: async (graph) => {
+          const state = await readTaskState(graph, projectRootId, taskId);
+          if (!state.taskExists) {
+            return refuseIntent('task_not_available', 'The task is not present in the project graph.');
+          }
+          if (state.revision !== expectedRevision) {
+            return refuseIntent(
+              'task_revision_conflict',
+              'The task revision advanced past the expected revision; another writer won.',
+            );
+          }
+          if (state.requiredMemoryIds.includes(memoryId)) {
+            return refuseIntent('requirement_already_bound', 'The task already requires this memory identity.');
+          }
+          return null;
+        },
+      },
+    };
+  };
+
+  const prepareDelivery = async (row: ClaimedOperationRow): Promise<Preparation> => {
+    switch (row.kind) {
+      case 'source.append':
+        return prepareSourceAppend(row);
+      case 'task.create':
+        return prepareTaskCreate(row);
+      case 'memory.propose':
+        return prepareMemoryPropose(row);
+      case 'memory.accept':
+        return prepareMemoryAccept(row);
+      case 'memory.correct':
+        return prepareMemoryCorrect(row);
+      case 'task.require':
+        return prepareTaskRequire(row);
+      default:
+        return {
+          prepared: 'outcome',
+          outcome: refuseIntent('unsupported_operation_kind', `This build cannot commit ${row.kind} intents.`),
+        };
+    }
   };
 
   const renewLease = async (row: ClaimedOperationRow, leaseToken: string): Promise<boolean> => {
@@ -779,6 +1771,18 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
         fields: { operationId: row.id, kind: row.kind, nextState, errorCode, delayMs },
       });
     }
+  };
+
+  const settleOutcome = async (
+    row: ClaimedOperationRow,
+    leaseToken: string,
+    outcome: PlanOutcome,
+  ): Promise<void> => {
+    if (outcome.type === 'refuse') {
+      await settleRefused(row, leaseToken, outcome.code, outcome.detail);
+      return;
+    }
+    await retry(row, leaseToken, outcome.code, outcome.nextState, outcome.detail);
   };
 
   const recordError = (scope: string, error: unknown, fields?: Record<string, unknown>): void => {
@@ -930,6 +1934,11 @@ interface ClaimedOperationRow {
   readonly kind: string;
   readonly request_digest: string;
   readonly intent_source_id: string | null;
+  readonly intent_memory_id: string | null;
+  readonly intent_version_id: string | null;
+  readonly intent_task_id: string | null;
+  readonly expected_head_token: string | null;
+  readonly expected_task_revision: string | null;
   readonly graph_epoch: string;
   readonly privacy_revision: string;
   readonly attempts: number;
@@ -944,11 +1953,137 @@ interface ProjectFactRow {
   readonly privacy_revision: string;
 }
 
-interface SourceFactRow {
+interface SourceFileFactsRow {
+  readonly id: string;
   readonly kind: string;
   readonly digest: string;
+  readonly byte_size: string;
+  readonly storage_key: string;
   readonly availability: string;
   readonly visibility: string;
+}
+
+interface EvidenceFactsRow {
+  readonly id: string;
+  readonly availability: string;
+  readonly visibility: string;
+}
+
+interface AnchorStateRow {
+  readonly id: string;
+  readonly state: string;
+  readonly error_code: string | null;
+}
+
+interface PendingIntentRow {
+  readonly id: string;
+  readonly kind: string;
+  readonly state: string;
+  readonly intent_memory_id: string | null;
+  readonly intent_version_id: string | null;
+  readonly intent_task_id: string | null;
+  readonly expected_head_token: string | null;
+  readonly error_code: string | null;
+  /** Only `memory.propose`/`memory.correct` record one; `create` mints the identity. */
+  readonly memory_mode: string | null;
+}
+
+/**
+ * Who can create a missing node, and who cannot.
+ *
+ * A wait is only honest when the intent it waits for can actually produce the
+ * missing identity. Anything else — another attach proposal, an acceptance, a
+ * correction, another task's requirement — can never create that node, so
+ * counting it turns two mutually waiting intents into a permanent `pending`
+ * backlog that never settles. The rule is therefore: wait only on an intent
+ * whose own commit creates the identity in question.
+ */
+const createsMemory = (entry: PendingIntentRow, memoryId: string): boolean =>
+  entry.kind === 'memory.propose' && entry.memory_mode === 'create' && entry.intent_memory_id === memoryId;
+
+const createsVersion = (entry: PendingIntentRow, versionId: string): boolean =>
+  (entry.kind === 'memory.propose' || entry.kind === 'memory.correct') && entry.intent_version_id === versionId;
+
+const createsTask = (entry: PendingIntentRow, taskId: string): boolean =>
+  entry.kind === 'task.create' && entry.intent_task_id === taskId;
+
+/**
+ * Every dependency lookup names the identity the dependent intent concerns, so
+ * it stays an indexed, bounded probe rather than a scan of the operation log.
+ */
+const DEPENDENCY_SELECT = `SELECT id, kind, state,
+         intent_memory_id::text AS intent_memory_id,
+         intent_version_id::text AS intent_version_id,
+         intent_task_id::text AS intent_task_id,
+         expected_head_token, error_code,
+         payload->>'memoryMode' AS memory_mode
+    FROM threadline_memory.operations`;
+
+const PENDING_MEMORY_INTENTS_SQL = `${DEPENDENCY_SELECT}
+   WHERE tenant_id = $1 AND project_id = $2 AND id <> $3
+     AND kind IN ('memory.propose', 'memory.accept', 'memory.correct')
+     AND state IN ('pending', 'leased', 'ambiguous')
+     AND (intent_memory_id = $4
+          OR ($5::uuid IS NOT NULL AND intent_version_id = $5)
+          OR ($6::uuid IS NOT NULL AND intent_version_id = $6))`;
+
+const LATEST_VERSION_INTENT_SQL = `${DEPENDENCY_SELECT}
+   WHERE tenant_id = $1 AND project_id = $2 AND intent_version_id = $3
+   ORDER BY created_at DESC, id ASC
+   LIMIT 1`;
+
+const PENDING_TASK_INTENTS_SQL = `${DEPENDENCY_SELECT}
+   WHERE tenant_id = $1 AND project_id = $2 AND id <> $3
+     AND kind IN ('task.create', 'task.require', 'memory.propose', 'memory.correct')
+     AND state IN ('pending', 'leased', 'ambiguous')
+     AND (intent_task_id = $4 OR intent_memory_id = $5)`;
+
+interface PlanOutcomeRefuse {
+  readonly type: 'refuse';
+  readonly code: string;
+  readonly detail: string;
+}
+
+interface PlanOutcomeRetry {
+  readonly type: 'retry';
+  readonly code: string;
+  readonly detail: string;
+  readonly nextState: 'pending' | 'ambiguous';
+}
+
+type PlanOutcome = PlanOutcomeRefuse | PlanOutcomeRetry;
+
+interface CommitTimeContext {
+  readonly projectRootId: string;
+  readonly graphEpoch: string;
+  readonly privacyRevision: string;
+  readonly receiptId: string;
+  readonly eventIdPrefix: string;
+  readonly operationId: string;
+  readonly requestDigest: string;
+  readonly actorPrincipalId: string;
+  readonly nowMs: () => number;
+  readonly graphSchemaVersion: number;
+}
+
+interface DeliveryPlan {
+  readonly project: ProjectFactRow;
+  readonly actorPrincipalId: string;
+  readonly precheck: (graph: Graph, context: CommitTimeContext) => Promise<PlanOutcome | null>;
+  readonly commit: (graph: Graph, context: CommitTimeContext) => Promise<DecimalString | null>;
+  readonly diagnose: (graph: Graph, context: CommitTimeContext) => Promise<PlanOutcome | null>;
+}
+
+type Preparation =
+  | { readonly prepared: 'outcome'; readonly outcome: PlanOutcome }
+  | { readonly prepared: 'plan'; readonly plan: DeliveryPlan };
+
+function refuseIntent(code: string, detail: string): PlanOutcomeRefuse {
+  return { type: 'refuse', code, detail };
+}
+
+function retryPending(code: string, detail: string): PlanOutcomeRetry {
+  return { type: 'retry', code, detail, nextState: 'pending' };
 }
 
 interface OperationInspectRow {

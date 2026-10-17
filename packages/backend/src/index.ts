@@ -14,6 +14,10 @@ import type { Logger } from './log.js';
 import { silentLogger } from './log.js';
 import { createAuthService, type AuthService } from './service/auth.js';
 import {
+  createMemoryService as createSemanticMemoryService,
+  type MemoryService as SemanticMemoryService,
+} from './service/memory.js';
+import {
   createOperationsWorker,
   createOperationService,
   type OperationService,
@@ -22,6 +26,7 @@ import {
 } from './service/operations.js';
 import { createProjectService, type ProjectService } from './service/projects.js';
 import { createSourceService, type SourceService } from './service/sources.js';
+import { createTaskService, type TaskService } from './service/tasks.js';
 import { createSourceFileStore, type SourceFileStore } from './storage/files.js';
 import { createGraphStore, startGraphStore, type GraphStore } from './storage/graph.js';
 import { readSchemaStatus, readPrivilegedFunctionOwners, type PrivilegedFunctionReport, type SchemaStatus } from './storage/migrate.js';
@@ -153,6 +158,8 @@ export interface MemoryService {
   readonly projects: ProjectService;
   readonly sources: SourceService;
   readonly operations: OperationService;
+  readonly memories: SemanticMemoryService;
+  readonly tasks: TaskService;
 }
 
 export function createMemoryService(deps: MemoryServiceDeps): MemoryService {
@@ -186,6 +193,8 @@ export function createMemoryService(deps: MemoryServiceDeps): MemoryService {
   let projects: ProjectService | null = null;
   let sources: SourceService | null = null;
   let operations: OperationService | null = null;
+  let memories: SemanticMemoryService | null = null;
+  let tasks: TaskService | null = null;
   let worker: OperationsWorker | null = null;
 
   const sqlReady = (): boolean => reachable && schema?.state === 'applied' && database !== null;
@@ -313,9 +322,12 @@ export function createMemoryService(deps: MemoryServiceDeps): MemoryService {
     sources = createSourceService({ db: database, files, clock, logger });
     operations = createOperationService({ db: database });
     if (graphStore !== null && sqlReady()) {
+      memories = createSemanticMemoryService({ db: database, files, graphStore, clock, logger });
+      tasks = createTaskService({ db: database, graphStore, clock, logger });
       worker = createOperationsWorker({
         db: database,
         graphStore,
+        files,
         limits: deps.config.limits,
         clock,
         logger,
@@ -355,6 +367,8 @@ export function createMemoryService(deps: MemoryServiceDeps): MemoryService {
     projects = null;
     sources = null;
     operations = null;
+    memories = null;
+    tasks = null;
     const settled = await Promise.allSettled(closers);
     if (settled.some((result) => result.status === 'rejected')) {
       logger.log({ level: 'warn', message: 'One or more storage connections did not close cleanly.' });
@@ -455,14 +469,16 @@ export function createMemoryService(deps: MemoryServiceDeps): MemoryService {
       uptimeMs: startedAtMs === null ? 0 : Math.max(0, clock().getTime() - startedAtMs),
       components: [...components],
       guarantees: {
-        // No accepted-memory write or read service exists yet; connectivity and
-        // a running worker are not accepted memory (N02B).
-        durableMemory: false,
+        // Semantic memory and task coordination are served through the leased
+        // worker: health reports them durable only while SQL, the graph and the
+        // worker are all ready. Episodes, procedures, context and native
+        // integration are still absent and stated unavailable in capabilities.
+        durableMemory: durableReady() && graphServing && (workerStatus?.running ?? false),
         graphAdmission: durableReady() && graphServing && (workerStatus?.running ?? false),
         sourceHistory: durableReady() && filesReady,
         replayable: false,
         note: durableReady()
-          ? 'Source history is durable in SQL plus immutable files. Source-backed graph admission commits through the leased worker with graph receipts; accepted memory, context and coordination land in later batches and are stated unavailable in capabilities.'
+          ? 'Source history is durable in SQL plus immutable files. Semantic memory proposals, explicit human acceptance, corrections and task requirements are admitted in SQL and committed to the project graph through the leased worker with graph receipts; accepted-memory reads resolve the current version from that graph. Episodes, procedures, context and native integration are not implemented and are stated unavailable in capabilities.'
           : 'No durable store is ready: health and capabilities are served, and every durable operation refuses.',
       },
     };
@@ -501,6 +517,14 @@ export function createMemoryService(deps: MemoryServiceDeps): MemoryService {
 
     get operations(): OperationService {
       return requireDurable(operations);
+    },
+
+    get memories(): SemanticMemoryService {
+      return requireDurable(memories);
+    },
+
+    get tasks(): TaskService {
+      return requireDurable(tasks);
     },
 
     liveness: () => ({
