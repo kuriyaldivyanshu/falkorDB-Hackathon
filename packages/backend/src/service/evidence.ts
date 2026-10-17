@@ -156,6 +156,7 @@ export async function classifyEpisodeEvidence(
   };
 }
 
+/** Throws an unsupported error explaining why observed evidence cannot be granted. */
 function refuseUnsupported(reason: string): never {
   throw new ThreadlineError(
     'unsupported',

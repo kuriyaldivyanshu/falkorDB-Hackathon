@@ -189,6 +189,7 @@ const OPERATION_TABLE: Readonly<Record<OperationId, OperationDefinition>> = {
   },
 };
 
+/** Reports implemented operations and the current limits of the native adapter. */
 export function buildCapabilityReport(): CapabilityReport {
   const operations: OperationCapability[] = (Object.keys(OPERATION_TABLE) as OperationId[]).map((id) => {
     const definition = OPERATION_TABLE[id];

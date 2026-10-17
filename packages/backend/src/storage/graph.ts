@@ -91,6 +91,7 @@ const commands: typeof import('falkordb/dist/src/commands/index.js').default =
 const COMMAND_TIMEOUT_MS = 5_000;
 const COMMAND_QUEUE_LIMIT = 128;
 
+/** Creates an owned FalkorDB connection with bounded commands, schema readiness and explicit shutdown. */
 export function createGraphStore(deps: GraphStoreDeps): GraphStore {
   const logger = deps.logger ?? silentLogger;
   let closed = false;
@@ -117,6 +118,7 @@ export function createGraphStore(deps: GraphStoreDeps): GraphStore {
   // A node-redis queue timeout stops when a command is sent. Bound the full
   // reply lifetime as well, and destroy the socket on expiry so late replies
   // cannot shift the next request's response or leave submitted work dangling.
+  /** Bounds the full command reply wait and destroys the socket on timeout; commit outcome may remain unknown. */
   const bounded = async <T>(work: () => Promise<T>): Promise<T> => {
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
@@ -144,6 +146,7 @@ export function createGraphStore(deps: GraphStoreDeps): GraphStore {
     });
   });
 
+  /** Logs recovery after socket errors and resets the consecutive error count. */
   const noteHealthy = (): void => {
     if (errorRun > 0) {
       logger.log({
@@ -155,6 +158,7 @@ export function createGraphStore(deps: GraphStoreDeps): GraphStore {
     errorRun = 0;
   };
 
+  /** Shares one connection attempt, bounds its connection wait and requires standalone FalkorDB. */
   const connect = async (): Promise<void> => {
     if (closed) throw new ThreadlineError('storage_unavailable', 'The graph store is closed.');
     if (pending !== null) return pending;
@@ -192,6 +196,7 @@ export function createGraphStore(deps: GraphStoreDeps): GraphStore {
   };
 
   const store: GraphStore = {
+    /** Returns a graph with bounded method calls, refusing blank keys or an unavailable connection. */
     graph(graphKey: string): Graph {
       if (graphKey.trim().length === 0) {
         throw new ThreadlineError('internal_error', 'A graph key is required.');
@@ -205,6 +210,7 @@ export function createGraphStore(deps: GraphStoreDeps): GraphStore {
       // Bind methods to the real Graph (which has private fields), and retain
       // its public types/codec while bounding every operation's complete reply.
       return new Proxy(new Graph(client, graphKey), {
+        /** Binds graph methods to their original receiver and wraps calls in the reply deadline. */
         get(target, key) {
           const value = Reflect.get(target, key);
           if (typeof value !== 'function' || key === 'constructor') return value;
@@ -213,6 +219,7 @@ export function createGraphStore(deps: GraphStoreDeps): GraphStore {
       });
     },
 
+    /** Creates required indexes and constraints, then waits for their readiness report. */
     async ensureSchema(graphKey: string): Promise<GraphSchemaReport> {
       const graph = store.graph(graphKey);
       for (const index of REQUIRED_INDEXES) {
@@ -262,6 +269,7 @@ export function createGraphStore(deps: GraphStoreDeps): GraphStore {
       return report;
     },
 
+    /** Connects if needed and probes FalkorDB with a bounded graph-list command. */
     async ping(): Promise<void> {
       await connect();
       try {
@@ -274,6 +282,7 @@ export function createGraphStore(deps: GraphStoreDeps): GraphStore {
       }
     },
 
+    /** Closes once, destroys the socket and waits for any connection attempt to settle. */
     async close(): Promise<void> {
       if (closed) {
         return;
@@ -285,6 +294,7 @@ export function createGraphStore(deps: GraphStoreDeps): GraphStore {
       await pending?.catch(() => undefined);
     },
 
+    /** Reports whether the owned connection is ready and the store has not closed. */
     get connected() {
       return !closed && connection.isReady;
     },

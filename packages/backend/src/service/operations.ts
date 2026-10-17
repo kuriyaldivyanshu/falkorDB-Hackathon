@@ -138,6 +138,7 @@ export interface OperationsWorker {
   status(): OperationWorkerStatus;
 }
 
+/** Creates a leased delivery worker with bounded concurrency, graph reconciliation and status reporting. */
 export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWorker {
   const logger = deps.logger ?? silentLogger;
   const clock = deps.clock ?? (() => new Date());
@@ -167,6 +168,7 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
       setTimeout(resolve, ms);
     });
 
+  /** Refreshes cached graph reachability after its TTL and records probe transitions. */
   const probeGraph = async (): Promise<boolean> => {
     const nowMs = clock().getTime();
     if (nowMs - graphProbedAtMs < GRAPH_PROBE_TTL_MS) {
@@ -285,6 +287,7 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
     await Promise.race([...inFlight]);
   };
 
+  /** Refreshes backlog and graph readiness, then claims and dispatches work within available capacity. */
   const tick = async (): Promise<void> => {
     await refreshBacklog().catch((error: unknown) => {
       recordError('worker_backlog', error);
@@ -998,6 +1001,7 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
     return null;
   };
 
+  /** Reads project-scoped source eligibility, producer kind and anchor state for episode delivery. */
   const readEpisodeEvidenceFacts = async (
     row: ClaimedOperationRow,
     sourceIds: readonly string[],
@@ -1240,6 +1244,7 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
     };
   };
 
+  /** Validates a proposal intent and builds guarded commit and dependency checks for its version. */
   const prepareMemoryPropose = async (row: ClaimedOperationRow): Promise<Preparation> => {
     const documentSourceId = row.intent_source_id;
     const memoryId = row.intent_memory_id;
@@ -1584,6 +1589,7 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
     };
   };
 
+  /** Validates a correction intent and builds a commit plan guarded by its expected current version. */
   const prepareMemoryCorrect = async (row: ClaimedOperationRow): Promise<Preparation> => {
     const documentSourceId = row.intent_source_id;
     const memoryId = row.intent_memory_id;
@@ -1909,6 +1915,7 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
     };
   };
 
+  /** Validates a requirement intent and plans a revision-guarded binding to a semantic memory identity. */
   const prepareTaskRequire = async (row: ClaimedOperationRow): Promise<Preparation> => {
     const taskId = row.intent_task_id;
     const memoryId = row.intent_memory_id;
@@ -2039,6 +2046,7 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
     };
   };
 
+  /** Dispatches a durable intent to its operation-specific planner, refusing unsupported kinds. */
   const prepareDelivery = async (row: ClaimedOperationRow): Promise<Preparation> => {
     switch (row.kind) {
       case 'source.append':
@@ -2224,6 +2232,7 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
     });
   };
 
+  /** Reports worker backlog and activity, requiring a connected graph and a recent successful probe for reachability. */
   const status = (): OperationWorkerStatus => {
     const nowMs = clock().getTime();
     // Never promote an old success while graph work/probing is stalled.
@@ -2441,6 +2450,7 @@ const createsMemory = (entry: PendingIntentRow, memoryId: string): boolean =>
   entry.memory_mode === 'create' &&
   entry.intent_memory_id === memoryId;
 
+/** Identifies pending intents capable of creating the requested memory version. */
 const createsVersion = (entry: PendingIntentRow, versionId: string): boolean =>
   (entry.kind === 'memory.propose' ||
     entry.kind === 'memory.correct' ||
@@ -2570,6 +2580,7 @@ interface OperationInspectRow {
   readonly receipt_committed_at: Date | null;
 }
 
+/** Classifies constraint and connection errors; other failures retain an ambiguous commit outcome. */
 function classifyGraphFailure(error: unknown): 'constraint' | 'not_submitted' | 'ambiguous' {
   const text = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
   if (/constraint/i.test(text)) {

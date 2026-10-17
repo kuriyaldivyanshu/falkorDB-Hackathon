@@ -109,6 +109,7 @@ export function createApiServer(deps: ApiServerDeps): ApiServerHandle {
   return handle;
 }
 
+/** Builds the HTTP app with authenticated operation routes and safe error responses. */
 function buildApp(deps: ApiServerDeps): FastifyInstance {
   const { service } = deps;
   const app = Fastify({

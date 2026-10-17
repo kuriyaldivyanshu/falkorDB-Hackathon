@@ -449,6 +449,7 @@ export interface MemoryProposeCommit extends GraphCommitBase {
   readonly candidateCap: number;
 }
 
+/** Commits a proposal or episode with its evidence links and receipt; returns null when guards prevent a write. */
 export async function commitMemoryPropose(
   graph: Graph,
   commit: MemoryProposeCommit,
@@ -648,6 +649,7 @@ export interface MemoryCorrectCommit extends GraphCommitBase {
   readonly supportVersionIds: readonly string[];
 }
 
+/** Atomically supersedes the expected current version with a correction and receipt, or returns null on a guard miss. */
 export async function commitMemoryCorrect(
   graph: Graph,
   commit: MemoryCorrectCommit,
@@ -832,6 +834,7 @@ export interface MemoryHeadRow {
   readonly created_at_ms: number | null;
 }
 
+/** Reads a bounded page of project memory heads filtered by task, identity, kind and focus. */
 export async function readScopedMemoryHeadRows(
   graph: Graph,
   params: {
@@ -907,6 +910,7 @@ export interface VersionDetailRow {
   readonly contradicts_ids: readonly string[];
 }
 
+/** Reads stored content, provenance and authority details for the selected version IDs. */
 export async function readVersionDetailRows(graph: Graph, versionIds: readonly string[]): Promise<VersionDetailRow[]> {
   if (versionIds.length === 0) {
     return [];
@@ -965,6 +969,7 @@ export interface VersionSupportRow {
   readonly support_acceptance: string | null;
 }
 
+/** Reads directly linked supporting episode versions for the selected version IDs. */
 export async function readVersionSupportRows(
   graph: Graph,
   versionIds: readonly string[],
@@ -1003,6 +1008,7 @@ export interface MemoryStateRow {
   readonly proposedVersionIds: readonly string[];
 }
 
+/** Reads a project memory identity, its kind and its current and proposed version IDs. */
 export async function readMemoryState(graph: Graph, projectRootId: string, memoryId: string): Promise<MemoryStateRow> {
   const reply = await graph.roQuery<Record<string, unknown>>(READ_MEMORY_STATE, {
     params: { projectRootId, memoryId },
@@ -1025,6 +1031,7 @@ export interface VersionStateRow {
   readonly kind: string | null;
 }
 
+/** Returns a version's acceptance, owning memory and kind, or null when it is absent. */
 export async function readVersionState(graph: Graph, versionId: string): Promise<VersionStateRow | null> {
   const reply = await graph.roQuery<Record<string, unknown>>(READ_VERSION_STATE, { params: { versionId } });
   const row = reply.data?.[0];

@@ -112,6 +112,7 @@ interface StorageIdentity {
   readonly graphUsername: string;
 }
 
+/** Extracts the configured database, role and graph targets for installation comparison. */
 function storageIdentityOf(config: ServiceConfig): StorageIdentity {
   return {
     host: config.postgres.host,
@@ -260,6 +261,7 @@ function assertInstallationTarget(
   return { replacing: true };
 }
 
+/** Validates the installation target, prepares storage and then persists configuration and credentials. */
 export async function initializeInstallation(deps: InitDeps = {}): Promise<InitReport> {
   const logger = deps.logger ?? silentLogger;
   const env = deps.env ?? process.env;
@@ -436,6 +438,7 @@ function publicConfigFile(config: ServiceConfig): Record<string, unknown> {
   };
 }
 
+/** Writes owner-protected JSON, updating permissions when the file already exists. */
 function writeJsonFile(path: string, value: unknown, mode: number): void {
   try {
     const descriptor = openSync(path, 'w', mode);

@@ -345,6 +345,7 @@ export function resolveVersionSupports(
   return resolved;
 }
 
+/** Builds a support view from stored episodic content, refusing absent or non-episodic content. */
 function toMemorySupport(row: VersionSupportRow): MemorySupport {
   const versionId = row.support_version_id ?? '';
   const memoryId = row.support_memory_id ?? '';

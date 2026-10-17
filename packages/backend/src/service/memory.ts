@@ -102,6 +102,7 @@ export interface MemoryServiceDeps {
   readonly logger?: Logger;
 }
 
+/** Creates scoped memory admission and read operations backed by SQL, source files and the graph. */
 export function createMemoryService(deps: MemoryServiceDeps): MemoryService {
   const logger = deps.logger ?? silentLogger;
   const clock = deps.clock ?? (() => new Date());
@@ -373,6 +374,7 @@ export function createMemoryService(deps: MemoryServiceDeps): MemoryService {
   const normalizedUuidList = (values: readonly string[]): string[] => [...new Set(values)].sort();
 
   return {
+    /** Admits an authored semantic or procedural candidate as an idempotent, source-backed intent. */
     async propose(call, input): Promise<MemoryOperationResult> {
       const parsed = parseContract(proposeMemoryInputSchema, input, 'memory proposal input');
       requireProjectScope(call, parsed.projectId);
@@ -559,6 +561,7 @@ export function createMemoryService(deps: MemoryServiceDeps): MemoryService {
       return toMemoryOperationResult(record);
     },
 
+    /** Admits a human-authorized correction naming the current version it intends to supersede. */
     async correct(call, input): Promise<MemoryOperationResult> {
       const parsed = parseContract(correctMemoryInputSchema, input, 'memory correction input');
       requireProjectScope(call, parsed.projectId);
@@ -680,6 +683,7 @@ interface MemoryHeadGroup {
   readonly candidateIds: string[];
 }
 
+/** Groups graph rows by memory identity, deduplicating current and candidate version IDs. */
 function groupHeadRows(rows: readonly MemoryHeadRow[], taskId: string | null): Map<string, MemoryHeadGroup> {
   const grouped = new Map<string, MemoryHeadGroup>();
   for (const row of rows) {
@@ -746,6 +750,7 @@ interface PageVersionDetail {
   readonly supports: ReadonlyMap<string, MemorySupport[]>;
 }
 
+/** Assembles a bounded memory view, refusing inconsistent current authority or candidate details. */
 function assembleMemoryView(memoryId: string, group: MemoryHeadGroup, page: PageVersionDetail): MemoryView {
   if (group.currentIds.length > 1) {
     throw new ThreadlineError(
