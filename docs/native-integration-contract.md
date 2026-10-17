@@ -234,6 +234,10 @@ path depends on it. The smallest probe that would qualify it is listed below.
   produced an arbitrary event. Hook capture therefore records
   `identityPrecision: "provisional"` and an explicit correlation gap when the
   identifier is present but unusable.
+- An origin key is occurrence identity only when every reference it encodes is
+  usable. Two tool events in one turn whose `tool_use_id` is unusable share an
+  origin key and are both `completeness: "partial"`; a future uploader must not
+  deduplicate such captures by origin key alone.
 - A project-scoped enrollment is not proof of which conversation called a tool.
   Timestamps, process ids, the latest hook and model-supplied arguments are
   never correlation evidence.
@@ -258,12 +262,18 @@ path depends on it. The smallest probe that would qualify it is listed below.
 ## Install and disconnect ownership
 
 - The preview writes nothing. When a later assignment implements installation,
-  only `owned` files may be replaced: the ownership marker line must be present
-  **and** the file bytes must match the manifest digest exactly.
+  only `owned` files may be replaced: either the file bytes match the previewed
+  bytes exactly, or the file's role-appropriate ownership marker is present and
+  its bytes match the digest the installed manifest recorded at installation
+  time. The second rule keeps an unchanged installation replaceable after
+  preview inputs change. The manifest cannot record its own digest, so its entry
+  is classified from the preview bytes and marker alone.
 - `checkPreviewOwnership` classifies a target as `absent`, `owned`, `edited` or
-  `foreign`. `edited` (marker present, bytes differ) always requires human
-  resolution; `foreign` (file exists without the marker) is never modified or
-  removed, including foreign `[mcp_servers.threadline]` entries.
+  `foreign`. `edited` (marker present, but neither the preview bytes nor a
+  recorded digest) always requires human resolution; `foreign` (file exists
+  without the marker) is never modified or removed, including foreign
+  `[mcp_servers.threadline]` entries. The profile marker is a single marker
+  line; the JSON manifest is recognized by its `kind` and `marker` fields.
 - Disconnect removes only owned blocks in owned files, then reports what was
   left in place. Hook trust state entries are human-owned; Threadline reports
   them instead of editing them.
@@ -277,7 +287,8 @@ path depends on it. The smallest probe that would qualify it is listed below.
   bounded capture event. Unknown events are ignored with a reason, malformed or
   over-1 MiB input is refused, text fields are cut at 64 KiB with
   `completeness: "partial"` and a gap reason, and unusable identifiers become
-  explicit gaps rather than truncated values.
+  explicit gaps rather than truncated values — session, turn, tool and agent
+  references included.
 - `packages/cli/src/codex/hook-output.ts` — renders the single-line hook stdout
   for the five context-capable events, or emits nothing with a stderr
   explanation; enforces the UTF-8 byte bound, refusal-by-default and marked
@@ -335,12 +346,14 @@ this document or by this checkpoint's probes.
 ## Verification performed
 
 - `npm run build` (`tsc -b`) passes on the checkpoint worktree.
-- 91 authored module checks pass (temporary script outside the repository):
+- 109 authored module checks pass (temporary script outside the repository):
   event normalization for known, unknown, malformed, oversized and long-payload
   inputs; UTF-8 code-point-safe truncation with no lone surrogates; correlation
-  gaps; hook output purity, byte bounds, refusal and marked truncation;
-  deterministic preview bytes and digests; TOML and shell quoting; ownership
-  classification.
+  gaps for session, turn, tool and agent references; hook output purity, byte
+  bounds, refusal and marked truncation; deterministic preview bytes and
+  digests; TOML and shell quoting; ownership classification including
+  stale-but-owned files (recorded digest), embedded marker text and the
+  JSON manifest marker.
 - The rendered preview profile was parsed by Python `tomllib` and by the
   installed binary (`codex -p threadline mcp list --json`); `debug prompt-input`
   with the rendered profile spawned the rendered stdio server, which completed

@@ -261,24 +261,61 @@ export function renderCodexConfigPreview(input: CodexConfigPreviewInput): CodexC
 }
 
 /**
+ * Marker detection is role-aware: the profile is TOML with a dedicated marker
+ * line, while the manifest is JSON that carries `kind` and `marker` fields.
+ * The profile check is line-exact so an incidental mention of the marker text
+ * inside another value never counts as ownership.
+ */
+function hasOwnershipMarker(content: string, role: ConfigPreviewFile['role']): boolean {
+  if (role === 'profile') {
+    return content.split('\n').some((line) => line === CODEX_OWNERSHIP_MARKER_LINE);
+  }
+  try {
+    const parsed: unknown = JSON.parse(content);
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+      return false;
+    }
+    const record = parsed as Record<string, unknown>;
+    return record['kind'] === 'threadline-codex-ownership' && record['marker'] === CODEX_OWNERSHIP_MARKER;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Classifies an existing target file before a future writer may touch it.
  *
- * Only `owned` (marker present and the bytes are exactly the previewed bytes)
- * may ever be replaced or removed by Threadline. `edited` means a human has
- * changed the file since the preview; `foreign` means the file exists without
- * the Threadline marker and needs explicit human reconciliation.
+ * `owned` requires either the exact preview bytes, or the role-appropriate
+ * marker plus a match against `recordedDigest` — the digest the installed
+ * manifest recorded for that file. The second rule keeps an unchanged
+ * installation replaceable after preview inputs change; without it, a stale but
+ * untouched file would be indistinguishable from a human edit. The manifest
+ * cannot record its own digest, so its entry is classified by the preview
+ * bytes and marker alone. `edited` always requires human resolution, and
+ * `foreign` files are never modified or removed.
  */
-export function checkPreviewOwnership(existingContent: string | null, expected: ConfigPreviewFile): PreviewOwnershipCheck {
+export function checkPreviewOwnership(
+  existingContent: string | null,
+  expected: ConfigPreviewFile,
+  recordedDigest?: string,
+): PreviewOwnershipCheck {
   if (existingContent === null || existingContent.length === 0) {
     return { state: 'absent', detail: `${expected.path} is absent.` };
   }
   if (existingContent === expected.content) {
     return { state: 'owned', detail: `${expected.path} matches the previewed bytes exactly.` };
   }
-  if (existingContent.includes(CODEX_OWNERSHIP_MARKER_LINE)) {
+  if (
+    recordedDigest !== undefined &&
+    hasOwnershipMarker(existingContent, expected.role) &&
+    sha256Digest(existingContent) === recordedDigest
+  ) {
+    return { state: 'owned', detail: `${expected.path} matches the ownership digest recorded at installation.` };
+  }
+  if (hasOwnershipMarker(existingContent, expected.role)) {
     return {
       state: 'edited',
-      detail: `${expected.path} carries the Threadline marker but differs from the previewed bytes; a human must resolve it.`,
+      detail: `${expected.path} carries the Threadline ownership marker but matches neither the preview bytes nor a recorded digest; a human must resolve it.`,
     };
   }
   return {

@@ -148,13 +148,15 @@ Stop at this checkpoint. Production MCP dependency installation, CLI dispatch, e
 - Modules and exact verification/results: new modules
   `packages/cli/src/codex/events.ts`, `hook-output.ts` and `config-preview.ts`,
   plus preview/evidence assets under `assets/codex/`. `npm run build` (`tsc -b`)
-  passes. 91 authored module checks pass (temporary script outside the repo):
+  passes. 109 authored module checks pass (temporary script outside the repo):
   event normalization (12 known events, unknown/malformed/oversized input,
   64 KiB text bounds with `partial` completeness and code-point-safe cut, no
-  lone surrogates, correlation gaps for unusable identifiers), hook output
-  (single-line purity, 4 KiB/8 KiB bounds, refusal-by-default, marked
-  truncation, unsupported events), config preview (deterministic bytes and
-  digests, TOML/shell quoting, ownership states absent/owned/edited/foreign).
+  lone surrogates, correlation gaps for unusable session/turn/tool/agent
+  references), hook output (single-line purity, 4 KiB/8 KiB bounds,
+  refusal-by-default, marked truncation, unsupported events), config preview
+  (deterministic bytes and digests, TOML/shell quoting, ownership states
+  absent/owned/edited/foreign including stale-but-owned files recognized by the
+  recorded manifest digest and the JSON manifest's `kind`/`marker` fields).
   The rendered profile parsed under Python `tomllib`, was accepted by the
   installed binary (`codex -p threadline mcp list --json`), and
   `debug prompt-input` with that profile spawned the rendered stdio server and

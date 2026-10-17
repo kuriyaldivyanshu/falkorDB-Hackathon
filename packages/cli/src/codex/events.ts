@@ -19,7 +19,8 @@ import {
  *   reason instead of being silently shortened,
  * - correlation identifiers that exceed the shared reference bound become
  *   `null` rather than truncated, because a truncated identifier is a wrong
- *   identifier.
+ *   identifier, and a present-but-unusable session, turn, tool or agent
+ *   reference is reported as a correlation gap instead of a complete capture.
  *
  * The encoded surface (event names, input fields, output shapes, bounds) is
  * qualified against the installed `codex-cli` and recorded in
@@ -439,7 +440,11 @@ export function normalizeHookInput(
       ? 'session_reference_unusable'
       : turnRef.present && turnRef.value === null
         ? 'turn_reference_unusable'
-        : null;
+        : toolRef.present && toolRef.value === null
+          ? 'tool_reference_unusable'
+          : agentRef.present && agentRef.value === null
+            ? 'agent_reference_unusable'
+            : null;
 
   const excluded: string[] = [];
   for (const field of EXCLUDED_FIELD_CANDIDATES) {
