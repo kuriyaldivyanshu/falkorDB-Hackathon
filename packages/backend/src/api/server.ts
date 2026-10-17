@@ -228,13 +228,96 @@ function buildApp(deps: ApiServerDeps): FastifyInstance {
     ok(reply, await service.operations.inspect(call, projectId, request.params.operationId));
   });
 
+  app.get(ROUTES.memories, async (request, reply) => {
+    const query = readObject(request.query ?? {}, 'memory query');
+    const projectId = readStringField(query, 'projectId');
+    const limit = readIntegerField(query, 'limit', 20, 1, 50);
+    const taskId = readOptionalString(query, 'taskId');
+    const kind = readOptionalString(query, 'kind');
+    const focus = readOptionalString(query, 'focus');
+    const call = await service.auth.authenticate(authorizationOf(request), { projectId });
+    ok(
+      reply,
+      await service.memories.query(call, {
+        projectId,
+        limit,
+        ...(taskId === undefined ? {} : { taskId }),
+        ...(kind === undefined ? {} : { kind }),
+        ...(focus === undefined ? {} : { focus }),
+      }),
+    );
+  });
+
+  app.post(ROUTES.memoryProposals, async (request, reply) => {
+    const body = readObject(request.body, 'memory proposal');
+    const projectId = readStringField(body, 'projectId');
+    const call = await service.auth.authenticate(authorizationOf(request), { projectId });
+    ok(reply, await service.memories.propose(call, body));
+  });
+
+  app.get<{ Params: { memoryId: string } }>(ROUTES.memory(':memoryId'), async (request, reply) => {
+    const query = readObject(request.query ?? {}, 'memory query');
+    const projectId = readStringField(query, 'projectId');
+    const call = await service.auth.authenticate(authorizationOf(request), { projectId });
+    ok(reply, await service.memories.view(call, projectId, request.params.memoryId));
+  });
+
+  app.post<{ Params: { memoryId: string } }>(ROUTES.memoryAccept(':memoryId'), async (request, reply) => {
+    const body = readObject(request.body, 'memory acceptance');
+    const projectId = readStringField(body, 'projectId');
+    // One identity per request: the path names the memory the body must name too.
+    if (readStringField(body, 'memoryId') !== request.params.memoryId) {
+      throw new ThreadlineError('invalid_request', 'The body memoryId must match the path memoryId.');
+    }
+    const call = await service.auth.authenticate(authorizationOf(request), { projectId });
+    ok(reply, await service.memories.accept(call, body));
+  });
+
+  app.post<{ Params: { memoryId: string } }>(ROUTES.memoryCorrections(':memoryId'), async (request, reply) => {
+    const body = readObject(request.body, 'memory correction');
+    const projectId = readStringField(body, 'projectId');
+    if (readStringField(body, 'memoryId') !== request.params.memoryId) {
+      throw new ThreadlineError('invalid_request', 'The body memoryId must match the path memoryId.');
+    }
+    const call = await service.auth.authenticate(authorizationOf(request), { projectId });
+    ok(reply, await service.memories.correct(call, body));
+  });
+
+  app.post(ROUTES.tasks, async (request, reply) => {
+    const body = readObject(request.body, 'task creation');
+    const projectId = readStringField(body, 'projectId');
+    const call = await service.auth.authenticate(authorizationOf(request), { projectId });
+    ok(reply, await service.tasks.create(call, body));
+  });
+
+  app.get<{ Params: { taskId: string } }>(ROUTES.task(':taskId'), async (request, reply) => {
+    const query = readObject(request.query ?? {}, 'task query');
+    const projectId = readStringField(query, 'projectId');
+    const call = await service.auth.authenticate(authorizationOf(request), { projectId });
+    ok(reply, await service.tasks.view(call, projectId, request.params.taskId));
+  });
+
+  app.get<{ Params: { taskId: string } }>(ROUTES.taskRequirements(':taskId'), async (request, reply) => {
+    const query = readObject(request.query ?? {}, 'task requirements query');
+    const projectId = readStringField(query, 'projectId');
+    const call = await service.auth.authenticate(authorizationOf(request), { projectId });
+    ok(reply, await service.tasks.requirements(call, projectId, request.params.taskId));
+  });
+
+  app.post<{ Params: { taskId: string } }>(ROUTES.taskRequirements(':taskId'), async (request, reply) => {
+    const body = readObject(request.body, 'task requirement');
+    const projectId = readStringField(body, 'projectId');
+    if (readStringField(body, 'taskId') !== request.params.taskId) {
+      throw new ThreadlineError('invalid_request', 'The body taskId must match the path taskId.');
+    }
+    const call = await service.auth.authenticate(authorizationOf(request), { projectId });
+    ok(reply, await service.tasks.require(call, body));
+  });
+
   // Known product operations that are not in this build answer explicitly
   // rather than falling through as an anonymous 404.
   const unavailable: ReadonlyArray<{ readonly operation: Parameters<typeof unsupportedOperation>[0]; readonly path: string }> = [
-    { operation: 'memory.query', path: ROUTES.memories },
-    { operation: 'memory.propose', path: ROUTES.memoryProposals },
     { operation: 'memory.episode.record', path: ROUTES.memoryEpisodes },
-    { operation: 'task.create', path: ROUTES.tasks },
     { operation: 'claim.status', path: ROUTES.claimStatus },
     { operation: 'context.prepare', path: ROUTES.context },
     { operation: 'context.occurrence', path: ROUTES.contextOccurrences },

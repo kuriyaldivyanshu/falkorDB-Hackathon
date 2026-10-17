@@ -570,6 +570,96 @@ const MIGRATION_3_STATEMENTS: readonly string[] = [
    $$`,
 ];
 
+/**
+ * Migration 4: intent identities for memory and task operations.
+ *
+ * A `source.append` intent names one source. The memory and task kinds name a
+ * stable identity the intent concerns — the Memory, the MemoryVersion and the
+ * Task it will create, accept, correct or require — and two guard tokens the
+ * kind writes under (`expected_head_token`, `expected_task_revision`). Those
+ * references belong in typed columns rather than JSON probes: the worker's
+ * dependency diagnosis (is a prerequisite operation still pending?) is a
+ * bounded, indexed lookup on the identity the dependent operation names.
+ *
+ * Content still never enters the operation row. A memory intent's content is
+ * captured as a `memory_proposal` Source and referenced through
+ * `intent_source_id`; these columns are identities only.
+ *
+ * The claim function is recreated with the same pattern as migration 3: the
+ * return list is explicit, and `grantToApplicationRole` re-grants EXECUTE on
+ * the new signature after the migration loop.
+ */
+const MIGRATION_4_STATEMENTS: readonly string[] = [
+  `ALTER TABLE operations ADD COLUMN intent_memory_id uuid`,
+  `ALTER TABLE operations ADD COLUMN intent_version_id uuid`,
+  `ALTER TABLE operations ADD COLUMN intent_task_id uuid`,
+
+  `CREATE INDEX operations_intent_memory
+     ON operations (tenant_id, project_id, intent_memory_id) WHERE intent_memory_id IS NOT NULL`,
+  `CREATE INDEX operations_intent_version
+     ON operations (tenant_id, project_id, intent_version_id) WHERE intent_version_id IS NOT NULL`,
+  `CREATE INDEX operations_intent_task
+     ON operations (tenant_id, project_id, intent_task_id) WHERE intent_task_id IS NOT NULL`,
+
+  `DROP FUNCTION IF EXISTS threadline_memory.claim_operations(integer, text, text, integer, text[])`,
+
+  `CREATE FUNCTION claim_operations(
+     p_limit integer,
+     p_worker text,
+     p_lease_token text,
+     p_lease_seconds integer,
+     p_kinds text[]
+   )
+   RETURNS TABLE (
+     tenant_id uuid,
+     project_id uuid,
+     id uuid,
+     kind text,
+     request_digest text,
+     intent_source_id uuid,
+     intent_memory_id uuid,
+     intent_version_id uuid,
+     intent_task_id uuid,
+     expected_head_token text,
+     expected_task_revision text,
+     graph_epoch uuid,
+     privacy_revision bigint,
+     attempts integer,
+     next_attempt_at timestamptz,
+     created_at timestamptz
+   )
+   LANGUAGE sql
+   SECURITY DEFINER
+   SET search_path = threadline_memory, pg_temp
+   AS $$
+     UPDATE threadline_memory.operations o
+        SET state = 'leased',
+            lease_owner = p_worker,
+            lease_token = p_lease_token,
+            lease_expires_at = now() + make_interval(secs => p_lease_seconds),
+            attempts = o.attempts + 1
+        FROM (
+          SELECT s.tenant_id, s.project_id, s.id
+            FROM threadline_memory.operations s
+           WHERE s.kind = ANY(p_kinds)
+             AND s.next_attempt_at <= now()
+             AND (s.state IN ('pending', 'ambiguous')
+                  OR (s.state = 'leased' AND s.lease_expires_at IS NOT NULL
+                      AND s.lease_expires_at <= now()))
+           ORDER BY s.next_attempt_at ASC, s.created_at ASC, s.id ASC
+           LIMIT p_limit
+           FOR UPDATE SKIP LOCKED
+        ) claimed
+       WHERE (o.tenant_id, o.project_id, o.id)
+             = (claimed.tenant_id, claimed.project_id, claimed.id)
+       RETURNING o.tenant_id, o.project_id, o.id, o.kind, o.request_digest,
+                 o.intent_source_id, o.intent_memory_id, o.intent_version_id, o.intent_task_id,
+                 o.expected_head_token, o.expected_task_revision,
+                 o.graph_epoch, o.privacy_revision, o.attempts,
+                 o.next_attempt_at, o.created_at
+   $$`,
+];
+
 export const MEMORY_SQL_MIGRATIONS: readonly SqlMigration[] = [
   {
     version: 1,
@@ -585,6 +675,11 @@ export const MEMORY_SQL_MIGRATIONS: readonly SqlMigration[] = [
     version: 3,
     name: 'narrow_operation_claim',
     statements: MIGRATION_3_STATEMENTS,
+  },
+  {
+    version: 4,
+    name: 'memory_task_operation_identities',
+    statements: MIGRATION_4_STATEMENTS,
   },
 ];
 

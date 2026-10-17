@@ -6,7 +6,7 @@ Coding agents lose useful context between sessions: a requirement changed, a pre
 
 Threadline is being built as a local npm package for **FalkorDB Track 2: Agent Memory and Coordination**. It connects to an existing coding agent, records permitted evidence, and supplies a small, current, source-backed memory packet when the agent needs it.
 
-> **Development status:** the repository is migrating to this product. The storage foundation (SQL catalog, restricted-role row-level security, immutable source files) and the source-backed graph admission worker are verified against local PostgreSQL and FalkorDB. Accepted memory, bounded context and native Codex integration are not yet implemented; capability output reports each of them as unavailable. The retired owned-execution code has been removed.
+> **Development status:** the repository is migrating to this product. The storage foundation (SQL catalog, restricted-role row-level security, immutable source files), the source-backed graph admission worker and semantic memory (task creation, sourced proposals, explicit human acceptance, corrections and task requirements, with current-memory reads) are verified against local PostgreSQL and FalkorDB. Observed episodes, reusable procedures, bounded context, coordination claims and native Codex integration are not yet implemented; capability output reports each of them as unavailable. The retired owned-execution code has been removed.
 
 ## What we are building
 
@@ -127,7 +127,7 @@ npm run build
 
 The workspace contains `packages/shared`, `packages/backend` and `packages/cli`. These packages are changed in place. The inventory fixture is authored demo data under `fixtures/inventory-export-v1/`; it is not a backend startup requirement.
 
-The owned execution, provider integration and coding TUI have been removed. The current build serves source capture, project association, history and capability reporting; accepted memory, bounded context, native capture and coordination are reported as unavailable with their batch. Setup and status commands are:
+The owned execution, provider integration and coding TUI have been removed. The current build serves source capture, project association, history and capability reporting, plus semantic memory and tasks: `POST /v2/tasks`, `POST /v2/memories/proposals`, `POST /v2/memories/:memoryId/acceptance`, `POST /v2/memories/:memoryId/corrections`, `POST /v2/tasks/:taskId/requirements`, and the `GET` reads that resolve current memory and current requirement versions. Observed episodes, reusable procedures, bounded context, coordination and native capture are reported as unavailable with their batch. Setup and status commands are:
 
 ```sh
 npm run setup    # applies schema threadline_memory, verifies the privilege model, creates the local owner credential

@@ -68,9 +68,36 @@ Liveness is deliberately minimal because it is served to an unauthenticated call
 
 Appending the same file twice is an idempotent retry; changing the bytes under the same delivery identity is refused. `history` cursors are opaque and re-authorize each page.
 
+## Semantic memory and tasks
+
+The loopback API also serves semantic memory and task coordination. Every route needs a project-bound bearer credential; the body may never widen that scope.
+
+```text
+POST /v2/tasks                                    create a task (title, optional family)
+GET  /v2/tasks/:taskId                            task view, requirement ids and revision
+POST /v2/tasks/:taskId/requirements               bind a required memory to the task
+GET  /v2/tasks/:taskId/requirements               resolve exact current requirement versions
+POST /v2/memories/proposals                       propose a sourced candidate version
+POST /v2/memories/:memoryId/acceptance            human acceptance of one candidate
+POST /v2/memories/:memoryId/corrections           human correction that supersedes the head
+GET  /v2/memories/:memoryId                       current version plus remaining candidates
+GET  /v2/memories                                 current memory, optionally task-scoped or focused
+```
+
+How the pieces relate:
+
+- A proposal records a candidate version. It has **no governing effect** until a human accepts it; before acceptance the task requirement reports `missing_current`.
+- Acceptance and correction require the local human administration credential. A producer credential cannot grant itself human authority and is refused with `scope_denied`.
+- A correction creates a new accepted version that supersedes the named head. The earlier version, its evidence and its source links stay in place; only the current pointer moves.
+- Every cited source must be visible in the project scope and available. A source from another project, a private source and an unknown source produce one indistinguishable refusal; a visible source whose bytes are unavailable reports `source_unavailable`.
+- Writes are admitted to the SQL ledger under the caller's idempotency key and committed to the project graph by the leased worker. An exact retry reads the first admission back; the same key with a changed payload, or a different actor, is refused with `idempotency_mismatch`.
+- Reads fail closed. If the graph holds two current versions for one memory, the memory view and the project list answer `authority_conflict`; a task requirement reports `duplicate_current` while its other requirements still resolve.
+
+Operation progress is observable through `GET /v2/operations/:operationId?projectId=<uuid>`. `pending`, `committed` and `rejected` are distinct, and the refusal code names the reason (`version_not_proposed`, `expected_head_conflict`, `task_revision_conflict`, `requirement_already_bound`, `source_unavailable`, …). `threadline status` reports the backlog counts and whether durable memory is currently claimed.
+
 ## Unavailable until their batch
 
-Accepted memory, bounded context, tasks, claims and handoffs, native enrollment and capture, history import, deletion jobs and export are reported unavailable by `threadline capabilities` with the batch that delivers them. There is no hidden legacy command path.
+Observed episodes, reusable procedures, bounded context preparation, claims and handoffs, native enrollment and capture, history import, deletion jobs and export are reported unavailable by `threadline capabilities` with the batch that delivers them. There is no hidden legacy command path.
 
 ## Native qualification
 
