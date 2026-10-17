@@ -469,16 +469,16 @@ export function createMemoryService(deps: MemoryServiceDeps): MemoryService {
       uptimeMs: startedAtMs === null ? 0 : Math.max(0, clock().getTime() - startedAtMs),
       components: [...components],
       guarantees: {
-        // Semantic memory and task coordination are served through the leased
-        // worker: health reports them durable only while SQL, the graph and the
-        // worker are all ready. Episodes, procedures, context and native
-        // integration are still absent and stated unavailable in capabilities.
+        // Semantic memory, tasks, episodes and procedural candidates use the
+        // leased worker. Durability requires SQL, the graph and the worker to
+        // be ready. Procedure validation, bounded context, agent claims,
+        // handoffs and native capture remain unavailable in capabilities.
         durableMemory: durableReady() && graphServing && (workerStatus?.running ?? false),
         graphAdmission: durableReady() && graphServing && (workerStatus?.running ?? false),
         sourceHistory: durableReady() && filesReady,
         replayable: false,
         note: durableReady()
-          ? 'Source history is durable in SQL plus immutable files. Semantic memory proposals, explicit human acceptance, corrections and task requirements are admitted in SQL and committed to the project graph through the leased worker with graph receipts; accepted-memory reads resolve the current version from that graph. Episodes, procedures, context and native integration are not implemented and are stated unavailable in capabilities.'
+          ? 'Source history is durable in SQL plus immutable files. Semantic memory proposals, explicit human acceptance, corrections and task requirements are admitted in SQL and committed to the project graph through the leased worker with graph receipts; accepted-memory reads resolve the current version from that graph. Episode admission and procedural candidates with human review are admitted and committed the same way; a human-accepted procedure stays a candidate. Validated procedural reuse, bounded context preparation and occurrence recording, agent claims, handoffs and native capture are not implemented and are stated unavailable in capabilities.'
           : 'No durable store is ready: health and capabilities are served, and every durable operation refuses.',
       },
     };

@@ -1,0 +1,13 @@
+# threadline:managed v1
+# Generated preview only: this build does not install Codex configuration.
+# Select with: codex --profile threadline
+# Read-only memory tools. This preview installs no hooks:
+# `threadline codex-hook` is not implemented in this build.
+
+[mcp_servers.threadline]
+command = "/usr/local/bin/node"
+args = ["/opt/threadline/bin/codex-entry.mjs", "mcp", "--home", "/Users/example/.threadline", "--project", "00000000-0000-4000-8000-000000000001"]
+required = false
+startup_timeout_sec = 10
+tool_timeout_sec = 30
+env = { THREADLINE_HOME = "/Users/example/.threadline" }

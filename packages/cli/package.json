@@ -19,6 +19,7 @@
     "clean": "tsc -b --clean"
   },
   "dependencies": {
+    "@modelcontextprotocol/server": "2.3.1",
     "@threadline/backend": "0.0.0",
     "@threadline/shared": "0.0.0"
   }
