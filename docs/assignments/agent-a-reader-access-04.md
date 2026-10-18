@@ -194,7 +194,7 @@ All final runs passed. Scripts/logs are external under
   and restored normal service reported schema 6 with SQL/privilege readiness.
 - Markdown H1/hierarchy, labelled balanced fences and local links passed for
   CONTEXT.md, access guide and this assignment. Full diff/scope and
-  `git diff --check` passed; secret scan and staged review are delivery gates.
+  `git diff --check`, complete bearer scan and staged review passed.
 
 Initial verifier failures were corrected before final runs: generated module
 paths needed backend `dist/src`; v5 setup omitted the app login role; history
@@ -237,8 +237,14 @@ Installation and generated secrets are private under
 remain under that data root. Temporary scripts and safe final transcripts are
 under the checks root. No peer resources were changed or retired.
 
-Delivery is one normal feature PR to main. The remote SHA and actual PR identity
-will be confirmed at delivery; no merge, force push or worktree retirement.
+Delivery: implementation commit `90931aa4cccd792f2eda44314134ec7cb47d703f`
+was pushed normally and matched the remote feature ref. [PR #18](https://github.com/kuriyaldivyanshu/falkorDB-Hackathon/pull/18)
+is open and ready for review, with actual base `main` and head
+`threadline/a-reader-access-04`, verified in the existing authenticated browser.
+This final record-only commit leaves the verified implementation unchanged;
+final remote/head confirmation belongs in the PR and handoff to avoid a
+self-referential commit hash. Worktree status was clean after the implementation
+commit. No merge, force push or worktree retirement occurred.
 
 ## Proposed coordinator updates
 
