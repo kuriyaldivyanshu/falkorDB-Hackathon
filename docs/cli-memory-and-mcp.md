@@ -363,9 +363,10 @@ paths, and the exact command to run the server by hand.
 - It writes nothing, into the real Codex home or anywhere else.
 - It renders no credential: the server reads it from the Threadline home at
   startup.
-- It renders no hook entry, because `threadline codex-hook` is not implemented
-  in this build. Installing a hook that names a missing command would not be
-  installable.
+- The default preview is MCP-only and renders no hook entries. Explicit
+  `--context-hooks` renders both `SessionStart` and `UserPromptSubmit` handlers
+  using the implemented context-only `threadline codex-hook` command; these
+  retrieve context without capture, enrollment or qualified native identity.
 - Ownership is classified exactly as the qualification established: `absent`,
   `owned`, `edited` (marker present, needs a human) and `foreign` (never
   touched).

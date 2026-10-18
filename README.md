@@ -25,7 +25,7 @@ An agent's proposal remains a proposal until its acceptance policy is satisfied.
 
 Codex owns the coding experience: authentication, model selection, reasoning, filesystem tools, approvals and cancellation. Threadline supplies memory through supported native integration surfaces:
 
-1. **Hooks** capture supported visible events and request current memory at qualified session/prompt boundaries.
+1. **Hooks** currently request context at explicitly configured session/prompt boundaries; native execution and consumption remain unqualified. Capturing supported visible events is a future capability; native capture remains unavailable.
 2. **Local MCP tools** retrieve memory, inspect evidence, propose sourced updates and exchange handoffs.
 3. **Selected history import** reads explicitly chosen stored sessions through a qualified read-only interface.
 

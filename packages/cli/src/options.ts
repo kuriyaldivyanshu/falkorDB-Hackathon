@@ -304,10 +304,11 @@ Codex configuration:
   codex:preview --project <id> [--codex-home <path>] [--executable <path>]
                 [--entry <path>] [--context-tools]
                 [--context-hooks --token-file <path> --workspace-root <path>
-                 --context-input <path> --hook-timeout-ms <250-5000>]
+                 --context-input <path> [--hook-timeout-ms <250-5000>]]
                        Render the Codex profile that starts \`mcp\`. Writes nothing
                        and contains no credential. Options default to the isolated
                        Codex home, the running Node.js and this CLI's entry script.
+                       --hook-timeout-ms defaults to 2000 ms.
 
   version              Print client and protocol versions.
   help                 Show this help.
