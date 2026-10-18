@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-import { APPLICABILITY_KEYS, MEMORY_KINDS, taskViewSchema } from './memory.js';
+import { APPLICABILITY_KEYS, MEMORY_KINDS, applicabilitySchema, observedUnderSchema, taskViewSchema } from './memory.js';
 import { SOURCE_KINDS } from './sources.js';
 import { byteBoundedText, decimalStringSchema, sha256HexSchema, uuidSchema } from './validation.js';
 
@@ -82,8 +82,12 @@ export const contextItemSchema = z.object({
   representation: z.enum(CONTEXT_REPRESENTATIONS),
   /** Present for `exact`/`excerpt`. Absent for `reference`. */
   text: z.string().nullable(),
+  /** Current selection predicates, separate from historical observation conditions. */
+  applicability: applicabilitySchema,
+  observedUnder: observedUnderSchema,
   reason: z.enum(CONTEXT_ITEM_REASONS),
   sourceRefs: z.array(contextSourceRefSchema).max(CONTEXT_MAX_SOURCE_REFS),
+  /** UTF-8 bytes of text alone; manifest.bodyBytes includes all rendered qualifications. */
   byteLength: z.number().int().nonnegative(),
 });
 export type ContextItem = z.infer<typeof contextItemSchema>;
@@ -97,11 +101,14 @@ export const contextOmissionSchema = z.object({
 export type ContextOmission = z.infer<typeof contextOmissionSchema>;
 
 /** Persisted items deliberately have no plaintext-bearing field. */
-export const contextManifestItemSchema = contextItemSchema.omit({ text: true }).strict();
+export const contextManifestItemSchema = contextItemSchema.pick({
+  priority: true, kind: true, memoryId: true, versionId: true, taskId: true,
+  representation: true, reason: true, sourceRefs: true, byteLength: true,
+}).strict();
 export type ContextManifestItem = z.infer<typeof contextManifestItemSchema>;
 
 export const CONTEXT_MANIFEST_SCHEMA_VERSION = 2;
-export const CONTEXT_RENDERER_VERSION = 1;
+export const CONTEXT_RENDERER_VERSION = 2;
 
 export const contextManifestSchema = z.object({
   manifestVersion: z.literal(CONTEXT_MANIFEST_SCHEMA_VERSION),

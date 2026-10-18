@@ -27,6 +27,13 @@ must be active and owned by that principal; a session-bound credential must name
 its own stored session. No registration or synthetic session is created to make
 preparation succeed. Enrollment and native observation remain unavailable.
 
+Both absolute and idle credential expiry use PostgreSQL `clock_timestamp()` at
+release checks, which advances during a transaction. Fresh preparation and replay
+perform their final authorization query after packet validation and graph reads,
+immediately before returning to SQL commit. A credential that expires during
+selection refuses release; the pending audit transaction rolls back. This check
+cannot promise validity after commit or while a response travels to a client.
+
 Example request (replace illustrative UUIDs with authorized stored identities):
 
 ```json
@@ -105,6 +112,12 @@ normalization, free-text parameter interpretation or inferred prerequisite.
 conditions still match survives an unrelated freshness correction. An incompatible
 or unknown output contract excludes optional advice that requires that contract.
 
+Every released item carries separate `applicability` and `observedUnder` fields.
+The renderer labels the former as current selection predicates (caller hints are
+not verified facts), and the latter as historical conditions, not current
+applicability. Both are rendered in full as JSON alongside the statement or
+episode; historical parameters never become current requirements.
+
 Procedures are excluded as a category with `candidate_procedure`: all procedures
 currently remain candidates, including human-accepted ones. No prerequisite is
 assumed satisfied, and no candidate is presented as validated reusable advice.
@@ -117,9 +130,10 @@ and handoff selection await their own implementation.
 
 The complete rendered body defaults to 4096 UTF-8 bytes and has a hard maximum
 of 8192. A caller may select a limit from 1024 through 8192 bytes. The byte count
-includes the title, item headings, separators, identities, representation labels
-and every rendered source reference. `bodyBytes` is the UTF-8 byte length of
-`packet.body`, not JavaScript string length or the size of the JSON envelope.
+includes the title, item headings, separators, identities, representation labels,
+all applicability/historical condition JSON and its labels, and every rendered
+source reference. `bodyBytes` is the UTF-8 byte length of `packet.body`, not
+JavaScript string length or the size of the JSON envelope.
 
 There are at most 16 mandatory and eight optional items, and at most 64 distinct
 source references in the packet. Each item's full source closure may also contain
@@ -130,8 +144,12 @@ rendered bytes each time they are rendered.
 
 Mandatory overflow refuses. Optional material is tried exactly, then as an
 explicit `excerpt` with a code-point-safe prefix of at most 1024 UTF-8 bytes. If
-that representation still cannot fit, the item is omitted. An episode's precision
-and outcome lead its text and remain visible in an excerpt. No reference-only
+that representation still cannot fit, the item is omitted. Excerpting shortens
+only the optional body text: applicability and observed conditions remain exact
+and complete. Qualifications alone can force optional omission or mandatory
+overflow refusal. `item.byteLength` measures the text alone; the complete
+rendered total, including qualifications, is `manifest.bodyBytes`. An episode's
+precision and outcome lead its text and remain visible in an excerpt. No reference-only
 substitute is emitted for mandatory authority.
 
 The source closure follows SQL parent dependencies with bounded frontiers, at
@@ -160,7 +178,7 @@ revision before collection. It reads the task revision and current requirement
 heads, then rechecks selected source closures, credential/grant/project policy,
 task revision and graph root before release. Relevant task and accepted-memory
 commits advance the project graph head. The final matching root read, after the
-last source/task/privacy recheck and before SQL commit, is the selection
+last source/task recheck and before final SQL authorization/commit, is the selection
 consistency point. A later mutation does not rewrite that historical snapshot.
 This is optimistic consistency across SQL/graph, not a distributed transaction or
 a promise that the snapshot remains current after release.
@@ -184,13 +202,16 @@ Successful responses use the standard API envelope with `data.kind: "packet"`.
 `packet.items` and `packet.body` contain the released text. `packet.manifest`
 contains metadata only, and is the exact JSON document retained as an immutable
 `context_manifest` Source. Manifest schema version 2 separates metadata items
-from the earlier unused text-bearing manifest form.
+from the earlier unused text-bearing manifest form. The metadata schema and
+projection explicitly allowlist fields; they do not merely omit `text`, which
+would accidentally retain newly added plaintext-bearing qualification fields.
 
 The manifest records selected stable identities/versions, task revision,
 representation and text-byte counts, complete source refs, aggregate omissions,
 limits, selection/renderer versions, render digest, graph epoch/head and privacy
 revision. Focus is represented only by a digest. Hint values, request text,
-statement text and rendered plaintext are absent from manifest bytes and items.
+statement text, applicability predicates, historical observation conditions and
+rendered plaintext are absent from manifest bytes and items.
 The SQL preparation request is represented only by its digest. Operation payloads
 hold the existing source-admission metadata, and occurrence rows hold identities,
 state, counters, digests and safe report codes. There is no second persisted copy
@@ -219,6 +240,12 @@ selection if its current authorities and source permissions still hold. A change
 selected authority/task/privacy state returns `stale_preparation` rather than
 releasing obsolete obligations under that identity. Use a new key for a new
 selection. Concurrent exact requests serialize to that same recorded identity.
+
+Renderer version 2 adds complete qualifications to released bodies and their
+digests. Manifest schema remains version 2 because its persisted metadata shape
+is unchanged. A stored preparation with another renderer version, including
+version 1, returns `stale_preparation`; a new key prepares a qualified packet.
+Old immutable manifests are preserved, never rewritten or silently upgraded.
 
 ## Occurrence precision
 

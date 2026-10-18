@@ -69,6 +69,7 @@ export function createContextService(deps: ContextServiceDeps): ContextService {
   };
 
   /** Recheck current credential/grant/policy facts under the release SQL barrier.
+   * clock_timestamp advances inside the transaction for absolute and idle expiry.
    * Bearer authentication at route entry remains the sole source of scope.
    */
   const releaseScope = async (tx: TxClient, call: AuthenticatedCall): Promise<void> => {
@@ -81,7 +82,7 @@ export function createContextService(deps: ContextServiceDeps): ContextService {
         WHERE p.tenant_id=$1 AND p.id=$2 AND g.principal_id=$3 AND g.state='active'
           AND p.state='active' AND p.policy_state <> 'blocked'
           AND t.principal_id=$3 AND t.state='active' AND t.revoked_at IS NULL
-          AND t.expires_at>now() AND t.idle_expires_at>now() AND a.state='active'
+          AND t.expires_at>clock_timestamp() AND t.idle_expires_at>clock_timestamp() AND a.state='active'
           AND (t.project_id IS NULL OR t.project_id=p.id) AND t.kind=$5
           AND t.native_session_id IS NOT DISTINCT FROM $6::uuid`,
       [call.scope.tenantId, call.scope.projectId, call.scope.principalId, call.tokenId, call.scope.tokenKind, call.scope.nativeSessionId],
@@ -154,6 +155,7 @@ export function createContextService(deps: ContextServiceDeps): ContextService {
     return {
       priority: mandatory ? 'mandatory' : 'optional', kind: v.content.kind,
       memoryId: v.memoryId, versionId: v.versionId, taskId,
+      applicability: v.applicability, observedUnder: v.observedUnder,
       representation: 'exact', text, byteLength: Buffer.byteLength(text, 'utf8'),
       reason: mandatory ? 'current_required_obligation' : v.content.kind === 'episodic' ? 'applicable_episode'
         : v.content.subtype === 'decision' ? 'accepted_decision' : 'accepted_fact',
@@ -177,6 +179,7 @@ export function createContextService(deps: ContextServiceDeps): ContextService {
     const range = await deps.sources.range(call, parsed.projectId, row.manifest_source_id, 0, source.byteSize, tx);
     if (range.truncated) throw new ContextRefusal('incomplete_provenance');
     const manifest = parseContract(contextManifestSchema, JSON.parse(Buffer.from(range.base64, 'base64').toString('utf8')), 'context manifest');
+    if (manifest.rendererVersion !== CONTEXT_RENDERER_VERSION) throw new ContextRefusal('stale_preparation');
     if (manifest.graphEpoch !== before.graphEpoch || manifest.privacyRevision !== before.privacyRevision) throw new ContextRefusal('stale_preparation');
     const task = await taskFor(call, parsed.taskId);
     if ((task?.revision ?? null) !== manifest.taskRevision) throw new ContextRefusal('stale_preparation');
@@ -313,10 +316,13 @@ export function createContextService(deps: ContextServiceDeps): ContextService {
             // This is the selection consistency point. The source append operation
             // cannot be leased until SQL commits; its later graph event is separate.
             await checkItemSources(tx, call, items);
-            await releaseScope(tx, call);
             await checkTask(call, manifest);
             if (canonicalDigest(before) !== canonicalDigest(await rootFor(call))) throw new ContextRefusal('stale_snapshot');
-            return packet(manifest, outcome.sourceId, id, items, body, clock().getTime());
+            const result = packet(manifest, outcome.sourceId, id, items, body, clock().getTime());
+            // Last asynchronous work before commit/release, including time spent
+            // reading graph state and validating the complete released packet.
+            await releaseScope(tx, call);
+            return result;
           });
         } catch (error) {
           const refusal = classifyRefusal(error);
@@ -422,12 +428,17 @@ function sourceIds(items: readonly ContextItem[]): string[] {
   return [...new Set(items.flatMap((item) => item.sourceRefs.map((ref) => ref.sourceId)))].sort();
 }
 function metadata(item: ContextItem): ContextManifestItem {
-  const { text: _text, ...meta } = item;
-  return meta;
+  // Explicit allowlist: new released plaintext fields must never be persisted
+  // by a rest/spread or an omit(text)-only projection.
+  return {
+    priority: item.priority, kind: item.kind, memoryId: item.memoryId,
+    versionId: item.versionId, taskId: item.taskId, representation: item.representation,
+    reason: item.reason, sourceRefs: item.sourceRefs, byteLength: item.byteLength,
+  };
 }
 function render(items: readonly ContextItem[]): string {
   return ['# Threadline context', ...items.map((item) =>
-    `## ${item.priority} ${item.kind} (${item.representation}) ${item.memoryId}@${item.versionId}\n${item.text ?? ''}\nSources:\n${item.sourceRefs.map((ref) => `${ref.sourceId} ${ref.kind} sha256:${ref.digest}`).join('\n')}`,
+    `## ${item.priority} ${item.kind} (${item.representation}) ${item.memoryId}@${item.versionId}\n${item.text ?? ''}\nApplicability (current selection predicates; caller hints are not verified facts): ${JSON.stringify(item.applicability)}\nObserved under (historical conditions, not current applicability): ${JSON.stringify(item.observedUnder)}\nSources:\n${item.sourceRefs.map((ref) => `${ref.sourceId} ${ref.kind} sha256:${ref.digest}`).join('\n')}`,
   )].join('\n\n');
 }
 function packet(manifest: ContextManifest, sourceId: string, occurrenceId: string, items: ContextItem[], body: string, releasedAtMs: number): ContextResult {

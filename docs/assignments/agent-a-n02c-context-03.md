@@ -379,3 +379,139 @@ Next coordinator action: review PR #15, reconcile the explicitly requested froze
 shared documentation, integrate serially with other work, then retire only after
 merge/recovery gates. Keep the assigned worktree, service and stores available
 until that review is complete. This checkpoint is not merged or retired.
+
+## PR 15 review follow-up
+
+The coordinator assigned implementation and verification of the two P2 findings
+at `dcb8702b225aa0c92b7d9399635d1097f4a42d91`, in this same worktree/branch/PR.
+The existing ownership/resource restrictions still apply. No later milestone,
+merge of this PR, force push or retirement is authorized.
+
+### Main integration and changes
+
+Fetched origin and verified the assignment branch clean, with its own feature
+upstream. Normally merged current main
+`26c5681c842da2f0d195d9b995b9a152c44b08f0` (merged B PR 14) in merge commit
+`ce7c716888386f6b5d6f41d03575ca8f1eab00f9`. The merge was clean. B's CLI,
+demonstration, fixtures and documentation are preserved byte-for-byte relative
+to that main; those paths were not edited for these fixes.
+
+Review changes are limited to backend `service/context.ts`, shared `context.ts`,
+context terminology in `CONTEXT.md`, authoritative `docs/context.md` and this
+record. FalkorDB still supplies current authority, task and selection snapshots;
+there is no SQL/file fallback for accepted memory. No new migration, dependency,
+SQL/graph reset, authoring-contract change or capability expansion was needed.
+
+- All context release authorization queries now use advancing PostgreSQL
+  `clock_timestamp()` for absolute and idle expiry. Fresh preparation's final
+  authorization query follows the final graph/task checks and packet validation;
+  replay also performs it as the last asynchronous work before SQL commit.
+- Released items carry full `applicability` and `observedUnder` fields. Their
+  rendered labels distinguish current selection predicates/caller hints from
+  historical conditions. Both complete JSON representations count toward the
+  rendered UTF-8 budget. Only optional body text can be excerpted; qualifications
+  remain complete. If they cannot fit, optional advice is omitted and mandatory
+  authority refuses rather than losing its qualifications.
+- Replaced both the metadata schema's `omit(text)` and the projection's rest
+  spread with explicit field allowlists. Statement text, applicability values,
+  historical conditions and raw selection hints/focus are excluded from context
+  manifest bytes/items, operation payloads and occurrence rows.
+- Renderer version 2 includes qualification text in the render digest. Persisted
+  metadata shape remains manifest schema 2. Replay refuses other renderer
+  versions with `stale_preparation`, retaining immutable old audits; callers use
+  a new scoped key for a new qualified preparation.
+
+### Review verification actually exercised
+
+Temporary checks remain outside Git under the assigned checks root. They use
+only generated assignment credentials and the assigned SQL/graph/source stores.
+Before mutations, the checks asserted the absolute installation/source roots,
+`context03` database, HTTP 47842, PostgreSQL 55452 and FalkorDB 56452. Existing
+container names and listener PID/command were checked before replacing the owned
+service. Setup/init was not rerun and no prior data was reset.
+
+- `npm run build`: passed on the combined main/feature source, and again after
+  the final source comment adjustment. `git diff --check` passed.
+- `node .../review-expiry.mjs`: all four real-HTTP cases passed: absolute and
+  idle expiry during fresh preparation, and absolute and idle expiry during
+  replay. A temporary store wrapper delayed the final real graph-root read
+  until after the token deadline. Recorded SQL times proved the transaction
+  timestamp was before expiry while the final advancing clock was after expiry.
+  Final release returned `scope_denied` in every case; fresh work rolled back,
+  replay added no occurrence, and restoring each generated test credential
+  allowed a correct scoped retry. This actually triggered expiry inside the
+  transaction, rather than testing an already expired request at route entry.
+- `node .../review-http.mjs`: passed proposal non-authority; exact 600→60-second
+  correction; still-applicable UTC lesson whose historical contract is distinct
+  from its applicability; unknown/incompatible exclusion; candidate procedure
+  omission; mandatory multibyte overflow; exact mandatory text; complete-body
+  UTF-8 bounds and optional excerpt; exact/mismatched/stale retries; guarded
+  terminal occurrence reports; unsupported native observation; unknown session,
+  unauthenticated and forged task-family refusals. The excerpt fixture budget
+  is 3072 bytes to include the newly required complete qualifications.
+- `node .../review-qualifications.mjs`: passed separate packet fields and rendered
+  labels; full qualification preservation in an excerpt; text-byte versus full
+  body-byte measurements; SHA-256 digest of the complete qualified body; exact
+  renderer-2 replay; strict manifest rejection of `text`, `applicability` and
+  `observedUnder`; inspection of all then-retained context manifests in the new
+  project plus their operation/occurrence rows, with no rendered/qualification
+  sentinel plaintext; actual renderer-1 preparation refusal without a duplicate
+  occurrence; optional omission when historical conditions alone exceed 8192
+  bytes; and refusal of a short mandatory statement with oversized complete
+  historical qualifications.
+- `node .../review-demo.mjs`: passed all Bash blocks in merged B's
+  `docs/memory-demo.md` sections 2–6, against this assignment's explicit home and
+  existing synthetic stores. This used a new project, actual public exporter
+  execution (exit 0 with expected CSV mismatch), human episode CLI with observed
+  precision, exact guarded 600→60 correction, retained intent/source/operation
+  reads, accepted candidate procedure, normal service restart, fresh CLI reads
+  and the documented finite authored MCP client with all six read-only tools.
+  No fixture, CLI or demonstration source was edited.
+- `node .../review-final.mjs`: passed on the normal CLI-served process after
+  restart: renderer-2 replay retained the same body, qualifications, audit IDs
+  and digest; context over B's actual demo graph selected the exact 60-second
+  obligation and the qualified observed UTC failure with historical freshness
+  600, excluded the procedure candidate, stayed within 4096 bytes and replayed
+  identically. Missing contract hints excluded that episode. Context support and
+  unavailable procedure validation remained truthful.
+- `python3 .../docs-check.py`: passed changed-document H1/heading hierarchy,
+  labelled fences and local links. `python3 .../review-audit.py`: passed full
+  feature diff ownership against the integrated main, frozen-path equality,
+  generated-secret scan and plaintext-free service diagnostics. Source digests
+  were captured outside Git for final commit verification.
+
+Corrected preliminary attempts are not passing evidence: the first expiry
+fixture had no admitted source and therefore no graph root; it correctly refused
+before exercising expiry. It was initialized through normal source admission.
+The first overflow episode omitted the existing required uncertainty for an
+unknown outcome; the input was corrected. After the demonstration shell exited,
+its background service exited too; an initial post-demo connection failed. A
+configuration-asserted detached normal CLI service was then started and the
+post-restart checks passed. No implementation failure was hidden by these fixes.
+
+### Review limitations and retained resources
+
+These are synthetic controlled expiry delays and authored protocol/demo checks,
+not native evidence or proof of every scheduler/network interleaving. The final
+clock check precedes commit and response transport; it cannot promise token
+validity after that boundary. The earlier graph outage/recovery, populated v4→v5
+upgrade and exhaustive provenance-bound checks were not rerun in this review
+follow-up; their original observed outcomes above remain historical evidence.
+No new native observation, validated procedure, CLI/MCP context adapter or later
+feature is claimed. Renderer-1 retry identities deliberately refuse and need new
+keys; their immutable audit history remains available.
+
+Containers, volumes, stores and ports remain the same assignment-owned resources
+listed above. New synthetic projects, generated short-lived test tokens, review
+state/results/transcript and source-digest files are under the same data/check
+roots. A detached normal CLI service uses the explicit absolute assigned home;
+its current PID is recorded in `data-root/service.pid` (50630 at verification).
+Everything remains available for coordinator review; no retirement was performed.
+
+Coordinator documentation requests now also include reconciling B's merged
+`docs/memory-demo.md` statements that context selection is unavailable: after
+integration, backend bounded preparation is implemented while CLI/MCP/native
+context adapters and validated procedural reuse remain unavailable. Preserve the
+existing N03/N04/N06 gates and B's truthful authored demonstration limitations.
+PR 15 remains the single delivery/review location; the next action is coordinator
+review and serial integration, not another feature in this worktree.
