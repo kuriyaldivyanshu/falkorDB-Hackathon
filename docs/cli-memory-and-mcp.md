@@ -1,8 +1,8 @@
-# Human memory CLI and the read-only MCP server
+# Human memory CLI and project-bound MCP
 
 This document is the operator's guide to the two client surfaces this build
 actually implements: the human-run commands that create, accept and correct
-project memory, and the project-bound read-only stdio MCP server that lets an
+project memory, and the project-bound stdio MCP server that lets an
 MCP client retrieve current memory and its provenance.
 
 Codex owns inference, tools, authentication, approvals and execution.
@@ -14,17 +14,19 @@ session, and neither writes memory on a model's behalf.
 | Surface | What it does | What it deliberately does not do |
 | --- | --- | --- |
 | CLI commands | Human mutations and bounded reads over the loopback API | No inference, no session control, no native configuration writes |
-| `threadline mcp` | Read-only stdio MCP server bound to one project | No write tool, no acceptance tool, no HTTP/SQL/shell/filesystem tool |
+| `threadline mcp` | Six read-only tools; explicit --context-tools adds preparation audit writes | No accepted-knowledge mutation, acceptance or HTTP/SQL/shell/filesystem tool |
 | `threadline codex:preview` | Renders the Codex profile that starts `mcp` | Writes nothing; renders no hook entry and no credential |
 
 Semantic memory, episodes and procedural candidates are implemented (see
 [docs/memory-kinds.md](memory-kinds.md) for the memory-kind contracts and
 `POST /v2/memories/episodes`). Authenticated backend context preparation and
 occurrence reporting are also implemented; see [the context API](context.md).
-There is no context CLI command or MCP tool yet. Validated procedural reuse,
+[Context clients](context-client.md) expose `context:prepare`, explicit
+`context:occurrence`, and an opt-in `threadline_context_prepare` MCP tool.
+Preparation writes metadata, never delivery or accepted knowledge. Validated procedural reuse,
 coordination claims, handoffs, native capture and native session enrollment
 remain unavailable; strong native identity remains unqualified. The MCP tool-call
-identity path is still unqualified, which is one reason writes stay human-only.
+identity path is still unqualified; accepted-knowledge mutations stay human-only.
 
 ## One complete workflow
 
@@ -282,7 +284,7 @@ narrow the bounded scan, and `threadline_memory_inspect` returns the stored
 content of any kind — including the server-resolved `evidencePrecision` of an
 episode and the `procedureState`, `reviewRef` and `supportedBy` of a procedure.
 
-What the server guarantees:
+The default six-tool server guarantees:
 
 - **No writes.** There is no proposal, acceptance, correction, requirement
   binding or source-append tool, and no generic escape hatch: no HTTP proxy, no
@@ -325,10 +327,30 @@ grant, so a reader-grant credential has to be created outside the product
 surface. The server prefers a reader credential wherever the mechanism allows
 it; it does not invent a credential-issuance path in client code.
 
+## Explicit audited context retrieval
+
+`threadline mcp --project "$PROJECT" --context-tools` adds only
+`threadline_context_prepare`. It uses the configured project and credential,
+accepts an explicit idempotency key and task/focus/condition/budget selectors,
+and refuses identity/routing overrides. It records a metadata-only manifest and
+prepared occurrence without changing accepted knowledge. Accordingly its
+readOnlyHint is false; destructiveHint and openWorldHint are false. Keyed
+identical retries reconcile the same backend preparation.
+
+The tool returns exact body text once and compact validated audit/snapshot
+metadata. Its complete serialized result has a 64 KiB hard limit, separate from
+the backend's 4 KiB default / 8 KiB hard rendered body limit. Oversize explicitly
+fails without partial mandatory authority. No occurrence tool is exposed;
+preparation and MCP return never automatically report emission or native use.
+See [the complete context client guide](context-client.md) for CLI examples,
+credential binding, refusals, retry semantics and output shape.
+
 ## Previewing the Codex configuration
 
 ```sh
 threadline codex:preview --project "$PROJECT" --codex-home "$CODEX_HOME"
+# Explicit audited retrieval profile:
+threadline codex:preview --project "$PROJECT" --codex-home "$CODEX_HOME" --context-tools
 ```
 
 The command renders the profile file a human would install at
@@ -352,11 +374,13 @@ paths, and the exact command to run the server by hand.
   **unqualified**.
 - MCP `tools/call` host metadata identifying a conversation remains
   **unqualified**, as does fork/subagent identity correlation. Until that is
-  observed, model-issued writes stay disabled and this server stays read-only.
+  observed, model-issued knowledge mutations stay disabled; explicit context
+  opt-in records only preparation metadata.
 - Backend context preparation and occurrence reporting are implemented through
   authenticated HTTP routes described in [the context guide](context.md). There
-  is no `context.prepare` CLI command or MCP tool here, and native delivery is
-  unqualified. Session enrollment remains unavailable.
+  are also `context:prepare` / `context:occurrence` CLI commands and an explicit
+  `--context-tools` MCP option; see [context clients](context-client.md). Native
+  delivery remains unqualified. Session enrollment remains unavailable.
 - Claims and handoffs remain unavailable operations.
 - Context HTTP isolation is verified with real synthetic reader/foreign-scope
   credentials. Supported scoped credential issuance and isolation coverage for

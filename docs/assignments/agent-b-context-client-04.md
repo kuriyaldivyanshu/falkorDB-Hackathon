@@ -116,4 +116,132 @@ link and prepared multiline body. Preserve worktree/resources for coordinator.
 Baseline gates passed: clean coordinator main fetched/fast-forward checked at
 expected SHA, branch/path unused, new worktree clean at literal SHA with no
 upstream. Assignment did not exist on baseline and is created before source.
-Implementation and verification pending. N03 remains incomplete.
+The independently implemented client portion is verified below. The combined
+reader pass is pending: the user explicitly said they will confirm when A's PR
+has been reviewed and merged, and only then may B pull main and continue that
+pass. No peer branch was read/merged and main has not been pulled since baseline.
+N03 remains incomplete; retain this PR as draft until the dependency pass.
+
+### Behavior and changed paths
+
+- `packages/cli/src/context-surface.ts`: one shared-schema transport for prepare
+  and guarded occurrence; backend selection, rendering and authorization unchanged.
+- `packages/cli/src/index.ts` and `options.ts`: bounded file/stdin context
+  commands, explicit keys, project/document match, strict flag/identity refusal,
+  existing raw token-file format, one validated JSON outcome and correct 0/1/2
+  statuses. Human output shows exact body and audit/snapshot/operation IDs with
+  truthful preparation/admission/self-report limitations. No automatic emission.
+  Argument parser failures no longer echo supplied unknown option values.
+- `packages/cli/src/mcp/server.ts` and new `mcp/context-output.ts`: defaults
+  remain exactly six read-only tools; explicit --context-tools adds only audited
+  preparation. Strict selectors exclude routing and native identity; full shared
+  response validation precedes one body copy and metadata-only projection.
+  Complete serialized tool-result cap is 64 KiB, separate from 4/8 KiB body.
+  Oversize returns explicit failure without partial authority; SDK validation
+  diagnostics are collapsed before serialization so huge unknown fields cannot
+  bypass the cap. Retry reports preparation evidence, not guessed current
+  occurrence state. Existing timeout/concurrency and no-fallback behavior retained.
+- `packages/cli/src/codex/mcp-preview.ts`: explicit context-enabled preview,
+  real startup flag, existing defaults/ownership/collision behavior, no hook or
+  bearer, no native writes. New example files only under
+  `assets/codex/preview/context-read/`; assets README explains their scope.
+- New `docs/context-client.md`; README, local-development, CLI/MCP and native
+  contract reconcile implemented client facts. `docs/memory-demo.md` changes only
+  by appending a separated authored context-client section. This assignment is
+  the sole execution record edited; no frozen paths/dependencies/configuration,
+  existing qualification assets or permanent tests changed.
+
+### Observed verification
+
+Node v22.16.0, own npm ci and npm run build passed. Focused temporary scripts and
+safe summaries are retained in `/tmp/threadline-b-context-client-04-checks`.
+All final relevant runs passed:
+
+- `demo.sh`: documented memory-demo sections 2–5 passed against fresh synthetic
+  owner data: proposal/acceptance, task binding, real authored exporter command,
+  eligible observed episode, 600→60 correction and candidate procedure. This run
+  did not repeat section 6's normal service restart; existing historical evidence
+  is not presented as newly rerun evidence.
+- `verify.mjs`: **31 CLI/projection checks** passed: file/stdin, exact 60-second
+  authority, applicable episode with full distinct applicability/observedUnder,
+  UTF-8 byte/digest, stable prepare IDs/operation, human precision/admission notes,
+  SQL-confirmed prepared state (no automatic emission), metadata-only manifest,
+  no focus digest, exact/changed retries, arbitrary native identity refusal,
+  missing/unknown fields and conditions, conflicting flags/project mismatch,
+  malformed/oversized file and stdin, invalid token with no value disclosure,
+  unknown/incompatible applicability, duplicate hint refusal, missing authority,
+  mandatory multibyte overflow, guarded explicit reports/replays/stale and changed
+  reports, native_observed refusal, unknown delivery and synthetic oversize cap.
+- `mcp.mjs`: **17 actual-backend protocol checks** passed: authored initialize,
+  exact six/default and seven/opt-in lists and annotations, strict JSON Schema,
+  exact bounded current body once plus metadata, stable/changed retries,
+  typed refusal, eight identity/routing override kinds, required key, huge-key
+  and many-invalid-selector diagnostic bounds, 8 concurrent valid replays/errors,
+  all six pre-existing reads, and established graph outage/recovery. Backend PID
+  **1181** and the same MCP process survived without restart. Source metadata
+  remained readable during graph outage; context refused with no body fallback.
+  After explicit CLI emission, MCP replay still truthfully reports preparation
+  evidence without inventing the occurrence's current state.
+- `transport.mjs`: **6 authored transport checks** passed for common route/schema,
+  caller key and guard forwarding, response validation, typed refusal and failure
+  never becoming a successful occurrence. Responses here are simulated.
+- `mcp-boundaries.mjs`: **3 bounded-error checks** passed on a constructed stdio
+  server: actual-backend invalid synthetic token, injected service failure and
+  validated synthetic oversized response through the SDK. Startup project binding
+  is bypassed only by this temporary verifier to inject failures. This does not
+  claim the normal public startup bypasses authorization.
+- `preview.mjs`: **6 checks** passed: unchanged default args, explicit real flag,
+  determinism, no credential/hook, absent/owned/edited classification and CLI
+  modes leaving a foreign target byte-identical without writes. Python 3.12
+  tomllib also parsed the context-enabled profile. No native binary was invoked.
+- `context-demo.sh`: the new documented section 7 passed: current authority,
+  historical episode qualifications, stable stdin retry and real operation
+  inspection. The inspected manifest operation actually had a committed receipt;
+  preparation alone was never used to infer that outcome.
+
+Total: **63 grouped focused checks**, plus tomllib and both documented workflow
+portions. Initial temporary verifier failures: an unhandled parent-side EPIPE
+when the bounded child correctly closed oversized stdin (verifier fixed); an
+assertion that concurrent newly created preparations must all succeed despite
+backend stale-snapshot refusal (isolation check changed to identical replays,
+without weakening product behavior). The first detached service launch was
+sandbox-denied and exited before binding; authorized launch at the asserted
+installation succeeded as PID 1181. Default Python lacked tomllib; installed
+Python 3.12 passed. These are not hidden passing product observations.
+
+### Limits, integration and recovery
+
+No supported reader credential was issued or tested yet; A's policy/API remains
+an ordered dependency. No synthetic SQL reader setup was needed. Combined
+compatibility must use A's merged supported API, verify prepare/own occurrence
+and knowledge-mutation denial, rerun affected CLI/MCP checks/build, and reconcile
+issuance wording. Do not add credential administration CLI commands. Wait for
+the user's explicit merge confirmation before fetching/pulling main for this.
+Use a normal merge on this clean published branch; preserve history.
+
+No real native configuration/authentication/transcripts/inference, model packet
+consumption, hook delivery/spilling, strong native identity or fork/subagent
+correlation was exercised. Backend controlled-expiry/race/privacy/renderer-version
+checks were read and preserved, not independently repeated. No intentionally
+lost real HTTP response, complete load proof or validated procedure reuse claimed.
+
+Owned resources retained for coordinator review/retirement: containers
+`threadline-b-context-client-04-postgres` (55463) and `-graph` (56463), volumes
+`threadline-b-context-client-04-pg-data` and `-graph-data`, backend PID 1181 on
+47853. Isolated database `threadline_b_context_04`, schema `threadline_memory`,
+fresh project graphs, sources/credentials under
+`/tmp/threadline-b-context-client-data-04/home`; all runtime data stays outside
+Git. Temporary verifier processes have exited. Peer stores/processes untouched.
+
+Proposed coordinator checklist updates after final integration: section 2C's
+client absence is now outdated; record audited CLI/MCP/preview implementation
+and authored transport evidence, while keeping N03 and native/reader integration
+gates open until actually qualified. Worker did not edit the checklist.
+
+Final full-base scope/frozen-path audit, changed-file credential scan, all eight
+Markdown files' local links/headings/labelled fences, and git diff --check passed.
+Eight final transcript digests are retained in the external checks root's
+SHA256SUMS.txt. No source changes followed the final successful build except
+this result record. Delivery pending normal feature commit/push, remote SHA
+confirmation and one draft PR. Final exact HEAD/remote and real PR URL will be
+recorded in the delivery handoff; no merge/retirement.

@@ -88,21 +88,28 @@ no durable outcome. `--json` prints exactly one machine-readable result;
 `--wait` follows an operation to a settled state and still reports a refusal as a
 refusal. A refusal names the offending field of the input document.
 
-Two more commands added by the same assignment:
+MCP and preview commands (context retrieval requires explicit opt-in):
 
 ```sh
-threadline mcp --project <uuid> [--token-file <path>] [--timeout-ms <n>] [--concurrency <n>]
-threadline codex:preview --project <uuid> [--codex-home <path>] [--executable <path>] [--entry <path>]
+threadline context:prepare --input <file|-> [--project <uuid>] [--token-file <path>] [--json]
+threadline context:occurrence --input <file|-> [--project <uuid>] [--token-file <path>] [--json]
+threadline mcp --project <uuid> [--token-file <path>] [--timeout-ms <n>] [--concurrency <n>] [--context-tools]
+threadline codex:preview --project <uuid> [--codex-home <path>] [--executable <path>] [--entry <path>] [--context-tools]
 ```
 
-`mcp` serves the configured project read-only over stdio; it exposes no write,
-acceptance or generic proxy tool, refuses to start if the credential cannot see
+`mcp` serves six read-only tools by default. Explicit `--context-tools` adds only
+audited context preparation, which writes metadata but changes no accepted
+knowledge. It exposes no acceptance or generic proxy tool and refuses to start if the credential cannot see
 the configured project, and never falls back to reading SQL or source files
 during an outage. `codex:preview` renders the Codex profile that starts `mcp`,
 writes nothing and contains no credential. Episodes and procedures are readable
 through `memory:query --kind episodic|procedural` and `memory:inspect`. See
 [docs/cli-memory-and-mcp.md](cli-memory-and-mcp.md) for the full workflow and
 [docs/memory-kinds.md](memory-kinds.md) for the memory-kind contracts.
+[Context clients](context-client.md) document strict inputs, credential binding,
+occurrence reports and body/envelope limits. Preparation is not emission or proof
+of committed manifest graph admission. Context commands have no --wait or
+automatic emission step.
 
 ### Privilege model
 
@@ -186,7 +193,8 @@ Follow [the reproducible memory demo](memory-demo.md) for a public authored
 600 → 60 second correction, an actually executed fixture check, episode
 provenance, an accepted procedural candidate and restart/MCP recall. It uses
 implemented memory APIs without a Codex inference call. The walkthrough does
-not exercise the separately implemented backend context API.
+not claim native context delivery. Its separate optional context-client section
+exercises preparation through the same backend API.
 
 ## Native qualification
 

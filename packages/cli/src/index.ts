@@ -10,6 +10,8 @@ import {
   ROUTES,
   SOURCE_KINDS,
   ThreadlineError,
+  prepareContextInputSchema,
+  recordOccurrenceInputSchema,
   type CapabilityReport,
   type HealthReport,
   type ProjectJoinResult,
@@ -35,6 +37,7 @@ import {
   THREADLINE_BACKEND_VERSION,
 } from '@threadline/backend';
 
+import { createContextSurface } from './context-surface.js';
 import { createApiClient, type ApiClient } from './client.js';
 import {
   DEFAULT_OPERATION_WAIT_MS,
@@ -169,15 +172,20 @@ async function runClientCommand(invocation: CliInvocation): Promise<number> {
   const home = resolveHomeDirectory(invocation.home);
   const config = loadServiceConfig(home).config;
   const paths = installationPaths(home);
-  const credential = readCredentialFile(paths.credentialFile);
+  const token = invocation.command.startsWith('context:')
+    ? readServerCredential(invocation, paths.credentialFile)
+    : readCredentialFile(paths.credentialFile)?.token ?? null;
   const host = config.host === '::1' ? '[::1]' : config.host;
   const client = createApiClient({
     baseUrl: `http://${host}:${String(config.port)}`,
-    token: credential?.token ?? null,
+    token,
     timeoutMs: DEFAULT_REQUEST_TIMEOUT_MS,
   });
 
   switch (invocation.command) {
+    case 'context:prepare':
+    case 'context:occurrence':
+      return runContextCommand(client, invocation);
     case 'status':
       return showStatus(client, invocation);
     case 'capabilities':
@@ -199,6 +207,51 @@ async function runClientCommand(invocation: CliInvocation): Promise<number> {
     default:
       return runMemoryCommand(client, invocation);
   }
+}
+
+/** Strict usage validation precedes transport; supplied identities grant no authority. */
+async function runContextCommand(client: ApiClient, invocation: CliInvocation): Promise<number> {
+  const document = readInputDocument<unknown>(invocation.input);
+  const schema = invocation.command === 'context:prepare' ? prepareContextInputSchema : recordOccurrenceInputSchema;
+  const parsed = schema.safeParse(document);
+  if (!parsed.success) {
+    // Do not echo submitted values, unknown field names or validator dumps.
+    throw new UsageError('The context input document does not match the shared contract.');
+  }
+  if (invocation.projectId !== null && invocation.projectId !== parsed.data.projectId) {
+    throw new UsageError('--project differs from the input document projectId.');
+  }
+  const surface = createContextSurface(client);
+  if (invocation.command === 'context:prepare') {
+    const input = prepareContextInputSchema.parse(parsed.data);
+    const result = await surface.prepare(input);
+    if (invocation.json) writeJson(result);
+    else if (result.kind === 'refused') {
+      write(`Context refused: ${result.reason}${result.detail === null ? '' : ` — ${result.detail}`}`);
+    } else {
+      const { packet } = result;
+      write('Context packet (prepared)');
+      write(`  manifest: ${packet.manifestSourceId}  occurrence: ${packet.occurrenceId}`);
+      write(`  manifest operation: ${packet.manifestOperationId} (inspect with operation:inspect)`);
+      write(`  project: ${packet.manifest.projectId}  task: ${packet.manifest.taskId ?? '(none)'}`);
+      write(`  task revision: ${packet.manifest.taskRevision ?? '(none)'}`);
+      write(`  graph epoch: ${packet.manifest.graphEpoch}  head: ${packet.manifest.graphHead}  privacy: ${packet.manifest.privacyRevision}`);
+      write(`  render digest: ${packet.manifest.renderDigest}  body bytes: ${packet.manifest.bodyBytes}`);
+      write('');
+      process.stdout.write(packet.body);
+      note('Prepared does not mean delivered. This preparation command reports no emission; native observation is unavailable.');
+      note('Manifest graph admission may still be pending. Inspect its operation for a committed receipt.');
+    }
+    return result.kind === 'packet' ? EXIT_OK : EXIT_FAILURE;
+  }
+  const result = await surface.recordOccurrence(recordOccurrenceInputSchema.parse(parsed.data));
+  if (invocation.json) writeJson(result);
+  else {
+    write(`Context occurrence ${result.occurrenceId}: ${result.state}`);
+    write(`  manifest: ${result.manifestSourceId}  packet digest: ${result.packetDigest}`);
+    note('Delivery is self-reported, not verified native delivery, comprehension or following.');
+  }
+  return EXIT_OK;
 }
 
 /**
@@ -535,7 +588,7 @@ async function reportOperation(
 }
 
 /**
- * The project-bound, read-only stdio MCP server.
+ * The project-bound stdio MCP server with explicit context audit opt-in.
  *
  * The binding is resolved before the transport starts: the configured
  * credential must be able to see the configured project, or the process exits
@@ -557,13 +610,14 @@ async function runMcp(invocation: CliInvocation): Promise<number> {
   const binding = await verifyProjectBinding(client, projectId);
   note(
     `threadline mcp: project ${binding.projectId} (role ${binding.role}) at ${client.baseUrl}; ` +
-      'read-only surface, no native session identity is asserted',
+      `${invocation.contextTools ? 'audited context retrieval enabled' : 'six read-only tools'}; no native session identity is asserted`,
   );
 
   const server = await startStdioMcpServer({
     client,
     projectId: binding.projectId,
     threadlineHome: home,
+    contextTools: invocation.contextTools,
     requestTimeoutMs: invocation.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
     ...(invocation.concurrency === null ? {} : { maxConcurrentRequests: invocation.concurrency }),
     logger: note,
@@ -615,6 +669,7 @@ function runCodexPreview(invocation: CliInvocation): Promise<number> {
     entryScript: invocation.entryScript ?? fileURLToPath(new URL('./index.js', import.meta.url)),
     threadlineHome: home,
     projectId: invocation.projectId ?? '',
+    contextTools: invocation.contextTools,
   });
 
   const existing = new Map<string, string>();
