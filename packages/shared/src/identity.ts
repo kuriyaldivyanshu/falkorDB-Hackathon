@@ -39,7 +39,7 @@ export type IdentityPrecision = (typeof IDENTITY_PRECISIONS)[number];
 export const CAPTURE_COVERAGES = ['unknown', 'partial', 'supported'] as const;
 export type CaptureCoverage = (typeof CAPTURE_COVERAGES)[number];
 
-export const CLIENT_TOKEN_KINDS = ['human_admin', 'producer'] as const;
+export const CLIENT_TOKEN_KINDS = ['human_admin', 'producer', 'reader'] as const;
 export type ClientTokenKind = (typeof CLIENT_TOKEN_KINDS)[number];
 
 export const projectViewSchema = z.object({

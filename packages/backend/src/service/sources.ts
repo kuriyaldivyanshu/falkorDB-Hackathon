@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 
 import {
+  contextManifestSchema,
   parseContract,
   sourceAppendInputSchema,
   sourceAppendResultSchema,
@@ -27,6 +28,7 @@ import type { SourceFileStore } from '../storage/files.js';
 import type { SqlDatabase, TxClient } from '../storage/pg.js';
 import { withProjectWriteLock } from '../storage/pg.js';
 import type { AuthenticatedCall } from './auth.js';
+import { requirePermission } from './permissions.js';
 
 /**
  * Source capture and history.
@@ -41,7 +43,9 @@ import type { AuthenticatedCall } from './auth.js';
  */
 
 export interface SourceService {
-  /** Internal callers may join an existing project-locked transaction. */
+  /** Trusted metadata-only publication, never reachable through public append input. */
+  appendContextManifest(call: AuthenticatedCall, manifest: unknown, nonce: string, transaction: TxClient): Promise<SourceAppendResult>;
+  /** Public append always requires knowledge-write permission. */
   append(call: AuthenticatedCall, input: unknown, transaction?: TxClient): Promise<SourceAppendResult>;
   view(call: AuthenticatedCall, projectId: string, sourceId: string, transaction?: TxClient): Promise<SourceView>;
   range(call: AuthenticatedCall, projectId: string, sourceId: string, start?: number, end?: number, transaction?: TxClient): Promise<SourceRange>;
@@ -179,83 +183,99 @@ export function createSourceService(deps: SourceServiceDeps): SourceService {
     );
   };
 
-  return {
-    async append(call: AuthenticatedCall, input: unknown, transaction?: TxClient): Promise<SourceAppendResult> {
-      const parsed = parseContract(sourceAppendInputSchema, input, 'source append');
-      const projectId = parsed.projectId;
-      requireProject(call, projectId);
+  const appendStored = async (call: AuthenticatedCall, input: unknown, transaction?: TxClient): Promise<SourceAppendResult> => {
+    const parsed = parseContract(sourceAppendInputSchema, input, 'source append');
+    const projectId = parsed.projectId;
+    requireProject(call, projectId);
 
-      // Bound first: normalize and limit every record before anything durable
-      // is written, so an oversized batch fails without a partial publication.
-      const prepared: PreparedRecord[] = [];
-      let batchBytes = 0;
-      for (const record of parsed.records) {
-        const bytes = decodeBase64(record.bytesBase64);
-        if (bytes.byteLength > SOURCE_LIMITS.maxSourceBytes) {
-          throw new ThreadlineError('invalid_request', 'A source record exceeds the maximum size.', {
-            limit: SOURCE_LIMITS.maxSourceBytes,
-            received: bytes.byteLength,
-          });
-        }
-        batchBytes += bytes.byteLength;
-        if (prepared.length + 1 > SOURCE_LIMITS.maxBatchRecords || batchBytes > SOURCE_LIMITS.maxBatchBytes) {
-          throw new ThreadlineError('invalid_request', 'The source batch exceeds a declared capture limit.', {
-            limitBytes: SOURCE_LIMITS.maxBatchBytes,
-            records: prepared.length + 1,
-          });
-        }
-        if (record.kind === 'capture_gap' && (record.gapReason ?? null) === null) {
-          throw new ThreadlineError('invalid_request', 'A capture-gap record must state why evidence is missing.', {
-            field: 'gapReason',
-          });
-        }
-        prepared.push({ record, bytes, digest: createHash('sha256').update(bytes).digest('hex') });
+    // Bound first: normalize and limit every record before anything durable
+    // is written, so an oversized batch fails without a partial publication.
+    const prepared: PreparedRecord[] = [];
+    let batchBytes = 0;
+    for (const record of parsed.records) {
+      const bytes = decodeBase64(record.bytesBase64);
+      if (bytes.byteLength > SOURCE_LIMITS.maxSourceBytes) {
+        throw new ThreadlineError('invalid_request', 'A source record exceeds the maximum size.', {
+          limit: SOURCE_LIMITS.maxSourceBytes,
+          received: bytes.byteLength,
+        });
       }
+      batchBytes += bytes.byteLength;
+      if (prepared.length + 1 > SOURCE_LIMITS.maxBatchRecords || batchBytes > SOURCE_LIMITS.maxBatchBytes) {
+        throw new ThreadlineError('invalid_request', 'The source batch exceeds a declared capture limit.', {
+          limitBytes: SOURCE_LIMITS.maxBatchBytes,
+          records: prepared.length + 1,
+        });
+      }
+      if (record.kind === 'capture_gap' && (record.gapReason ?? null) === null) {
+        throw new ThreadlineError('invalid_request', 'A capture-gap record must state why evidence is missing.', {
+          field: 'gapReason',
+        });
+      }
+      prepared.push({ record, bytes, digest: createHash('sha256').update(bytes).digest('hex') });
+    }
 
-      // Immutable bytes are published before the catalog row exists. A crash
-      // between the two leaves a verified orphan object, never a dangling row.
-      const stored = new Map<string, { storageKey: string }>();
+    // Immutable bytes are published before the catalog row exists. A crash
+    // between the two leaves a verified orphan object, never a dangling row.
+    const stored = new Map<string, { storageKey: string }>();
+    for (const item of prepared) {
+      stored.set(item.record.deliveryId, await deps.files.publish({
+        tenantId: call.scope.tenantId,
+        projectId,
+        digest: item.digest,
+        bytes: item.bytes,
+        maxBytes: SOURCE_LIMITS.maxSourceBytes,
+      }));
+    }
+
+    const catalog = async (tx: TxClient): Promise<SourceAppendOutcome[]> => {
+      const results: SourceAppendOutcome[] = [];
       for (const item of prepared) {
-        stored.set(item.record.deliveryId, await deps.files.publish({
-          tenantId: call.scope.tenantId,
-          projectId,
-          digest: item.digest,
-          bytes: item.bytes,
-          maxBytes: SOURCE_LIMITS.maxSourceBytes,
-        }));
+        results.push(await appendOne(tx, call, projectId, item, stored.get(item.record.deliveryId), clock()));
       }
+      return results;
+    };
+    const outcomes = transaction === undefined
+      ? await withProjectWriteLock(deps.db, call.scope.tenantId, projectId, catalog)
+      : await catalog(transaction);
 
-      const catalog = async (tx: TxClient): Promise<SourceAppendOutcome[]> => {
-        const results: SourceAppendOutcome[] = [];
-        for (const item of prepared) {
-          results.push(await appendOne(tx, call, projectId, item, stored.get(item.record.deliveryId), clock()));
-        }
-        return results;
-      };
-      const outcomes = transaction === undefined
-        ? await withProjectWriteLock(deps.db, call.scope.tenantId, projectId, catalog)
-        : await catalog(transaction);
-
-      let highest: string | null = null;
-      for (const outcome of outcomes) {
-        if (outcome.status !== 'rejected' && (highest === null || compareDecimalStrings(outcome.projectSeq, highest) > 0)) {
-          highest = outcome.projectSeq;
-        }
+    let highest: string | null = null;
+    for (const outcome of outcomes) {
+      if (outcome.status !== 'rejected' && (highest === null || compareDecimalStrings(outcome.projectSeq, highest) > 0)) {
+        highest = outcome.projectSeq;
       }
-      if (transaction === undefined) logger.log({
-        level: 'info',
-        message: 'Source append settled.',
-        fields: {
-          accepted: outcomes.filter((outcome) => outcome.status === 'accepted').length,
-          duplicates: outcomes.filter((outcome) => outcome.status === 'duplicate').length,
-          rejected: outcomes.filter((outcome) => outcome.status === 'rejected').length,
-        },
-      });
-      return parseContract(
-        sourceAppendResultSchema,
-        { outcomes, projectSeq: highest },
-        'source append result',
-      );
+    }
+    if (transaction === undefined) logger.log({
+      level: 'info',
+      message: 'Source append settled.',
+      fields: {
+        accepted: outcomes.filter((outcome) => outcome.status === 'accepted').length,
+        duplicates: outcomes.filter((outcome) => outcome.status === 'duplicate').length,
+        rejected: outcomes.filter((outcome) => outcome.status === 'rejected').length,
+      },
+    });
+    return parseContract(
+      sourceAppendResultSchema,
+      { outcomes, projectSeq: highest },
+      'source append result',
+    );
+  };
+
+  return {
+    async append(call, input, transaction) {
+      requirePermission(call, 'knowledge.write');
+      return appendStored(call, input, transaction);
+    },
+    async appendContextManifest(call, input, nonce, transaction) {
+      requirePermission(call, 'context.audit');
+      const manifest = parseContract(contextManifestSchema, input, 'context manifest');
+      requireProject(call, manifest.projectId);
+      const bytes = Buffer.from(JSON.stringify(manifest));
+      return appendStored(call, { projectId: manifest.projectId, records: [{
+        deliveryId: `context:${nonce}`, originKey: `threadline:context:${nonce}`, originRevision: '1',
+        kind: 'context_manifest', mediaType: 'application/json', bytesBase64: bytes.toString('base64'),
+        observedAtMs: clock().getTime(), completeness: 'complete',
+      }] }, transaction);
     },
 
     async view(call: AuthenticatedCall, projectId: string, sourceId: string, transaction?: TxClient): Promise<SourceView> {

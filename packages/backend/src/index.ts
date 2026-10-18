@@ -12,6 +12,7 @@ import { createApiServer, type ApiServerHandle, type ServiceAddress } from './ap
 import { storageConfigured, type ServiceConfig } from './config.js';
 import type { Logger } from './log.js';
 import { silentLogger } from './log.js';
+import { createAccessService, type AccessService } from './service/access.js';
 import { createAuthService, type AuthService } from './service/auth.js';
 import {
   createMemoryService as createSemanticMemoryService,
@@ -156,6 +157,7 @@ export interface MemoryService {
   capabilities(): CapabilityReport;
   /** Durable services. Throws `storage_unavailable` until the stores are ready. */
   readonly auth: AuthService;
+  readonly access: AccessService;
   readonly projects: ProjectService;
   readonly sources: SourceService;
   readonly operations: OperationService;
@@ -193,6 +195,7 @@ export function createMemoryService(deps: MemoryServiceDeps): MemoryService {
   };
   let auth: AuthService | null = null;
   let projects: ProjectService | null = null;
+  let access: AccessService | null = null;
   let sources: SourceService | null = null;
   let operations: OperationService | null = null;
   let memories: SemanticMemoryService | null = null;
@@ -321,6 +324,7 @@ export function createMemoryService(deps: MemoryServiceDeps): MemoryService {
     filesReady = await files.probe();
 
     auth = createAuthService({ db: database, clock, logger });
+    access = createAccessService({ db: database });
     projects = createProjectService({ db: database, clock, logger });
     sources = createSourceService({ db: database, files, clock, logger });
     operations = createOperationService({ db: database });
@@ -510,6 +514,10 @@ export function createMemoryService(deps: MemoryServiceDeps): MemoryService {
         );
       }
       return auth;
+    },
+
+    get access(): AccessService {
+      return requireDurable(access);
     },
 
     get projects(): ProjectService {

@@ -31,6 +31,7 @@ import {
 } from '../storage/memoryGraph.js';
 import type { TxClient } from '../storage/pg.js';
 import type { AuthenticatedCall } from './auth.js';
+import { requirePermission } from './permissions.js';
 
 /**
  * Shared admission and read support for memory and task intents.
@@ -53,14 +54,9 @@ export function requireProjectScope(call: AuthenticatedCall, projectId: string):
   }
 }
 
-/** Reads and writes of accepted memory require an owner or member grant. */
+/** Knowledge writes require an owner/member grant and a writable credential. */
 export function requireWriteRole(call: AuthenticatedCall): void {
-  if (call.scope.role !== 'owner' && call.scope.role !== 'member') {
-    throw new ThreadlineError(
-      'scope_denied',
-      'This project grant is read-only; accepted memory changes require an owner or member grant.',
-    );
-  }
+  requirePermission(call, 'knowledge.write');
 }
 
 /**

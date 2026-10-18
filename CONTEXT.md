@@ -22,6 +22,13 @@ _Avoid_: Threadline run, owned worker.
 **Coordination claim**: A time-bounded right to advance specified shared task memory. It does not grant or prevent native filesystem execution.
 _Avoid_: Execution lock, sandbox permission.
 
+**Reader credential**: A one-project opaque bearer issued by a human project
+owner to a dedicated service principal with a reader grant. It permits scoped
+reads and its own context audits, has fixed absolute/idle expiry and no native
+enrollment or session identity. The bearer is delivered only once; retries
+recover metadata, never the secret. Revocation blocks future authorized releases
+but cannot recall delivered bytes. See [the access guide](docs/access.md).
+
 ## Evidence and memory
 
 **Source**: A versioned record of permitted evidence, with its origin, retained bytes and completeness. Missing bytes remain unavailable even when their digest survives.
