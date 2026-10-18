@@ -129,5 +129,9 @@ volumes, HTTP service 47844. Data/credentials remain owner-only under
 scripts remain under `/tmp/threadline-coord-ab-integration-03-checks`. Keep these
 for review and coordinator retirement. Peer worktrees/services were not changed.
 
-Delivery: normal commit/push of this branch, one PR to main, no merge or main
-push. Final SHA and actual PR URL are reported after remote confirmation.
+Delivery: normal commit/push of this branch; [PR #16](https://github.com/kuriyaldivyanshu/falkorDB-Hackathon/pull/16)
+is open with base `main` and head `threadline/coord-ab-integration-03`, verified
+through the existing owner browser. No merge or main push. The final handoff
+commit changes only this delivery record; the implementation tree remains the
+combined base. Final remote/head confirmation is reported in the coordinator
+handoff rather than embedding a self-referential commit hash here.
