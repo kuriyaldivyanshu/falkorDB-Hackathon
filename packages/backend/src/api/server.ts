@@ -322,12 +322,21 @@ function buildApp(deps: ApiServerDeps): FastifyInstance {
     ok(reply, await service.tasks.require(call, body));
   });
 
+  app.post(ROUTES.context, async (request, reply) => {
+    const body = readObject(request.body, 'context preparation');
+    const call = await service.auth.authenticate(authorizationOf(request), { projectId: readStringField(body, 'projectId') });
+    ok(reply, await service.context.prepare(call, body));
+  });
+  app.post(ROUTES.contextOccurrences, async (request, reply) => {
+    const body = readObject(request.body, 'context occurrence');
+    const call = await service.auth.authenticate(authorizationOf(request), { projectId: readStringField(body, 'projectId') });
+    ok(reply, await service.context.recordOccurrence(call, body));
+  });
+
   // Known product operations that are not in this build answer explicitly
   // rather than falling through as an anonymous 404.
   const unavailable: ReadonlyArray<{ readonly operation: Parameters<typeof unsupportedOperation>[0]; readonly path: string }> = [
     { operation: 'claim.status', path: ROUTES.claimStatus },
-    { operation: 'context.prepare', path: ROUTES.context },
-    { operation: 'context.occurrence', path: ROUTES.contextOccurrences },
     { operation: 'session.register', path: ROUTES.nativeSessions },
     { operation: 'job.import', path: ROUTES.jobs },
   ];

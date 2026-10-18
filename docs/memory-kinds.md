@@ -5,8 +5,9 @@ exactly how certain it is. Semantic memory and tasks are covered in
 [docs/local-development.md](local-development.md); the domain wording is in
 [CONTEXT.md](../CONTEXT.md).
 
-Everything below is implemented and verified in the `a-n02b-evidence-02`
-checkpoint. Bounded context selection, coordination claims, handoffs, native
+Episode/procedure admission and review were implemented and verified in the
+`a-n02b-evidence-02` checkpoint. [Bounded context](context.md) now selects current requirements and
+applicable accepted decisions, facts and episodes. Coordination claims, handoffs, native
 enrollment and capture, retention and erasure remain unavailable and are
 reported as such by `threadline capabilities`.
 
@@ -277,7 +278,6 @@ curl -sS "http://127.0.0.1:47832/v2/memories?projectId=…&kind=episodic" \
 
 ## What is still unavailable
 
-- Bounded context selection (`context.prepare`, `context.occurrence`) — N02C.
 - Coordination claims and handoffs — N04.
 - Validated procedural reuse (`memory.procedure.validate`) — N04.
 - Native enrollment and capture, so no episode can originate from a real Codex
@@ -289,3 +289,16 @@ the authority on what this build supports, and it changes with the build.
 ## Storage recovery
 
 See [storage recovery and installation safety](storage-recovery.md) for connection deadlines, outage readiness, receipt reconciliation and the initialization target guard.
+
+## Eligibility for bounded context
+
+[Context preparation](context.md) resolves exact current mandatory task authority
+and considers accepted decisions/facts and episodes within a bounded candidate
+window. It evaluates `applicability` against the stored task family and explicitly
+labelled caller selection hints; historical `observedUnder` is never reused as
+current facts. Unknown or incompatible conditions exclude optional material.
+Episode outcome and authored/observed precision remain explicit.
+
+Procedures, including human-accepted procedures, remain candidates and are
+excluded from context with `candidate_procedure`. No prerequisite is silently
+assumed met; compatible validated procedural reuse remains unavailable.

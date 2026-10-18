@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-import { MEMORY_KINDS } from './memory.js';
+import { APPLICABILITY_KEYS, MEMORY_KINDS, taskViewSchema } from './memory.js';
 import { SOURCE_KINDS } from './sources.js';
 import { byteBoundedText, decimalStringSchema, sha256HexSchema, uuidSchema } from './validation.js';
 
@@ -44,6 +44,8 @@ export const CONTEXT_ITEM_REASONS = [
   'accepted_decision',
   'project_orientation',
   'current_task',
+  'accepted_fact',
+  'applicable_episode',
 ] as const;
 export type ContextItemReason = (typeof CONTEXT_ITEM_REASONS)[number];
 
@@ -55,6 +57,9 @@ export const CONTEXT_OMISSION_REASONS = [
   'privacy_restricted',
   'candidate_limit',
   'stale_head',
+  'category_unavailable',
+  'candidate_procedure',
+  'source_reference_limit',
 ] as const;
 export type ContextOmissionReason = (typeof CONTEXT_OMISSION_REASONS)[number];
 
@@ -78,7 +83,7 @@ export const contextItemSchema = z.object({
   /** Present for `exact`/`excerpt`. Absent for `reference`. */
   text: z.string().nullable(),
   reason: z.enum(CONTEXT_ITEM_REASONS),
-  sourceRefs: z.array(contextSourceRefSchema).max(8),
+  sourceRefs: z.array(contextSourceRefSchema).max(CONTEXT_MAX_SOURCE_REFS),
   byteLength: z.number().int().nonnegative(),
 });
 export type ContextItem = z.infer<typeof contextItemSchema>;
@@ -91,7 +96,11 @@ export const contextOmissionSchema = z.object({
 });
 export type ContextOmission = z.infer<typeof contextOmissionSchema>;
 
-export const CONTEXT_MANIFEST_SCHEMA_VERSION = 1;
+/** Persisted items deliberately have no plaintext-bearing field. */
+export const contextManifestItemSchema = contextItemSchema.omit({ text: true }).strict();
+export type ContextManifestItem = z.infer<typeof contextManifestItemSchema>;
+
+export const CONTEXT_MANIFEST_SCHEMA_VERSION = 2;
 export const CONTEXT_RENDERER_VERSION = 1;
 
 export const contextManifestSchema = z.object({
@@ -99,19 +108,20 @@ export const contextManifestSchema = z.object({
   rendererVersion: z.number().int().nonnegative(),
   projectId: uuidSchema,
   taskId: uuidSchema.nullable(),
-  focus: z.string().nullable(),
+  focusDigest: sha256HexSchema.nullable(),
+  taskRevision: taskViewSchema.shape.revision.nullable(),
   graphEpoch: uuidSchema,
   graphHead: decimalStringSchema,
   privacyRevision: decimalStringSchema,
   bodyBytes: z.number().int().nonnegative(),
   maxBodyBytes: z.number().int().nonnegative(),
-  items: z.array(contextItemSchema),
-  omissions: z.array(contextOmissionSchema),
+  items: z.array(contextManifestItemSchema).max(CONTEXT_MAX_MANDATORY_ITEMS + CONTEXT_MAX_OPTIONAL_MEMORIES),
+  omissions: z.array(contextOmissionSchema.omit({ detail: true }).strict()).max(32),
   /** Digest over the exact rendered body. The body itself is not retained. */
   renderDigest: sha256HexSchema,
   selectedSourceIds: z.array(uuidSchema).max(CONTEXT_MAX_SOURCE_REFS),
   selectionPolicyVersion: z.number().int().nonnegative(),
-});
+}).strict();
 export type ContextManifest = z.infer<typeof contextManifestSchema>;
 
 export const CONTEXT_OCCURRENCE_STATES = [
@@ -141,11 +151,24 @@ export const contextOccurrenceSchema = z.object({
 });
 export type ContextOccurrence = z.infer<typeof contextOccurrenceSchema>;
 
-export const prepareContextInputSchema = z.object({
+/** Caller assertions are selection hints, never authenticated runtime evidence.
+ * task_family is derived exclusively from the stored task, so it is absent here.
+ */
+export const contextConditionsSchema = z.strictObject({
+  selectionHints: z.array(z.strictObject({
+    key: z.enum(APPLICABILITY_KEYS.filter((key) => key !== 'task_family')),
+    values: z.array(byteBoundedText(256)).min(1).max(16),
+  })).max(6).default([]),
+});
+export type ContextConditions = z.infer<typeof contextConditionsSchema>;
+
+export const prepareContextInputSchema = z.strictObject({
   projectId: uuidSchema,
+  idempotencyKey: byteBoundedText(200),
   taskId: uuidSchema.nullable().optional(),
   nativeSessionId: uuidSchema.nullable().optional(),
   focus: byteBoundedText(1024).optional(),
+  conditions: contextConditionsSchema.optional(),
   maxBodyBytes: z.number().int().min(1024).max(CONTEXT_MAX_BODY_BYTES).default(CONTEXT_DEFAULT_BODY_BYTES),
 });
 export type PrepareContextInput = z.infer<typeof prepareContextInputSchema>;
@@ -154,19 +177,33 @@ export const contextPacketSchema = z.object({
   manifest: contextManifestSchema,
   manifestSourceId: uuidSchema,
   occurrenceId: uuidSchema,
+  items: z.array(contextItemSchema).max(CONTEXT_MAX_MANDATORY_ITEMS + CONTEXT_MAX_OPTIONAL_MEMORIES),
+  /** Admission is asynchronous; inspect this operation for its actual receipt. */
+  manifestOperationId: uuidSchema,
   /** The rendered bounded body actually released to the caller. */
   body: z.string(),
   releasedAtMs: z.number().int().nonnegative(),
 });
 export type ContextPacket = z.infer<typeof contextPacketSchema>;
 
-export const recordOccurrenceInputSchema = z.object({
+export const recordOccurrenceInputSchema = z.strictObject({
   projectId: uuidSchema,
   occurrenceId: uuidSchema,
+  idempotencyKey: byteBoundedText(200),
+  expectedState: z.literal('prepared'),
+  // native_observed is explicitly refused by the service, never promoted.
   state: z.enum(CONTEXT_OCCURRENCE_STATES),
-  boundary: byteBoundedText(128).nullable().optional(),
-  nativeTurnRef: z.string().max(256).nullable().optional(),
-  refusalReason: byteBoundedText(256).nullable().optional(),
+  boundary: z.enum(['operator_report', 'adapter_report']).nullable().optional(),
+  // Free native references and refusal text are not persisted by this checkpoint.
+  nativeTurnRef: z.null().optional(),
+  refusalReason: z.enum(['delivery_failed', 'cancelled', 'unknown']).nullable().optional(),
+}).superRefine((value, ctx) => {
+  if (value.state === 'emitted' && (value.boundary == null || value.refusalReason != null)) {
+    ctx.addIssue({ code: 'custom', path: ['boundary'], message: 'Emission needs a reporting boundary and no refusal reason.' });
+  }
+  if (value.state === 'refused' && value.refusalReason == null) {
+    ctx.addIssue({ code: 'custom', path: ['refusalReason'], message: 'A refusal needs a reason code.' });
+  }
 });
 export type RecordOccurrenceInput = z.infer<typeof recordOccurrenceInputSchema>;
 
@@ -181,6 +218,8 @@ export const contextResultSchema = z.discriminatedUnion('kind', [
       'incomplete_provenance',
       'store_unavailable',
       'deleting',
+      'stale_snapshot',
+      'stale_preparation',
     ]),
     detail: byteBoundedText(256).nullable(),
   }),

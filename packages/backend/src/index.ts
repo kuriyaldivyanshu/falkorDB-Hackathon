@@ -26,6 +26,7 @@ import {
 } from './service/operations.js';
 import { createProjectService, type ProjectService } from './service/projects.js';
 import { createSourceService, type SourceService } from './service/sources.js';
+import { createContextService, type ContextService } from './service/context.js';
 import { createTaskService, type TaskService } from './service/tasks.js';
 import { createSourceFileStore, type SourceFileStore } from './storage/files.js';
 import { createGraphStore, startGraphStore, type GraphStore } from './storage/graph.js';
@@ -160,6 +161,7 @@ export interface MemoryService {
   readonly operations: OperationService;
   readonly memories: SemanticMemoryService;
   readonly tasks: TaskService;
+  readonly context: ContextService;
 }
 
 export function createMemoryService(deps: MemoryServiceDeps): MemoryService {
@@ -195,6 +197,7 @@ export function createMemoryService(deps: MemoryServiceDeps): MemoryService {
   let operations: OperationService | null = null;
   let memories: SemanticMemoryService | null = null;
   let tasks: TaskService | null = null;
+  let context: ContextService | null = null;
   let worker: OperationsWorker | null = null;
 
   const sqlReady = (): boolean => reachable && schema?.state === 'applied' && database !== null;
@@ -324,6 +327,7 @@ export function createMemoryService(deps: MemoryServiceDeps): MemoryService {
     if (graphStore !== null && sqlReady()) {
       memories = createSemanticMemoryService({ db: database, files, graphStore, clock, logger });
       tasks = createTaskService({ db: database, graphStore, clock, logger });
+      context = createContextService({ db: database, graphStore, sources, tasks, clock });
       worker = createOperationsWorker({
         db: database,
         graphStore,
@@ -369,6 +373,7 @@ export function createMemoryService(deps: MemoryServiceDeps): MemoryService {
     operations = null;
     memories = null;
     tasks = null;
+    context = null;
     const settled = await Promise.allSettled(closers);
     if (settled.some((result) => result.status === 'rejected')) {
       logger.log({ level: 'warn', message: 'One or more storage connections did not close cleanly.' });
@@ -471,14 +476,14 @@ export function createMemoryService(deps: MemoryServiceDeps): MemoryService {
       guarantees: {
         // Semantic memory, tasks, episodes and procedural candidates use the
         // leased worker. Durability requires SQL, the graph and the worker to
-        // be ready. Procedure validation, bounded context, agent claims,
+        // be ready. Procedure validation, agent claims,
         // handoffs and native capture remain unavailable in capabilities.
         durableMemory: durableReady() && graphServing && (workerStatus?.running ?? false),
         graphAdmission: durableReady() && graphServing && (workerStatus?.running ?? false),
         sourceHistory: durableReady() && filesReady,
         replayable: false,
         note: durableReady()
-          ? 'Source history is durable in SQL plus immutable files. Semantic memory proposals, explicit human acceptance, corrections and task requirements are admitted in SQL and committed to the project graph through the leased worker with graph receipts; accepted-memory reads resolve the current version from that graph. Episode admission and procedural candidates with human review are admitted and committed the same way; a human-accepted procedure stays a candidate. Validated procedural reuse, bounded context preparation and occurrence recording, agent claims, handoffs and native capture are not implemented and are stated unavailable in capabilities.'
+          ? 'Source history is durable in SQL plus immutable files. Semantic memory proposals, explicit human acceptance, corrections and task requirements are admitted in SQL and committed to the project graph through the leased worker with graph receipts; accepted-memory reads resolve the current version from that graph. Episode admission and procedural candidates with human review are admitted and committed the same way; a human-accepted procedure stays a candidate. Bounded context preparation records metadata-only manifests and prepared occurrences; emission is reported, never native observation. Validated reuse, claims, handoffs and native capture remain unavailable.'
           : 'No durable store is ready: health and capabilities are served, and every durable operation refuses.',
       },
     };
@@ -521,6 +526,10 @@ export function createMemoryService(deps: MemoryServiceDeps): MemoryService {
 
     get memories(): SemanticMemoryService {
       return requireDurable(memories);
+    },
+
+    get context(): ContextService {
+      return requireDurable(context);
     },
 
     get tasks(): TaskService {
