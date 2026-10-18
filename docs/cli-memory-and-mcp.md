@@ -186,6 +186,52 @@ threadline operation:inspect --project "$PROJECT" "$OPERATION" --json
 outcome yet. `committed` and `rejected` are settled, and the committed one
 carries the graph receipt with its event sequence as a decimal string.
 
+## Record an episode
+
+```sh
+threadline memory:episode:record --input episode.json --wait --json
+threadline memory:episode:record --input - --wait --json < episode.json
+```
+
+The file/stdin document is bounded to 256 KiB during reading and validated with
+`recordEpisodeInputSchema`. It supplies `projectId`, optional `taskId`, `action`,
+`outcome`, `observation`, optional `uncertainty`, `sourceIds`, `applicability`,
+`observedUnder`, optional requested `evidencePrecision` and an explicit
+`idempotencyKey`. No key is invented, and retries keep the same document/key.
+If `--project` accompanies any structured command, it must equal the document's
+`projectId`; a mismatch refuses before sending.
+
+```json
+{"projectId":"<returned-project-uuid>","taskId":"<returned-task-uuid>",
+ "action":"Compare the public seed output with the mixed-offset CSV specification",
+ "outcome":"failed","observation":"Exit 0, but stdout differed from required UTC-normalized CSV.",
+ "uncertainty":"Only one public case was checked; the wider task is not complete.",
+ "sourceIds":["<returned-actual-outcome-source-uuid>"],
+ "applicability":{"predicates":[]},
+ "observedUnder":{"taskFamily":"inventory-export","contractVersion":"csv-v1","runtime":"node",
+                  "tool":"human-command","paths":["src/exporter.mjs"],"parameters":{"maxAgeSeconds":"600"}},
+ "evidencePrecision":"observed","idempotencyKey":"human-public-check-1"}
+```
+
+This is an input template, not captured execution evidence. Replace identifiers
+with real returned values and capture an actual outcome Source first. The
+[complete executable demo](memory-demo.md) does both.
+
+The requested precision is forwarded unchanged; the client implements no
+parallel evidence policy and never retries with weaker precision. For every
+cited source the server checks scope/visibility/availability, qualifying outcome
+kind, completeness, recording by the acting human principal and committed
+source admission. Source kind or a text assertion alone cannot grant observation.
+These checks do not independently establish the truth of command output.
+
+An omitted or `authored` precision stays authored and proposed. The episode
+command does not accept it. `observed` requests either qualify or refuse
+faithfully. `unknown` outcomes need uncertainty; failed, denied, interrupted and
+unknown remain distinct. A successful action never establishes wider task
+completion. Inspect `memory:inspect --json` to read **server-returned** precision
+and acceptance; operation commitment alone is neither acceptance nor validation.
+See [memory-kind contracts](memory-kinds.md) for the server boundary.
+
 ## Exit status
 
 | Status | Meaning |
@@ -312,27 +358,10 @@ paths, and the exact command to run the server by hand.
 - A verified second-credential path over HTTP is still a follow-up for the
   backend owner; this checkpoint does not close it.
 
-### Gaps this client surface still has, now that episodes and procedures exist
+### Procedure and recall limits
 
-These are gaps in **this** client, not in the service. The backend routes exist
-and are verified; the commands do not, and inventing them here would exceed this
-assignment's scope. They are the next client batch's work.
-
-- **Episode recording has no CLI command.** `POST /v2/memories/episodes`
-  (`memory.episode.record`) is supported by the service, but there is no
-  `threadline memory:episode:record`. Note that `memory:propose` correctly
-  *refuses* episodic content: an episode arrives only through its own operation,
-  because the service resolves its evidence precision rather than accepting one
-  from the caller.
-- **Procedural admission works; procedural validation does not exist yet.**
-  A procedure is proposed and human-accepted through `memory:propose` /
-  `memory:accept` exactly like a semantic requirement, and stays
-  `procedureState: "candidate"` afterwards. `memory.procedure.validate` is
-  reported unavailable by the service, so there is nothing for a CLI command to
-  call yet. Acceptance is deliberately not validation.
-- **The MCP tool surface does not expose episodes or procedures as separate
-  tools.** They are readable through `threadline_memory_query` with
-  `kind: "episodic"` or `kind: "procedural"`, and through
-  `threadline_memory_inspect`, which returns the stored content including the
-  server-resolved `evidencePrecision`, `procedureState` and `supportedBy`. A
-  dedicated episode tool is unnecessary: the existing reads already cover it.
+Procedures use `memory:propose` / `memory:accept` and stay
+`procedureState: "candidate"` after human acceptance. `memory.procedure.validate`
+is unavailable; there is no CLI validation command. Episodes and procedures
+are readable through the existing query and inspect MCP tools, so no dedicated
+mutation or episode tool is added.
