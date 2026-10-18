@@ -43,6 +43,7 @@ export type CliCommand =
   | 'task:inspect'
   | 'task:require'
   | 'task:requirements'
+  | 'memory:episode:record'
   | 'memory:propose'
   | 'memory:accept'
   | 'memory:correct'
@@ -171,6 +172,7 @@ export const SHELL_COMMANDS: readonly CliCommand[] = [
   'task:inspect',
   'task:require',
   'task:requirements',
+  'memory:episode:record',
   'memory:propose',
   'memory:accept',
   'memory:correct',
@@ -232,7 +234,11 @@ Tasks:
                        Resolve every required memory to its exact current version,
                        or report missing_current / duplicate_current explicitly.
 
-Semantic memory:
+Memory:
+  memory:episode:record --input <file|-> [--wait]
+                       Record one action and its outcome with sourced evidence.
+                       The service decides evidence precision; an authored report
+                       remains a proposal until explicitly accepted by a human.
   memory:propose --input <file|-> [--wait]
                        Propose a sourced candidate version. The JSON document is the
                        shared proposeMemoryInput contract and must cite at least one
@@ -436,6 +442,7 @@ export function parseCliArgs(argv: readonly string[]): CliInvocation {
       requireOption('--idempotency-key', values['idempotency-key']);
       break;
 
+    case 'memory:episode:record':
     case 'memory:propose':
     case 'memory:correct':
       requireOption('--input', values.input);
@@ -503,7 +510,7 @@ function requireSingleTarget(command: CliCommand, base: CliInvocation): void {
   if (base.waitTimeoutMs !== null && !base.wait) {
     throw new UsageError('--wait-timeout needs --wait.');
   }
-  if (base.input !== null && command !== 'memory:propose' && command !== 'memory:correct') {
+  if (base.input !== null && command !== 'memory:episode:record' && command !== 'memory:propose' && command !== 'memory:correct') {
     throw new UsageError(`--input is only used by the content-bearing commands; "${command}" takes flags.`);
   }
   if (base.expectCurrentVersionId !== null && command !== 'memory:accept') {
@@ -520,6 +527,7 @@ function requireSingleTarget(command: CliCommand, base: CliInvocation): void {
 const MUTATING_COMMANDS: readonly CliCommand[] = [
   'task:create',
   'task:require',
+  'memory:episode:record',
   'memory:propose',
   'memory:accept',
   'memory:correct',

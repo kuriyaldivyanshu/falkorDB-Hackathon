@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { createHash } from 'node:crypto';
-import { readFileSync, readSync, statSync } from 'node:fs';
+import { closeSync, openSync, readFileSync, readSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -22,6 +22,7 @@ import {
   type CorrectMemoryInput,
   type MemoryKind,
   type ProposeMemoryInput,
+  type RecordEpisodeInput,
 } from '@threadline/shared';
 import {
   createJsonLogger,
@@ -270,15 +271,22 @@ async function runMemoryCommand(client: ApiClient, invocation: CliInvocation): P
       });
       return reportOperation(surface, invocation, { ...result, versionId: null }, 'task.require', projectId);
     }
+    case 'memory:episode:record': {
+      const document = readInputDocument<RecordEpisodeInput>(invocation.input);
+      const documentProject = requireDocumentProject(document, invocation.projectId);
+      const result = await surface.recordEpisode(document);
+      return reportOperation(surface, invocation, { ...result }, 'memory.episode.record', documentProject);
+    }
     case 'memory:propose': {
       const document = readInputDocument<ProposeMemoryInput>(invocation.input);
+      const documentProject = requireDocumentProject(document, invocation.projectId);
       const result = await surface.proposeMemory(document);
       return reportOperation(
         surface,
         invocation,
         { ...result },
         'memory.propose',
-        requireDocumentProject(document),
+        documentProject,
       );
     }
     case 'memory:accept': {
@@ -297,13 +305,14 @@ async function runMemoryCommand(client: ApiClient, invocation: CliInvocation): P
     }
     case 'memory:correct': {
       const document = readInputDocument<CorrectMemoryInput>(invocation.input);
+      const documentProject = requireDocumentProject(document, invocation.projectId);
       const result = await surface.correctMemory(document);
       return reportOperation(
         surface,
         invocation,
         { ...result },
         'memory:correct',
-        requireDocumentProject(document),
+        documentProject,
       );
     }
     case 'memory:inspect': {
@@ -398,10 +407,15 @@ interface OperationReport {
 }
 
 /** The project a content-bearing input document named, for the `--wait` follow-up. */
-function requireDocumentProject(document: Record<string, unknown>): string {
-  const projectId = document['projectId'];
+function requireDocumentProject(document: unknown, flagProjectId: string | null): string {
+  const projectId = typeof document === 'object' && document !== null
+    ? (document as Record<string, unknown>)['projectId']
+    : undefined;
   if (typeof projectId !== 'string' || projectId.length === 0) {
     throw new UsageError('The input document must name the project it targets.');
+  }
+  if (flagProjectId !== null && flagProjectId !== projectId) {
+    throw new UsageError('--project must match projectId in the input document.');
   }
   return projectId;
 }
@@ -434,38 +448,33 @@ function readInputDocument<T>(input: string | null): T {
   if (input === null) {
     throw new UsageError('--input is required.');
   }
+  const path = input === '-' ? null : resolve(input);
+  let fd = 0;
   let bytes: Buffer;
-  if (input === '-') {
-    try {
-      const buffer = Buffer.alloc(MAX_INPUT_DOCUMENT_BYTES + 1);
-      let total = 0;
-      while (total < buffer.length) {
-        const count = readSync(0, buffer, total, Math.min(64 * 1024, buffer.length - total), null);
-        if (count === 0) {
-          break;
-        }
-        total += count;
+  try {
+    if (path !== null) {
+      // Early size check is useful, but the read itself is bounded as well:
+      // the file may grow, or its size may not describe the stream it yields.
+      if (statSync(path).size > MAX_INPUT_DOCUMENT_BYTES) {
+        throw new UsageError(`--input must be at most ${String(MAX_INPUT_DOCUMENT_BYTES)} bytes.`);
       }
-      bytes = buffer.subarray(0, total);
-    } catch {
-      throw new UsageError('Standard input could not be read for --input.');
+      fd = openSync(path, 'r');
     }
-  } else {
-    const path = resolve(input);
-    let size: number;
-    try {
-      size = statSync(path).size;
-    } catch {
-      throw new UsageError(`--input file could not be read: ${path}`);
+    const buffer = Buffer.alloc(MAX_INPUT_DOCUMENT_BYTES + 1);
+    let total = 0;
+    while (total < buffer.length) {
+      const count = readSync(fd, buffer, total, Math.min(64 * 1024, buffer.length - total), null);
+      if (count === 0) break;
+      total += count;
     }
-    if (size > MAX_INPUT_DOCUMENT_BYTES) {
-      throw new UsageError(`--input must be at most ${String(MAX_INPUT_DOCUMENT_BYTES)} bytes.`);
-    }
-    try {
-      bytes = readFileSync(path);
-    } catch {
-      throw new UsageError(`--input file could not be read: ${path}`);
-    }
+    bytes = buffer.subarray(0, total);
+  } catch (error) {
+    if (error instanceof UsageError) throw error;
+    throw new UsageError(path === null
+      ? 'Standard input could not be read for --input.'
+      : `--input file could not be read: ${path}`);
+  } finally {
+    if (path !== null && fd !== 0) closeSync(fd);
   }
   if (bytes.byteLength > MAX_INPUT_DOCUMENT_BYTES) {
     throw new UsageError(`--input must be at most ${String(MAX_INPUT_DOCUMENT_BYTES)} bytes.`);
