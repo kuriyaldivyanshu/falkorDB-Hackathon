@@ -225,6 +225,7 @@ export function createProjectService(deps: ProjectServiceDeps): ProjectService {
     },
 
     async list(call: AuthenticatedCall): Promise<ProjectView[]> {
+      requirePermission(call, 'read');
       const rows = await deps.db.withTenantTransaction(call.scope.tenantId, (tx) =>
         tx.rows<ProjectRow>(
           `SELECT p.id, p.tenant_id, p.label, p.graph_key, p.graph_epoch, p.policy_state,

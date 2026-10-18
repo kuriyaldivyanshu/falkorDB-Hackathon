@@ -697,6 +697,77 @@ const MIGRATION_6_STATEMENTS: readonly string[] = [
   COMMON_TENANT_TABLE_FOOTER('reader_credentials'),
 ];
 
+// No released API before v7 could approve an enrollment or register a native
+// session. Native rows therefore have no recoverable owner issuance authority.
+// Refuse them atomically; populated human/reader/source history needs no backfill.
+const MIGRATION_7_STATEMENTS: readonly string[] = [
+  `DO $$ BEGIN
+     IF EXISTS (SELECT 1 FROM client_tokens WHERE kind='producer' OR enrollment_id IS NOT NULL OR native_session_id IS NOT NULL)
+        OR EXISTS (SELECT 1 FROM native_sessions) THEN
+       RAISE EXCEPTION USING ERRCODE='P7501', MESSAGE='Unissued legacy native access rows require operator review';
+     END IF;
+   END $$`,
+  `CREATE TABLE native_enrollments (
+     tenant_id uuid NOT NULL,
+     project_id uuid NOT NULL,
+     id uuid NOT NULL,
+     principal_id uuid NOT NULL,
+     binding_id uuid NOT NULL,
+     credential_id uuid NOT NULL,
+     binding_generation integer NOT NULL DEFAULT 1 CHECK (binding_generation=1),
+     harness text NOT NULL DEFAULT 'codex' CHECK (harness='codex'),
+     label text NOT NULL CHECK (octet_length(label) BETWEEN 1 AND 256),
+     issued_by uuid NOT NULL,
+     issuance_key_digest text NOT NULL CHECK (issuance_key_digest ~ '^[0-9a-f]{64}$'),
+     request_digest text NOT NULL CHECK (request_digest ~ '^[0-9a-f]{64}$'),
+     state text NOT NULL DEFAULT 'active' CHECK (state IN ('active','revoked')),
+     native_session_id uuid,
+     created_at timestamptz NOT NULL,
+     expires_at timestamptz NOT NULL CHECK (expires_at>created_at AND expires_at<=created_at+interval '7 days'),
+     revoked_at timestamptz,
+     PRIMARY KEY (tenant_id,project_id,id),
+     UNIQUE (tenant_id,project_id,issued_by,issuance_key_digest),
+     UNIQUE (tenant_id,project_id,credential_id),
+     UNIQUE (tenant_id,project_id,principal_id),
+     UNIQUE (tenant_id,project_id,id,principal_id,binding_generation),
+     UNIQUE (tenant_id,project_id,id,binding_id,principal_id,binding_generation),
+     CHECK (id<>credential_id),
+     FOREIGN KEY (tenant_id,project_id,binding_id) REFERENCES workspace_bindings(tenant_id,project_id,id),
+     FOREIGN KEY (tenant_id,project_id,principal_id) REFERENCES project_grants(tenant_id,project_id,principal_id),
+     FOREIGN KEY (tenant_id,issued_by) REFERENCES principals(tenant_id,id),
+     FOREIGN KEY (tenant_id,project_id,credential_id,principal_id)
+       REFERENCES client_tokens(tenant_id,project_id,id,principal_id) DEFERRABLE INITIALLY DEFERRED
+   )`,
+  COMMON_TENANT_TABLE_FOOTER('native_enrollments'),
+  `ALTER TABLE native_sessions
+     DROP CONSTRAINT native_sessions_tenant_id_project_id_enrollment_id_fkey,
+     ADD COLUMN registration_key_digest text NOT NULL CHECK (registration_key_digest ~ '^[0-9a-f]{64}$'),
+     ADD COLUMN registration_digest text NOT NULL CHECK (registration_digest ~ '^[0-9a-f]{64}$'),
+     ADD CONSTRAINT native_session_enrollment FOREIGN KEY
+       (tenant_id,project_id,enrollment_id,binding_id,principal_id,binding_generation)
+       REFERENCES native_enrollments(tenant_id,project_id,id,binding_id,principal_id,binding_generation),
+     ADD CONSTRAINT native_session_provisional CHECK
+       (identity_precision='provisional' AND capture_coverage='unknown' AND binding_generation=1),
+     ADD CONSTRAINT native_session_one_pin UNIQUE (tenant_id,project_id,enrollment_id,binding_generation),
+     ADD CONSTRAINT native_session_pin_identity UNIQUE (tenant_id,project_id,enrollment_id,id,principal_id,binding_generation)`,
+  `ALTER TABLE native_enrollments ADD CONSTRAINT native_enrollment_pin FOREIGN KEY
+     (tenant_id,project_id,id,native_session_id,principal_id,binding_generation)
+     REFERENCES native_sessions(tenant_id,project_id,enrollment_id,id,principal_id,binding_generation)
+     DEFERRABLE INITIALLY DEFERRED`,
+  `ALTER TABLE client_tokens
+     ADD CONSTRAINT producer_enrollment_binding CHECK (kind<>'producer' OR
+       (enrollment_id IS NOT NULL AND binding_generation=1 AND scopes='{}'::text[]
+        AND mcp_instance_id IS NULL AND idle_expires_at=expires_at)),
+     ADD CONSTRAINT token_native_enrollment FOREIGN KEY
+       (tenant_id,project_id,enrollment_id,principal_id,binding_generation)
+       REFERENCES native_enrollments(tenant_id,project_id,id,principal_id,binding_generation)
+       DEFERRABLE INITIALLY DEFERRED,
+     ADD CONSTRAINT token_native_session FOREIGN KEY
+       (tenant_id,project_id,enrollment_id,native_session_id,principal_id,binding_generation)
+       REFERENCES native_sessions(tenant_id,project_id,enrollment_id,id,principal_id,binding_generation)
+       DEFERRABLE INITIALLY DEFERRED`,
+];
+
 export const MEMORY_SQL_MIGRATIONS: readonly SqlMigration[] = [
   {
     version: 1,
@@ -720,6 +791,7 @@ export const MEMORY_SQL_MIGRATIONS: readonly SqlMigration[] = [
   },
   { version: 5, name: 'context_retry_metadata', statements: MIGRATION_5_STATEMENTS },
   { version: 6, name: 'project_reader_credentials', statements: MIGRATION_6_STATEMENTS },
+  { version: 7, name: 'native_enrollment_access', statements: MIGRATION_7_STATEMENTS },
 ];
 
 export const LATEST_SQL_SCHEMA_VERSION = MEMORY_SQL_MIGRATIONS.reduce(

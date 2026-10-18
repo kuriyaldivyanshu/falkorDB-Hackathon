@@ -21,6 +21,10 @@ export const ROUTES = {
   capabilities: `${API_PREFIX}/capabilities`,
 
   projects: `${API_PREFIX}/projects`,
+  enrollments: (projectId: string): string => `${API_PREFIX}/projects/${projectId}/enrollments`,
+  enrollment: (projectId: string, enrollmentId: string): string => `${API_PREFIX}/projects/${projectId}/enrollments/${enrollmentId}`,
+  enrollmentRevocation: (projectId: string, enrollmentId: string): string =>
+    `${API_PREFIX}/projects/${projectId}/enrollments/${enrollmentId}/revocation`,
   readerCredentials: (projectId: string): string => `${API_PREFIX}/projects/${projectId}/reader-credentials`,
   readerCredentialRevocation: (projectId: string, credentialId: string): string =>
     `${API_PREFIX}/projects/${projectId}/reader-credentials/${credentialId}/revocation`,

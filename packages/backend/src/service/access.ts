@@ -45,7 +45,7 @@ function metadata(row: CredentialRow): ReaderCredentialMetadata {
  * This does not take the context project lock: revocation can commit while a
  * context packet is being selected and its final release query will see it.
  */
-async function authorize(tx: TxClient, call: AuthenticatedCall, projectId: string): Promise<void> {
+export async function authorizeProjectOwner(tx: TxClient, call: AuthenticatedCall, projectId: string): Promise<void> {
   requireProjectScope(call, projectId);
   requirePermission(call, 'access.admin');
   const rows = await tx.rows(`SELECT t.id FROM threadline_memory.client_tokens t
@@ -79,7 +79,7 @@ export function createAccessService(deps: { db: SqlDatabase }): AccessService {
       return deps.db.withTenantTransaction(call.scope.tenantId, async (tx) => {
         await tx.rows('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',
           [`reader-issuance:${call.scope.tenantId}:${projectId}:${call.scope.principalId}:${keyDigest}`]);
-        await authorize(tx, call, projectId);
+        await authorizeProjectOwner(tx, call, projectId);
         const existing = await tx.rows<CredentialRow>(`${SELECT_METADATA}
           WHERE r.tenant_id=$1 AND r.project_id=$2 AND r.issued_by=$3 AND r.issuance_key_digest=$4`,
         [call.scope.tenantId, projectId, call.scope.principalId, keyDigest]);
@@ -111,7 +111,7 @@ export function createAccessService(deps: { db: SqlDatabase }): AccessService {
       parseContract(uuidSchema, projectId, 'project identity');
       if (!Number.isInteger(limit) || limit < 1 || limit > READER_LIST_MAX) throw new ThreadlineError('invalid_request', 'Reader metadata limit must be 1 through 100.');
       return deps.db.withTenantTransaction(call.scope.tenantId, async (tx) => {
-        await authorize(tx, call, projectId);
+        await authorizeProjectOwner(tx, call, projectId);
         const rows = await tx.rows<CredentialRow>(`${SELECT_METADATA}
           WHERE r.tenant_id=$1 AND r.project_id=$2 ORDER BY t.created_at DESC,r.credential_id DESC LIMIT $3`,
         [call.scope.tenantId, projectId, limit + 1]);
@@ -122,7 +122,7 @@ export function createAccessService(deps: { db: SqlDatabase }): AccessService {
       parseContract(uuidSchema, projectId, 'project identity');
       parseContract(uuidSchema, credentialId, 'credential identity');
       return deps.db.withTenantTransaction(call.scope.tenantId, async (tx) => {
-        await authorize(tx, call, projectId);
+        await authorizeProjectOwner(tx, call, projectId);
         const row = await read(tx, call.scope.tenantId, projectId, credentialId);
         await tx.rows(`UPDATE threadline_memory.client_tokens SET state='revoked',revoked_at=clock_timestamp(),revision=revision+1
           WHERE tenant_id=$1 AND project_id=$2 AND id=$3 AND kind='reader' AND state='active'`,

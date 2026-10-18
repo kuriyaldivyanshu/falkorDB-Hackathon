@@ -40,6 +40,7 @@ import {
 import type { SqlDatabase } from '../storage/pg.js';
 import { withProjectWriteLock } from '../storage/pg.js';
 import type { AuthenticatedCall } from './auth.js';
+import { requirePermission } from './permissions.js';
 import {
   MEMORY_DOCUMENT_MAX_BYTES,
   classifyDedupe,
@@ -615,6 +616,7 @@ export function createMemoryService(deps: MemoryServiceDeps): MemoryService {
     },
 
     async query(call, input): Promise<MemoryQueryResult> {
+      requirePermission(call, 'read');
       const parsed = parseContract(memoryQuerySchema, input, 'memory query');
       requireProjectScope(call, parsed.projectId);
       const graph = requireGraph(call);
@@ -646,6 +648,7 @@ export function createMemoryService(deps: MemoryServiceDeps): MemoryService {
     },
 
     async view(call, projectId, memoryId): Promise<MemoryView> {
+      requirePermission(call, 'read');
       requireProjectScope(call, projectId);
       const graph = requireGraph(call);
       return withGraphRead(async () => {

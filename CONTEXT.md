@@ -6,12 +6,14 @@ Threadline preserves sourced project memory and coordinates its use across indep
 
 **Project**: A deliberately associated body of work with its own memory and access grants. A repository path alone does not establish the association.
 
-**Native session**: An observed conversation in an existing coding agent. Its tools, model loop and execution remain under that agent's control.
+**Native session**: A registered association with a reported conversation in an existing coding agent; provisional registration proves no observation. Its tools, model loop and execution remain under that agent's control.
 _Avoid_: Threadline run, owned worker.
 
-**Enrollment**: An explicitly approved connection between a native adapter, a principal and a project. It defines the capture and memory access scope.
+**Enrollment**: A stable owner-approved association between one project workspace binding and a dedicated producer principal. Its fixed-lifetime credential permits one provisional session registration, then project reads and its own context audits; capture remains unavailable.
 
-**Binding generation**: The current association of an enrolled producer with a specific native session. Rebinding makes an earlier producer instance stale.
+**Binding generation**: The generation guarded when an enrollment pins its single session. It is fixed at 1; replacing an instance requires revoking its enrollment and issuing a fresh one.
+
+**Producer credential**: A one-project bearer bound to one enrollment and dedicated service principal. It is delivered once and cannot prove which native process possesses it.
 
 **Task**: A work item used to organize current requirements, relevant memory and coordination. Its identity can survive a change of native session.
 

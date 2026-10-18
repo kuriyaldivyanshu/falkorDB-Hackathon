@@ -26,6 +26,7 @@ import {
 import type { SqlDatabase } from '../storage/pg.js';
 import { withProjectWriteLock } from '../storage/pg.js';
 import type { AuthenticatedCall } from './auth.js';
+import { requirePermission } from './permissions.js';
 import {
   classifyDedupe,
   findIntentByKey,
@@ -150,6 +151,7 @@ export function createTaskService(deps: TaskServiceDeps): TaskService {
     },
 
     async view(call, projectId, taskId): Promise<TaskView> {
+      requirePermission(call, 'read');
       requireProjectScope(call, projectId);
       const graph = requireGraph(call);
       return withGraphRead(async () => {
@@ -198,6 +200,7 @@ export function createTaskService(deps: TaskServiceDeps): TaskService {
     },
 
     async requirements(call, projectId, taskId): Promise<TaskRequirementsView> {
+      requirePermission(call, 'read');
       requireProjectScope(call, projectId);
       const graph = requireGraph(call);
       return withGraphRead(async () => {

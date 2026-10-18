@@ -47,6 +47,7 @@ import {
 import type { SqlDatabase } from '../storage/pg.js';
 import { MEMORY_GRAPH_SCHEMA_VERSION } from '../version.js';
 import type { AuthenticatedCall } from './auth.js';
+import { requirePermission } from './permissions.js';
 import {
   MEMORY_DOCUMENT_MAX_BYTES,
   episodeDocumentRequestFacts,
@@ -2326,6 +2327,8 @@ export interface OperationService {
 export function createOperationService(deps: { readonly db: SqlDatabase }): OperationService {
   return {
     async inspect(call, projectId, operationId): Promise<OperationView> {
+      requirePermission(call, 'read');
+      if (call.scope.projectId !== projectId) throw new ThreadlineError('scope_denied', 'The credential is not scoped to that project.');
       const rows = await deps.db.withTenantTransaction(call.scope.tenantId, (tx) =>
         tx.rows<OperationInspectRow>(
           `SELECT id, project_id, kind, state, request_digest, attempts,
