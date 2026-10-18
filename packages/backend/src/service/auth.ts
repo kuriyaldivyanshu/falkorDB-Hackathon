@@ -134,12 +134,13 @@ export function createAuthService(deps: AuthServiceDeps): AuthService {
       const requested = target.projectId ?? null;
       const tokenProject = row.project_id;
       let projectId: string | null;
-      if (row.token_kind === 'producer') {
-        // A producer credential is bound to exactly one project; it can never be
+      if (row.token_kind === 'producer' || row.token_kind === 'reader') {
+        if (tokenProject === null) throw new ThreadlineError('scope_denied', 'This credential requires a stored project binding.');
+        // Producer and reader credentials are bound to exactly one project; neither can be
         // pointed at a different one by a request.
         projectId = tokenProject;
         if (requested !== null && requested !== tokenProject) {
-          throw new ThreadlineError('scope_denied', 'The producer credential is bound to a different project.');
+          throw new ThreadlineError('scope_denied', 'The credential is bound to a different project.');
         }
       } else {
         // A human credential may request any project it holds a grant on, but a
@@ -189,6 +190,10 @@ export function createAuthService(deps: AuthServiceDeps): AuthService {
       }
 
       if (projectId !== null) {
+        if (row.token_kind === 'reader' && (row.principal_kind !== 'service' || role !== 'reader' ||
+            row.enrollment_id !== null || row.native_session_id !== null)) {
+          throw new ThreadlineError('scope_denied', 'The reader credential has an invalid stored access binding.');
+        }
         if (role === null) {
           throw new ThreadlineError('scope_denied', 'The credential has no active grant for that project.');
         }

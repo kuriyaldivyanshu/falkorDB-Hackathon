@@ -333,3 +333,16 @@ export {
   type ApiErrorEnvelope,
   type ApiSuccessEnvelope,
 } from './protocol.js';
+
+export {
+  READER_DEFAULT_LIFETIME_SECONDS,
+  READER_MAX_LIFETIME_SECONDS,
+  READER_LIST_MAX,
+  issueReaderCredentialInputSchema,
+  readerCredentialMetadataSchema,
+  issueReaderCredentialResultSchema,
+  listReaderCredentialsResultSchema,
+  type ReaderCredentialMetadata,
+  type IssueReaderCredentialResult,
+  type ListReaderCredentialsResult,
+} from './access.js';

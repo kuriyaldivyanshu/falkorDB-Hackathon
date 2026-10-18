@@ -21,6 +21,7 @@ import { silentLogger } from '../log.js';
 import { canonicalDigest, sha256Hex } from '../storage/digest.js';
 import type { SqlDatabase, TxClient } from '../storage/pg.js';
 import type { AuthenticatedCall } from './auth.js';
+import { requirePermission } from './permissions.js';
 
 /**
  * Project association.
@@ -96,6 +97,7 @@ export function createProjectService(deps: ProjectServiceDeps): ProjectService {
 
   return {
     async add(call: AuthenticatedCall, input: unknown): Promise<ProjectJoinResult> {
+      requirePermission(call, 'project.admin');
       const parsed = parseContract(projectAddInputSchema, input, 'project association');
 
       let canonicalRoot: string;
@@ -232,8 +234,9 @@ export function createProjectService(deps: ProjectServiceDeps): ProjectService {
                ON p.tenant_id = g.tenant_id AND p.id = g.project_id
             WHERE g.tenant_id = $1 AND g.principal_id = $2
               AND g.state = 'active' AND p.state = 'active'
+              AND ($3::uuid IS NULL OR p.id=$3)
             ORDER BY p.created_at ASC, p.id ASC`,
-          [call.scope.tenantId, call.scope.principalId],
+          [call.scope.tenantId, call.scope.principalId, call.scope.projectId],
         ),
       );
       return rows.map((row) =>
@@ -254,6 +257,7 @@ export function createProjectService(deps: ProjectServiceDeps): ProjectService {
     },
 
     async listGrants(call: AuthenticatedCall, projectId: string): Promise<ProjectGrantView[]> {
+      requirePermission(call, 'project.admin');
       // Authorization first: the caller must hold an active grant themselves.
       await projectView(call, projectId);
       const rows = await deps.db.withTenantTransaction(call.scope.tenantId, (tx) =>

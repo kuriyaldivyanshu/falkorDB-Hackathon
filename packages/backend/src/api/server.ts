@@ -8,6 +8,7 @@ import {
   type ThreadlineErrorCode,
 } from '@threadline/shared';
 
+import { requirePermission } from '../service/permissions.js';
 import { unsupportedOperation } from '../capabilities.js';
 import type { ServiceConfig } from '../config.js';
 import type { MemoryService } from '../index.js';
@@ -129,7 +130,6 @@ function buildApp(deps: ApiServerDeps): FastifyInstance {
         message: 'Request failed with an internal error.',
         fields: {
           errorName: error instanceof Error ? error.name : typeof error,
-          errorMessage: (error instanceof Error ? error.message : String(error)).slice(0, 200),
         },
       });
     }
@@ -156,35 +156,69 @@ function buildApp(deps: ApiServerDeps): FastifyInstance {
   // Operational detail is authorized: the backlog is a cross-tenant count and
   // readiness describes the shared stores, which is not public information.
   app.get(ROUTES.status, async (request, reply) => {
-    await service.auth.authenticate(authorizationOf(request), { allowTenantLevel: true });
+    const call = await service.auth.authenticate(authorizationOf(request), { allowTenantLevel: true });
+    requirePermission(call, 'service.status');
     ok(reply, service.status());
   });
 
   app.get(ROUTES.capabilities, async (request, reply) => {
-    await service.auth.authenticate(authorizationOf(request), { allowTenantLevel: true });
+    const call = await service.auth.authenticate(authorizationOf(request), { allowTenantLevel: true });
+    requirePermission(call, 'capabilities');
     ok(reply, service.capabilities());
   });
 
   app.get(ROUTES.projects, async (request, reply) => {
     const call = await service.auth.authenticate(authorizationOf(request), { allowTenantLevel: true });
+    requirePermission(call, 'read');
     ok(reply, await service.projects.list(call));
   });
 
   app.post(ROUTES.projects, async (request, reply) => {
     const call = await service.auth.authenticate(authorizationOf(request), { allowTenantLevel: true });
+    requirePermission(call, 'project.admin');
     ok(reply, await service.projects.add(call, request.body));
   });
 
   app.get<{ Params: { projectId: string } }>(ROUTES.projectGrants(':projectId'), async (request, reply) => {
     const projectId = request.params.projectId;
     const call = await service.auth.authenticate(authorizationOf(request), { projectId });
+    requirePermission(call, 'project.admin');
     ok(reply, await service.projects.listGrants(call, projectId));
   });
+
+  app.post<{ Params: { projectId: string } }>(ROUTES.readerCredentials(':projectId'), async (request, reply) => {
+    reply.header('Cache-Control', 'no-store');
+    const projectId = request.params.projectId;
+    const call = await service.auth.authenticate(authorizationOf(request), { projectId });
+    requirePermission(call, 'access.admin');
+    ok(reply, await service.access.issue(call, projectId, request.body));
+  });
+  app.get<{ Params: { projectId: string } }>(ROUTES.readerCredentials(':projectId'), async (request, reply) => {
+    reply.header('Cache-Control', 'no-store');
+    const projectId = request.params.projectId;
+    const call = await service.auth.authenticate(authorizationOf(request), { projectId });
+    requirePermission(call, 'access.admin');
+    const query = readObject(request.query ?? {}, 'reader credential list');
+    if (Object.keys(query).some((key) => key !== 'limit')) throw new ThreadlineError('invalid_request', 'Only the metadata limit may be selected.');
+    ok(reply, await service.access.list(call, projectId, readIntegerField(query, 'limit', 50, 1, 100)));
+  });
+  app.post<{ Params: { projectId: string; credentialId: string } }>(
+    ROUTES.readerCredentialRevocation(':projectId', ':credentialId'), async (request, reply) => {
+      reply.header('Cache-Control', 'no-store');
+      const { projectId, credentialId } = request.params;
+      const call = await service.auth.authenticate(authorizationOf(request), { projectId });
+      requirePermission(call, 'access.admin');
+      if (request.body !== undefined && Object.keys(readObject(request.body, 'revocation')).length > 0) {
+        throw new ThreadlineError('invalid_request', 'Revocation accepts no additional fields.');
+      }
+      ok(reply, await service.access.revoke(call, projectId, credentialId));
+    });
 
   app.post(ROUTES.appendSources, async (request, reply) => {
     const body = readObject(request.body, 'source append');
     const projectId = readStringField(body, 'projectId');
     const call = await service.auth.authenticate(authorizationOf(request), { projectId });
+    requirePermission(call, 'knowledge.write');
     ok(reply, await service.sources.append(call, body));
   });
 
@@ -253,6 +287,7 @@ function buildApp(deps: ApiServerDeps): FastifyInstance {
     const body = readObject(request.body, 'memory proposal');
     const projectId = readStringField(body, 'projectId');
     const call = await service.auth.authenticate(authorizationOf(request), { projectId });
+    requirePermission(call, 'knowledge.write');
     ok(reply, await service.memories.propose(call, body));
   });
 
@@ -260,6 +295,7 @@ function buildApp(deps: ApiServerDeps): FastifyInstance {
     const body = readObject(request.body, 'episode recording');
     const projectId = readStringField(body, 'projectId');
     const call = await service.auth.authenticate(authorizationOf(request), { projectId });
+    requirePermission(call, 'knowledge.write');
     ok(reply, await service.memories.recordEpisode(call, body));
   });
 
@@ -278,6 +314,7 @@ function buildApp(deps: ApiServerDeps): FastifyInstance {
       throw new ThreadlineError('invalid_request', 'The body memoryId must match the path memoryId.');
     }
     const call = await service.auth.authenticate(authorizationOf(request), { projectId });
+    requirePermission(call, 'knowledge.write');
     ok(reply, await service.memories.accept(call, body));
   });
 
@@ -288,6 +325,7 @@ function buildApp(deps: ApiServerDeps): FastifyInstance {
       throw new ThreadlineError('invalid_request', 'The body memoryId must match the path memoryId.');
     }
     const call = await service.auth.authenticate(authorizationOf(request), { projectId });
+    requirePermission(call, 'knowledge.write');
     ok(reply, await service.memories.correct(call, body));
   });
 
@@ -295,6 +333,7 @@ function buildApp(deps: ApiServerDeps): FastifyInstance {
     const body = readObject(request.body, 'task creation');
     const projectId = readStringField(body, 'projectId');
     const call = await service.auth.authenticate(authorizationOf(request), { projectId });
+    requirePermission(call, 'knowledge.write');
     ok(reply, await service.tasks.create(call, body));
   });
 
@@ -319,17 +358,20 @@ function buildApp(deps: ApiServerDeps): FastifyInstance {
       throw new ThreadlineError('invalid_request', 'The body taskId must match the path taskId.');
     }
     const call = await service.auth.authenticate(authorizationOf(request), { projectId });
+    requirePermission(call, 'knowledge.write');
     ok(reply, await service.tasks.require(call, body));
   });
 
   app.post(ROUTES.context, async (request, reply) => {
     const body = readObject(request.body, 'context preparation');
     const call = await service.auth.authenticate(authorizationOf(request), { projectId: readStringField(body, 'projectId') });
+    requirePermission(call, 'context.audit');
     ok(reply, await service.context.prepare(call, body));
   });
   app.post(ROUTES.contextOccurrences, async (request, reply) => {
     const body = readObject(request.body, 'context occurrence');
     const call = await service.auth.authenticate(authorizationOf(request), { projectId: readStringField(body, 'projectId') });
+    requirePermission(call, 'context.audit');
     ok(reply, await service.context.recordOccurrence(call, body));
   });
 

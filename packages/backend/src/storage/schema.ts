@@ -668,6 +668,35 @@ const MIGRATION_5_STATEMENTS: readonly string[] = [
      ADD COLUMN update_digest text CHECK (update_digest ~ '^[0-9a-f]{64}$')`,
 ];
 
+// Reader issuance is SQL-owned. No recoverable bearer or caller key is retained.
+const MIGRATION_6_STATEMENTS: readonly string[] = [
+  `ALTER TABLE client_tokens DROP CONSTRAINT client_tokens_kind_check,
+     ADD CONSTRAINT client_tokens_kind_check CHECK (kind IN ('human_admin','producer','reader')),
+     ADD CONSTRAINT reader_project_binding CHECK (kind <> 'reader' OR
+       (project_id IS NOT NULL AND enrollment_id IS NULL AND native_session_id IS NULL
+        AND binding_generation = 0 AND mcp_instance_id IS NULL AND scopes = '{}'::text[]
+        AND idle_expires_at <= expires_at)),
+     ADD CONSTRAINT client_tokens_reader_identity UNIQUE (tenant_id,project_id,id,principal_id)`,
+  `CREATE TABLE reader_credentials (
+     tenant_id uuid NOT NULL,
+     project_id uuid NOT NULL,
+     credential_id uuid NOT NULL,
+     principal_id uuid NOT NULL,
+     issued_by uuid NOT NULL,
+     issuance_key_digest text NOT NULL CHECK (issuance_key_digest ~ '^[0-9a-f]{64}$'),
+     request_digest text NOT NULL CHECK (request_digest ~ '^[0-9a-f]{64}$'),
+     label text NOT NULL CHECK (octet_length(label) BETWEEN 1 AND 256),
+     PRIMARY KEY (tenant_id,project_id,credential_id),
+     UNIQUE (tenant_id,project_id,issued_by,issuance_key_digest),
+     FOREIGN KEY (tenant_id,project_id,credential_id,principal_id)
+       REFERENCES client_tokens(tenant_id,project_id,id,principal_id),
+     FOREIGN KEY (tenant_id,project_id,principal_id)
+       REFERENCES project_grants(tenant_id,project_id,principal_id),
+     FOREIGN KEY (tenant_id,issued_by) REFERENCES principals(tenant_id,id)
+   )`,
+  COMMON_TENANT_TABLE_FOOTER('reader_credentials'),
+];
+
 export const MEMORY_SQL_MIGRATIONS: readonly SqlMigration[] = [
   {
     version: 1,
@@ -690,6 +719,7 @@ export const MEMORY_SQL_MIGRATIONS: readonly SqlMigration[] = [
     statements: MIGRATION_4_STATEMENTS,
   },
   { version: 5, name: 'context_retry_metadata', statements: MIGRATION_5_STATEMENTS },
+  { version: 6, name: 'project_reader_credentials', statements: MIGRATION_6_STATEMENTS },
 ];
 
 export const LATEST_SQL_SCHEMA_VERSION = MEMORY_SQL_MIGRATIONS.reduce(

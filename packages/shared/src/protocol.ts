@@ -21,6 +21,9 @@ export const ROUTES = {
   capabilities: `${API_PREFIX}/capabilities`,
 
   projects: `${API_PREFIX}/projects`,
+  readerCredentials: (projectId: string): string => `${API_PREFIX}/projects/${projectId}/reader-credentials`,
+  readerCredentialRevocation: (projectId: string, credentialId: string): string =>
+    `${API_PREFIX}/projects/${projectId}/reader-credentials/${credentialId}/revocation`,
   projectGrants: (projectId: string): string => `${API_PREFIX}/projects/${projectId}/grants`,
   projectSessions: (projectId: string): string => `${API_PREFIX}/projects/${projectId}/sessions`,
   projectTasks: (projectId: string): string => `${API_PREFIX}/projects/${projectId}/tasks`,

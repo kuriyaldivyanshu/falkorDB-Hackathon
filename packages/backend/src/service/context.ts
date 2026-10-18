@@ -16,6 +16,7 @@ import type { GraphStore } from '../storage/graph.js';
 import { projectRootIdFor, readProjectRoot, readVersionDetailRows } from '../storage/memoryGraph.js';
 import { projectWriteLockKey, type SqlDatabase, type TxClient } from '../storage/pg.js';
 import type { AuthenticatedCall } from './auth.js';
+import { requirePermission } from './permissions.js';
 import { assertRootMatchesScope, requireProjectScope, toMemoryVersion, withGraphRead } from './semanticSupport.js';
 import type { SourceService } from './sources.js';
 import type { TaskService } from './tasks.js';
@@ -84,6 +85,7 @@ export function createContextService(deps: ContextServiceDeps): ContextService {
           AND t.principal_id=$3 AND t.state='active' AND t.revoked_at IS NULL
           AND t.expires_at>clock_timestamp() AND t.idle_expires_at>clock_timestamp() AND a.state='active'
           AND (t.project_id IS NULL OR t.project_id=p.id) AND t.kind=$5
+          AND (t.kind<>'reader' OR (g.role='reader' AND a.kind='service' AND t.project_id=p.id))
           AND t.native_session_id IS NOT DISTINCT FROM $6::uuid`,
       [call.scope.tenantId, call.scope.projectId, call.scope.principalId, call.tokenId, call.scope.tokenKind, call.scope.nativeSessionId],
     );
@@ -204,6 +206,7 @@ export function createContextService(deps: ContextServiceDeps): ContextService {
 
   return {
     async prepare(call, input) {
+      requirePermission(call, 'context.audit');
       const parsed = parseContract(prepareContextInputSchema, input, 'context preparation');
       requireProjectScope(call, parsed.projectId);
       validateHints(parsed);
@@ -296,12 +299,7 @@ export function createContextService(deps: ContextServiceDeps): ContextService {
             await releaseScope(tx, call);
             await checkTask(call, manifest);
             if (canonicalDigest(before) !== canonicalDigest(await rootFor(call))) throw new ContextRefusal('stale_snapshot');
-            const bytes = Buffer.from(JSON.stringify(manifest));
-            const outcome = (await deps.sources.append(call, { projectId: parsed.projectId, records: [{
-              deliveryId: `context:${nonce}`, originKey: `threadline:context:${nonce}`, originRevision: '1',
-              kind: 'context_manifest', bytesBase64: bytes.toString('base64'), mediaType: 'application/json',
-              completeness: 'complete', visibility: 'project', retention: 'retained', observedAtMs: clock().getTime(),
-            }] }, tx)).outcomes[0];
+            const outcome = (await deps.sources.appendContextManifest(call, manifest, nonce, tx)).outcomes[0];
             if (outcome === undefined || outcome.status === 'rejected') throw new ThreadlineError('idempotency_mismatch', 'The context manifest identity is unavailable.');
             const id = randomUUID();
             await tx.rows(
@@ -335,6 +333,7 @@ export function createContextService(deps: ContextServiceDeps): ContextService {
     },
 
     async recordOccurrence(call, input) {
+      requirePermission(call, 'context.audit');
       const parsed = parseContract(recordOccurrenceInputSchema, input, 'context occurrence');
       requireProjectScope(call, parsed.projectId);
       if (parsed.state === 'native_observed') throw new ThreadlineError('unsupported', 'Native context observation requires qualified evidence and is unavailable.');
