@@ -43,7 +43,7 @@ Review full diff against baseline, stage explicit paths, inspect cached diff/che
 
 ## Result record
 
-Status: checkpoint verified against the merged baseline; preparing the feature commit/push and one PR. Final integration still waits for coordinator confirmation that A has merged.
+Status: checkpoint verified, committed and pushed; [PR #14](https://github.com/kuriyaldivyanshu/falkorDB-Hackathon/pull/14) open against main. Final integration still waits for coordinator confirmation that A has merged.
 
 Creation checks: coordinator main clean; fetched origin/main equals required baseline; branch/path unused; worktree canonical identity/HEAD/clean state verified; branch has no upstream. No existing runtime state borrowed.
 
@@ -100,4 +100,9 @@ The next coordinator action is **merge/confirm A first**, then request B's integ
 
 ### Commit, remote and PR status
 
-Contract bootstrap committed as `510550d`. Implementation commit, remote confirmation and real PR URL are recorded in the final handoff update below. No merge or retirement is authorized to this worker.
+- Contract bootstrap: `510550d875e41bad93cd3d9a0e01403eff857f3c`.
+- Verified implementation head: `d3c1e908277111929d125cdcdb9d2a6afa14092e` ("Add human episode recording and reproducible memory demo"). The complete checked source/config/document tree was clean at commit. Source verification above applies to this exact implementation commit.
+- Pushed explicitly with `git push -u origin HEAD:refs/heads/threadline/b-episode-demo-03`; `git ls-remote --heads` returned exactly `d3c1e908277111929d125cdcdb9d2a6afa14092e`. Upstream is `refs/remotes/origin/threadline/b-episode-demo-03`, never main.
+- Opened exactly one normal PR through the already-authenticated GitHub UI after inspecting existing PRs: [#14 — Add human episode recording and reproducible memory demo](https://github.com/kuriyaldivyanshu/falkorDB-Hackathon/pull/14). UI verified open state, base `main`, head `threadline/b-episode-demo-03` and the exact implementation commit. No credential store or authentication tool was inspected/installed; no probe issue or unrelated message was created.
+- This PR-status update is a documentation-only follow-up; no source/config changed after verification. Its resulting final commit SHA is reported in the worker handoff and PR, and can be resolved from this branch's HEAD without embedding a self-referential hash in this file. Rechecked Markdown, frozen-path scope, generated-secret absence and diff cleanliness after the update. Retained ignored artifacts are only this worktree's own installed dependencies and generated build output; runtime data/checks remain in assigned external roots.
+- No merge, force push, worktree retirement, context integration or later feature work was performed. The PR explicitly records A → B integration update → B as the merge order.
