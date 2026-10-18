@@ -631,9 +631,9 @@ async function runMcp(invocation: CliInvocation): Promise<number> {
  *
  * The local owner credential is used when no file is named. A reader credential
  * is preferred wherever one exists: `--token-file` (or THREADLINE_MCP_TOKEN_FILE)
- * names a file containing only the token. This build has no command that issues
- * a non-owner grant, so that path is documented as a limitation rather than
- * implemented here. The token never appears in argv, output or diagnostics.
+ * names a file containing only the token. Owners issue scoped readers through
+ * the access API documented in docs/access.md; credential administration is not
+ * implemented in this client. The token never appears in argv, output or diagnostics.
  */
 function readServerCredential(invocation: CliInvocation, credentialFile: string): string | null {
   const explicit = invocation.tokenFile ?? process.env['THREADLINE_MCP_TOKEN_FILE'] ?? null;

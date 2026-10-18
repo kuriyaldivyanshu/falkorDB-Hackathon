@@ -113,14 +113,24 @@ link and prepared multiline body. Preserve worktree/resources for coordinator.
 
 ## Result record
 
+### Coordinator takeover for combined verification
+
+The user confirmed PR #18 merged and explicitly paused Agent B on 18 October
+2026. The coordinator takes over only this assignment's pending integration
+checks, necessary client/documentation fixes and normal commit/push delivery.
+The clean branch already contains main `a4891f4` through normal merge
+`1f2c797`; no second merge is needed. Use only B's reserved installation,
+containers and synthetic credentials. Preserve the previous independent
+verification record below; combined outcomes are recorded separately after the
+checks. No merge, retirement, native inference or new milestone is authorized.
+
 Baseline gates passed: clean coordinator main fetched/fast-forward checked at
 expected SHA, branch/path unused, new worktree clean at literal SHA with no
 upstream. Assignment did not exist on baseline and is created before source.
-The independently implemented client portion is verified below. The combined
-reader pass is pending: the user explicitly said they will confirm when A's PR
-has been reviewed and merged, and only then may B pull main and continue that
-pass. No peer branch was read/merged and main has not been pulled since baseline.
-N03 remains incomplete; retain this PR as draft until the dependency pass.
+The independently implemented client portion was verified first as recorded
+below. Its initial delivery waited for A's merge. The later coordinator takeover
+and completed reader compatibility pass are recorded separately at the end of
+this file. No unpublished peer branch was used. N03 remains incomplete.
 
 ### Behavior and changed paths
 
@@ -211,13 +221,12 @@ Python 3.12 passed. These are not hidden passing product observations.
 
 ### Limits, integration and recovery
 
-No supported reader credential was issued or tested yet; A's policy/API remains
-an ordered dependency. No synthetic SQL reader setup was needed. Combined
-compatibility must use A's merged supported API, verify prepare/own occurrence
-and knowledge-mutation denial, rerun affected CLI/MCP checks/build, and reconcile
-issuance wording. Do not add credential administration CLI commands. Wait for
-the user's explicit merge confirmation before fetching/pulling main for this.
-Use a normal merge on this clean published branch; preserve history.
+At independent delivery, supported reader issuance was an ordered dependency;
+no synthetic SQL reader setup was used. The combined pass below now exercises
+A's merged supported API, preparation/own occurrence and mutation denials, with
+affected CLI/MCP checks/build and reconciled issuance wording. No credential
+administration CLI commands were added. The user confirmed A's merge before
+the coordinator continued on the normally merged published branch.
 
 No real native configuration/authentication/transcripts/inference, model packet
 consumption, hook delivery/spilling, strong native identity or fork/subagent
@@ -255,8 +264,77 @@ This delivery-only follow-up records that URL; final HEAD/remote confirmation
 is in the handoff rather than a self-referential commit hash. The source/config
 implementation tree remains byte-identical to the tested implementation commit.
 
-Status: committed/pushed, draft PR open; combined A-reader verification and
-merge-readiness remain pending explicit coordinator confirmation. No merge,
-main update, retirement or new milestone. Next coordinator action: review B's
-independent change and notify B after A's reader PR is reviewed and merged; then
-B normally merges updated main and completes the declared compatibility pass.
+Initial delivery status: committed/pushed, draft PR open, reader integration
+pending. This historical status is superseded by the completed combined pass
+below. No merge, main update, retirement or new milestone was performed.
+
+### Combined reader integration result
+
+Coordinator verified the clean branch at
+`1f2c797eb535d6104c2a223bb12f852398da3bb0`, already containing merged main
+`a4891f4` (PR #18). Only B's allowed CLI/comment and documentation paths changed.
+No runtime implementation defect was found, no backend/shared source changed,
+and no dependency, permanent test or additional migration was added.
+
+Explicit-home init upgraded B's existing populated synthetic database from v5
+to v6, preserving the owner and demo data (`replacedInstallation: false`). The
+normal merged service then started as PID 36103. Actual owner API issuance,
+rather than SQL credential seeding, supplied the reader credentials used by
+all new client authorization checks. One-time bearers stayed in exclusive
+0600 files inside B's private data root; none entered tracked output.
+
+Observed checks on the combined source:
+
+- `npm run build`: passed after the final CLI comment edit.
+- `reader-integration.mjs`: **44 checks passed**. Real issuance/no-store/one-time
+  retry/listing, scoped project binding, CLI exact current 60-second authority
+  and qualified historical episode, body bytes/digest, exact/changed retries,
+  missing-authority refusal, manifest reads, own occurrence/self-report/replay,
+  another issued reader's report refusal, native-observation refusal, stale
+  state and foreign-project refusal. Fourteen HTTP mutation/administration
+  categories refused with `scope_denied`, including forged public audit writes.
+  Default MCP retained exactly six read-only tools; explicit opt-in added only
+  audited preparation. All six reads, exact body/metadata, keyed retries,
+  selector/identity refusal and bounded errors worked with API-issued readers.
+  With an established graph read, stopping only B's graph container made CLI/MCP
+  fail closed while SQL history/metadata remained readable. Backend PID 36103
+  and MCP PID 38397 survived and recovered without restart; recovered retries
+  retained identity. Revocation blocked CLI replay and an already running MCP;
+  a genuinely short-lived API-issued credential expired and could not replay.
+  Owner preparation still succeeded afterward.
+- `reader-release-races.mjs`: **11 checks passed**. A temporary HTTP composition
+  with real SQL/FalkorDB and instrumented graph-read pauses drove both the real
+  CLI and real stdio MCP. Expiry at the final graph read, and owner API revocation
+  committed during selection, prevented release in both transports. Every
+  refused attempt committed no additional manifest/occurrence. Owner preparation
+  remained usable. Instrumentation changes no product source and is not outage,
+  native runtime or uncontrolled race evidence. The normal service was restored
+  afterward as PID 39380; this restart was after, not part of, the independently
+  completed same-process outage check.
+- Existing `transport.mjs`: **6 authored checks passed** (simulated responses).
+- Existing `preview.mjs`: **6 checks passed**; default/opt-in configuration,
+  ownership guards and no real native writes/invocation.
+- Existing `mcp-boundaries.mjs`: **3 checks passed**; actual invalid-token
+  backend error plus constructed service-failure and oversized-response cases.
+
+Total newly run: **70 grouped focused checks**, plus workspace build and final
+documentation/scope/secret checks. Earlier 63 independent checks remain historical
+evidence, not a claim that all were rerun. Two temporary-verifier input mistakes
+were corrected before the final reader run: `native_observed` belongs in state,
+not boundary, and write-route authorization checks require matching path/body
+memory/task identities. Those failures were invalid test inputs, not product
+fixes. No live native inference, configuration, hook delivery, host identity or
+fork/subagent correlation was exercised; N03 stays incomplete.
+
+Reconciled README, local development, CLI/MCP, context-client and native guides
+with supported owner HTTP issuance/listing/revocation and actual context client
+availability. Removed the CLI's stale explanatory comment about unsupported
+issuance. Credential administration remains HTTP-only; the access guide's
+backend-only checkpoint description is historical and was left in A's ownership.
+
+New scripts/logs and `SHA256SUMS-combined.txt` remain under B's existing checks
+root. B's two containers/volumes, private data root and worktree remain retained;
+the normal service is on 47853 as PID 39380 (reidentify before later control).
+Other assignments' resources and the coordinator main checkout were untouched.
+This PR's reader dependency gate is satisfied; final PR review and merge remain
+coordinator/user actions. Do not mark N03 complete or retire resources yet.

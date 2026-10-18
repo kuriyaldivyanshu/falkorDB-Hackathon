@@ -85,8 +85,17 @@ with optional surrounding whitespace, exactly the existing MCP token-file
 format. It is distinct from installation credential.json. With no flag,
 `THREADLINE_MCP_TOKEN_FILE` is used if set; otherwise the installation's local
 owner credential is used. Credentials never enter generated configuration,
-argv, output or diagnostics. Prefer a scoped reader when one is available.
-Credential issuance is outside these clients.
+argv, output or diagnostics. Prefer a scoped reader issued through the supported
+[owner access API](access.md). That workflow saves the one-time bearer privately;
+issuance/listing/revocation have no administrative CLI commands. Readers can
+prepare context and report their own occurrences but cannot append sources,
+mutate memory/tasks, administer credentials or access another project.
+
+Revocation and fixed absolute/idle expiry are enforced on every authenticated
+request and at the backend's final context authorization statement. Revocation
+committed before that statement prevents release; later changes cannot recall
+returned bytes. Revoke a lost credential and issue a new one with a fresh key;
+an issuance retry never reconstructs its secret or extends its deadline.
 
 Preparation and reporting must use the same credential, not merely the same
 principal/project. A caller-supplied project or session identity cannot widen

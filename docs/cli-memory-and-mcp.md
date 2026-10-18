@@ -320,12 +320,13 @@ The default six-tool server guarantees:
 
 `threadline mcp` reads the local owner credential from the installation root.
 `--token-file <path>` (or `THREADLINE_MCP_TOKEN_FILE`) names a file containing
-only the token, so a narrower credential can be used once one exists.
-
-**Known limitation:** this build has no command that issues a non-owner project
-grant, so a reader-grant credential has to be created outside the product
-surface. The server prefers a reader credential wherever the mechanism allows
-it; it does not invent a credential-issuance path in client code.
+only the token. Prefer a project reader issued by the owner's supported
+[access API workflow](access.md), which saves a one-time bearer in an exclusive
+0600 file. Use that file with MCP or either context command; do not replace the
+installation owner credential. Credential administration has no CLI command.
+Readers can prepare context and report their own occurrence as audit writes,
+but cannot mutate accepted knowledge, sources or tasks. Expiry and revocation
+are enforced by the backend, including its final context release check.
 
 ## Explicit audited context retrieval
 
@@ -382,10 +383,10 @@ paths, and the exact command to run the server by hand.
   `--context-tools` MCP option; see [context clients](context-client.md). Native
   delivery remains unqualified. Session enrollment remains unavailable.
 - Claims and handoffs remain unavailable operations.
-- Context HTTP isolation is verified with real synthetic reader/foreign-scope
-  credentials. Supported scoped credential issuance and isolation coverage for
-  later native, coordination and privacy operations remain open; synthetic SQL
-  provisioning used in verification is not a supported operator command.
+- Supported scoped reader issuance, listing and revocation are available through
+  [the owner API](access.md). Earlier synthetic SQL provisioning was verification
+  setup, not the operator workflow. Isolation coverage for later native,
+  coordination and privacy operations remains open.
 
 ### Procedure and recall limits
 

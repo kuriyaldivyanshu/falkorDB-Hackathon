@@ -109,6 +109,13 @@ Capture is opt-in and project-bound. Historical import selects exact sessions an
 
 Tenant/project grants, scoped tokens, SQL row-level security and separate project graphs enforce access. Retrieved memory cannot reveal text from an unreadable source. The first release supports project-safe shared memory; personal work uses a separately authorized private project.
 
+Project owners can [issue, list and revoke reader credentials](docs/access.md)
+through the authenticated local API. A reader token file works with MCP and the
+context CLI, allowing retrieval and preparation audits for one project while
+denying source, memory, task and access administration writes. Credentials have
+fixed expiry and one-time secret delivery; no credential administration CLI is
+provided.
+
 Deletion first blocks future releases, then removes managed source copies and dependent memory. Diagnostics, persistence logs and backups have explicit retention status. Already supplied context may remain in the native client's history; Threadline cannot recall it.
 
 The hackathon demo uses authored synthetic data. The intended seven-day raw-history default, pinned evidence policy and erasure protocol must be implemented and verified before personal-history import is enabled.

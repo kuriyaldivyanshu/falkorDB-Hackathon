@@ -174,7 +174,12 @@ POST /v2/context/occurrences
 
 [The context API guide](context.md) documents scoped idempotency, selection hints,
 exact mandatory authority, byte limits, metadata-only manifests and guarded
-self-reported occurrences. These endpoints have no CLI command or MCP tool yet;
+self-reported occurrences. Use `context:prepare`, `context:occurrence` or the
+explicit `--context-tools` MCP option described in [context clients](context-client.md).
+Owners issue, list and revoke project readers through the [access API](access.md);
+use the saved raw token file with these clients. Reader audit writes do not
+permit knowledge mutations. Migration 6 adds this access model without changing
+the graph schema; apply it only to your explicitly selected installation.
 `native_observed` remains unsupported. Still reported unavailable by
 `threadline capabilities`: validated procedural reuse, claims and handoffs, native
 enrollment and capture, history import, deletion jobs and export. There is no hidden legacy command path.

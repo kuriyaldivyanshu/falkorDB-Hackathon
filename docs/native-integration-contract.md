@@ -398,8 +398,11 @@ Backend (owner A, later assignment):
 - context preparation plus occurrence recording at the `UserPromptSubmit` and
   `SessionStart` boundaries;
 - a decision on whether a provisional-identity session may read memory;
-- a supported way to issue a non-owner project grant, so the read-only MCP path
-  can use a reader credential without out-of-band setup.
+
+Scoped reader issuance, listing and revocation are implemented through the
+[owner access API](access.md). Its dedicated service principal is project-bound;
+it establishes no native conversation identity. Use the saved reader token file
+for default read-only MCP or explicitly enabled audited context preparation.
 
 CLI/adapter (later assignment):
 
