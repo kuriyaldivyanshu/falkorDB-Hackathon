@@ -49,6 +49,8 @@ export interface CodexMcpPreviewInput {
   readonly threadlineHome: string;
   /** The one project this server is bound to. Configuration, not a tool argument. */
   readonly projectId: string;
+  /** Explicit opt-in to preparation audit writes. Defaults to six read-only tools. */
+  readonly contextTools?: boolean;
 }
 
 export interface CodexMcpPreview {
@@ -56,7 +58,7 @@ export interface CodexMcpPreview {
   readonly qualifiedHarnessVersion: string;
   readonly profileName: string;
   readonly mcpServerId: string;
-  readonly mode: 'mcp-only';
+  readonly mode: 'mcp-only' | 'context-read';
   readonly files: readonly ConfigPreviewFile[];
   readonly ownership: CodexOwnershipManifest;
   /** The exact command a reviewer can copy; identical bytes to the profile args. */
@@ -80,7 +82,7 @@ function sha256Digest(content: string): string {
 
 /** The exact argument vector the rendered stdio server receives. */
 export function mcpServerArguments(input: CodexMcpPreviewInput): readonly string[] {
-  return [input.entryScript, 'mcp', '--home', input.threadlineHome, '--project', input.projectId];
+  return [input.entryScript, 'mcp', '--home', input.threadlineHome, '--project', input.projectId, ...(input.contextTools === true ? ['--context-tools'] : [])];
 }
 
 /**
@@ -99,7 +101,9 @@ function renderMcpOnlyProfile(input: CodexMcpPreviewInput): string {
   lines.push(CODEX_OWNERSHIP_MARKER_LINE);
   lines.push('# Generated preview only: this build does not install Codex configuration.');
   lines.push(`# Select with: codex --profile ${CODEX_PROFILE_NAME}`);
-  lines.push('# Read-only memory tools. This preview installs no hooks:');
+  lines.push(input.contextTools === true
+    ? '# Audited context retrieval: records preparation metadata. No hooks:'
+    : '# Read-only memory tools. This preview installs no hooks:');
   lines.push('# `threadline codex-hook` is not implemented in this build.');
   lines.push('');
   lines.push(`[mcp_servers.${CODEX_MCP_SERVER_ID}]`);
@@ -157,7 +161,7 @@ export function renderCodexMcpPreview(input: CodexMcpPreviewInput): CodexMcpPrev
     qualifiedHarnessVersion: CODEX_QUALIFIED_VERSION,
     profileName: CODEX_PROFILE_NAME,
     mcpServerId: CODEX_MCP_SERVER_ID,
-    mode: 'mcp-only',
+    mode: input.contextTools === true ? 'context-read' : 'mcp-only',
     files: [
       { path: profilePath, role: 'profile', content: profileContent, digest: sha256Digest(profileContent) },
       { path: manifestPath, role: 'manifest', content: manifestContent, digest: sha256Digest(manifestContent) },
@@ -167,7 +171,9 @@ export function renderCodexMcpPreview(input: CodexMcpPreviewInput): CodexMcpPrev
     notes: [
       `Select the profile with \`codex --profile ${CODEX_PROFILE_NAME}\`; sessions without it load nothing.`,
       `The stdio server is bound to project ${input.projectId} at startup; a tool call cannot select another project, tenant or service address.`,
-      'Every exposed tool is read-only: there is no acceptance, proposal, correction or requirement-binding tool.',
+      input.contextTools === true
+        ? 'Six read-only tools plus audited context retrieval: preparation records metadata, never delivery or accepted knowledge changes.'
+        : 'Every exposed tool is read-only: there is no acceptance, proposal, correction or requirement-binding tool.',
       'The credential is read from the Threadline home at run time and is never written into Codex configuration.',
       'No hook entry is rendered because `threadline codex-hook` is not implemented in this build.',
       'Native runtime hook execution, MCP tool-call identity and fork/subagent correlation remain unqualified.',

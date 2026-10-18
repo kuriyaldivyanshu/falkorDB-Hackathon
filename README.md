@@ -6,7 +6,7 @@ Coding agents lose useful context between sessions: a requirement changed, a pre
 
 Threadline is being built as a local npm package for **FalkorDB Track 2: Agent Memory and Coordination**. It connects to an existing coding agent, records permitted evidence, and supplies a small, current, source-backed memory packet when the agent needs it.
 
-> **Development status:** the repository is migrating to this product. The storage foundation (SQL catalog, restricted-role row-level security, immutable source files), the source-backed graph admission worker, semantic memory (task creation, sourced proposals, explicit human acceptance, corrections and task requirements, with current-memory reads) and source-backed episodes and procedural candidates with human review are verified against local PostgreSQL and FalkorDB. A human CLI (including `memory:episode:record`) and a project-bound, read-only stdio MCP server now expose that memory, and the Codex profile that starts the MCP server can be rendered as a preview. Authenticated backend context preparation and occurrence recording are also implemented, with a 4 KiB default / 8 KiB hard body limit, exact current requirements, applicable semantic/episodic memory and metadata-only manifests. Context CLI/MCP adapters, validated procedural reuse, native capture, session enrollment, model-written memory, coordination claims and handoffs remain unavailable. The retired owned-execution code has been removed.
+> **Development status:** the repository is migrating to this product. The storage foundation (SQL catalog, restricted-role row-level security, immutable source files), the source-backed graph admission worker, semantic memory (task creation, sourced proposals, explicit human acceptance, corrections and task requirements, with current-memory reads) and source-backed episodes and procedural candidates with human review are verified against local PostgreSQL and FalkorDB. A human CLI (including `memory:episode:record`) and a project-bound, read-only stdio MCP server now expose that memory, and the Codex profile that starts the MCP server can be rendered as a preview. Authenticated backend context preparation and occurrence recording are also implemented, with a 4 KiB default / 8 KiB hard body limit, exact current requirements, applicable semantic/episodic memory and metadata-only manifests. Context CLI commands and an opt-in audited MCP context tool are implemented. Validated procedural reuse, native capture, session enrollment, model-written memory, coordination claims and handoffs remain unavailable. The retired owned-execution code has been removed.
 
 ## What we are building
 
@@ -36,8 +36,10 @@ What is reachable today is the read-only half: `threadline mcp` serves
 `threadline_task_requirements`, `threadline_source_inspect` and a bounded
 `threadline_source_read`, bound to one explicitly configured project and
 credential. There is no proposal, acceptance, correction or requirement-binding
-tool; memory is changed by a human through the CLI. MCP tool-call identity is
-still unqualified, which is one reason writes stay human-only.
+tool; accepted knowledge is changed by a human through the CLI. Explicit
+`--context-tools` adds only `threadline_context_prepare`, which records preparation
+audit metadata without changing accepted knowledge. MCP native identity remains
+unqualified; preparation proves no delivery. See [context clients](docs/context-client.md).
 
 Each simultaneous root agent uses its own project-bound enrollment. A coordination claim governs memory updates; it does not lock native files or stop another process from editing them.
 
@@ -97,7 +99,7 @@ Current authority is the accepted `CURRENT` version. `observed_under` records th
 
 ### Retrieval and concurrency
 
-The implemented context API starts from an authorized task/project, resolves exact current obligations, then adds bounded applicable semantic memories and episodes. Packets retain applicability and historical observed conditions separately and explain sources and omissions. The rendered body defaults to 4 KiB with an 8 KiB hard limit; mandatory overflow refuses. Candidate procedures and handoffs are excluded. See [the context API](docs/context.md) for its authenticated HTTP workflow; context CLI/MCP adapters and native delivery remain future work.
+The implemented context API starts from an authorized task/project, resolves exact current obligations, then adds bounded applicable semantic memories and episodes. Packets retain applicability and historical observed conditions separately and explain sources and omissions. The rendered body defaults to 4 KiB with an 8 KiB hard limit; mandatory overflow refuses. Candidate procedures and handoffs are excluded. See [the context API](docs/context.md) and [context clients](docs/context-client.md) for HTTP, CLI and explicitly enabled MCP retrieval. Native delivery remains unqualified.
 
 Reads use a small catalog of indexed, bounded graph queries. Writes use expected-version guards and stable operation IDs. A graph mutation commits its state change, Event and receipt atomically; retries reconcile the same operation instead of creating duplicate effects. SQL and graph changes have explicit pending states because they do not share a distributed transaction.
 
@@ -106,6 +108,13 @@ Reads use a small catalog of indexed, bounded graph queries. Writes use expected
 Capture is opt-in and project-bound. Historical import selects exact sessions and categories; it does not scan all native history. Hidden reasoning, native credentials and unselected records are excluded.
 
 Tenant/project grants, scoped tokens, SQL row-level security and separate project graphs enforce access. Retrieved memory cannot reveal text from an unreadable source. The first release supports project-safe shared memory; personal work uses a separately authorized private project.
+
+Project owners can [issue, list and revoke reader credentials](docs/access.md)
+through the authenticated local API. A reader token file works with MCP and the
+context CLI, allowing retrieval and preparation audits for one project while
+denying source, memory, task and access administration writes. Credentials have
+fixed expiry and one-time secret delivery; no credential administration CLI is
+provided.
 
 Deletion first blocks future releases, then removes managed source copies and dependent memory. Diagnostics, persistence logs and backups have explicit retention status. Already supplied context may remain in the native client's history; Threadline cannot recall it.
 
@@ -121,7 +130,10 @@ sourced correction changes current authority while retaining old provenance.
 ```sh
 threadline memory:episode:record --input episode.json --wait --json
 threadline memory:inspect --project <projectId> <memoryId> --json
+threadline context:prepare --input context.json --json
 threadline mcp --project <projectId>
+# Explicit audit metadata writes, with no accepted-knowledge mutation:
+threadline mcp --project <projectId> --context-tools
 ```
 
 The episode document supplies the action, outcome, observation, uncertainty,
@@ -161,7 +173,7 @@ npm run build
 
 The workspace contains `packages/shared`, `packages/backend` and `packages/cli`. These packages are changed in place. The inventory fixture is authored demo data under `fixtures/inventory-export-v1/`; it is not a backend startup requirement.
 
-The owned execution, provider integration and coding TUI have been removed. The current build serves source capture, project association, history and capability reporting, plus semantic memory, tasks, episodes and procedural candidates: `POST /v2/tasks`, `POST /v2/memories/proposals`, `POST /v2/memories/episodes`, `POST /v2/memories/:memoryId/acceptance`, `POST /v2/memories/:memoryId/corrections`, `POST /v2/tasks/:taskId/requirements`, and the `GET` reads that resolve current memory and current requirement versions. It also serves authenticated `POST /v2/context` and `POST /v2/context/occurrences`; see [bounded context](docs/context.md). Context has no CLI command or MCP tool yet. Validated procedural reuse, claims, handoffs and native capture remain unavailable. Setup and status commands are:
+The owned execution, provider integration and coding TUI have been removed. The current build serves source capture, project association, history and capability reporting, plus semantic memory, tasks, episodes and procedural candidates: `POST /v2/tasks`, `POST /v2/memories/proposals`, `POST /v2/memories/episodes`, `POST /v2/memories/:memoryId/acceptance`, `POST /v2/memories/:memoryId/corrections`, `POST /v2/tasks/:taskId/requirements`, and the `GET` reads that resolve current memory and current requirement versions. It also serves authenticated `POST /v2/context` and `POST /v2/context/occurrences`; see [bounded context](docs/context.md). The CLI exposes `context:prepare` and explicit `context:occurrence`; `mcp --context-tools` opts into preparation audit writes. See [context clients](docs/context-client.md). Validated procedural reuse, claims, handoffs and native capture remain unavailable. Setup and status commands are:
 
 ```sh
 npm run setup -- --home /absolute/isolated/installation

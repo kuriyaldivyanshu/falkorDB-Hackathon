@@ -24,8 +24,27 @@ through the human-reviewed path and stop at `procedureState: "candidate"`;
 validated reuse, native capture and strong native identity remained unavailable
 at that checkpoint, and this server stays read-only. Since the later N02C merge,
 [backend context preparation and occurrence reporting](context.md) are implemented.
-Context CLI/MCP adapters and qualified native context delivery remain unavailable;
-backend support does not qualify a native boundary.
+The context CLI and explicitly enabled audited MCP tool are now implemented;
+qualified native context delivery remains unavailable. Client/backend support
+does not qualify a native boundary. See [context clients](context-client.md).
+
+## Context client boundary
+
+`b-context-client-04` adds human `context:prepare` and explicit guarded
+`context:occurrence`, plus `mcp --context-tools` and a matching opt-in
+`codex:preview --context-tools`. The default remains six read-only tools. The
+added context tool records preparation audit metadata; it neither changes
+accepted knowledge nor reports emission/native observation. Body limits remain
+4/8 KiB; the serialized context tool result has a separate 64 KiB cap and never
+silently truncates mandatory authority. Token-file configuration remains outside
+the rendered profile. No hook or native session identity is inferred.
+
+The context-enabled preview is labelled `context-read` and renders the real
+startup flag, no hook or bearer. Preview-only ownership/collision behavior is
+unchanged. Authored protocol checks establish client transport only; no actual
+model consumption is claimed. Hook runtime/additionalContext delivery/spilling,
+host metadata proving a conversation, and fork/subagent correlation remain
+unqualified. No native configuration, trust or credentials are modified.
 
 ## Evidence classes
 
@@ -299,9 +318,10 @@ path depends on it. The smallest probe that would qualify it is listed below.
   never correlation evidence.
 - **Write gate:** model-issued memory mutation stays disabled until the MCP
   tool-call identity path is observed on a supported binary and a single
-  conversation can be proven. Until then the integration contract requires the
-  interim surface: a read-only MCP tool plus human-driven mutation
-  (for example a human-run CLI command) — never an implicit write.
+  conversation can be proven. Until then the integration contract requires
+  read-only knowledge tools plus human-driven knowledge mutation. Explicit
+  `--context-tools` additionally permits preparation audit writes, with
+  readOnlyHint false, without accepted-knowledge changes or delivery claims.
 
 ## Capture-recursion exclusions
 
@@ -378,8 +398,11 @@ Backend (owner A, later assignment):
 - context preparation plus occurrence recording at the `UserPromptSubmit` and
   `SessionStart` boundaries;
 - a decision on whether a provisional-identity session may read memory;
-- a supported way to issue a non-owner project grant, so the read-only MCP path
-  can use a reader credential without out-of-band setup.
+
+Scoped reader issuance, listing and revocation are implemented through the
+[owner access API](access.md). Its dedicated service principal is project-bound;
+it establishes no native conversation identity. Use the saved reader token file
+for default read-only MCP or explicitly enabled audited context preparation.
 
 CLI/adapter (later assignment):
 

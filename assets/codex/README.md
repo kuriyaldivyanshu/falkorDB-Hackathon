@@ -17,7 +17,7 @@ without running anything.
   `threadline codex:preview`. This is the profile shape this build actually
   produces: the stdio MCP server and no hook entry.
 
-Both checked-in preview sets are snapshots of their renderers, generated with
+The original checked-in preview sets are snapshots of their renderers, generated with
 these inputs:
 
 ```js
@@ -44,3 +44,16 @@ renderCodexMcpPreview({
 credential. The profile is selected with `codex --profile threadline`. Hook
 entries, if they are ever rendered again, require native trust review
 (`/hooks`) before they run; the MCP-only profile has no hook entry to trust.
+
+## Explicit context retrieval preview
+
+`preview/context-read/` is the shipped renderer's explicitly enabled context
+profile, generated with the same placeholder paths/project above and
+`contextTools: true`. It adds the real `--context-tools` argument, no hook or
+bearer. `threadline codex:preview --project <uuid> --context-tools` renders this
+shape without writing configuration. The six default read-only tools remain;
+only `threadline_context_prepare` is added, with preparation audit writes and
+no accepted-knowledge mutation or delivery report. See
+[context clients](../../docs/context-client.md). Authored preview inspection
+establishes configuration bytes, not actual native/model use. Ownership and
+collision classification remain unchanged.

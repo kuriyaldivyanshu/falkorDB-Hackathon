@@ -49,6 +49,8 @@ export type CliCommand =
   | 'memory:correct'
   | 'memory:inspect'
   | 'memory:query'
+  | 'context:prepare'
+  | 'context:occurrence'
   | 'operation:inspect'
   | 'mcp'
   | 'codex:preview'
@@ -88,6 +90,7 @@ const OPTION_SPEC = {
   input: { type: 'string' },
   wait: { type: 'boolean', default: false },
   'wait-timeout': { type: 'string' },
+  'context-tools': { type: 'boolean', default: false },
   'token-file': { type: 'string' },
   'codex-home': { type: 'string' },
   executable: { type: 'string' },
@@ -139,6 +142,7 @@ export interface CliInvocation {
   readonly waitTimeoutMs: number | null;
 
   /* Read-only MCP server and configuration preview. */
+  readonly contextTools: boolean;
   readonly tokenFile: string | null;
   readonly codexHome: string | null;
   readonly executable: string | null;
@@ -178,6 +182,8 @@ export const SHELL_COMMANDS: readonly CliCommand[] = [
   'memory:correct',
   'memory:inspect',
   'memory:query',
+  'context:prepare',
+  'context:occurrence',
   'operation:inspect',
   'mcp',
   'codex:preview',
@@ -258,21 +264,30 @@ Memory:
                        Bounded current-memory read. hasMore is reported when the
                        bounded scan stopped early.
 
+Context (audited retrieval):
+  context:prepare --input <file|-> [--project <id>] [--token-file <path>] [--json]
+                       Prepare exact bounded context; records metadata, not delivery.
+                       The document must supply its project and idempotency key.
+  context:occurrence --input <file|-> [--project <id>] [--token-file <path>] [--json]
+                       Explicit guarded delivery report, never native observation.
+
 Operations:
   operation:inspect --project <id> <operationId>
                        Read one durable operation: pending, leased, ambiguous,
                        committed, rejected or cancelled, with its receipt.
 
-Read-only MCP server:
+Project-bound MCP server:
   mcp --project <id> [--token-file <path>] [--timeout-ms <n>] [--concurrency <n>]
+      [--context-tools]
                        Serve the project's memory over stdio for an MCP client.
-                       Read-only: no proposal, acceptance, correction or binding
-                       tool exists. Writes stay human CLI actions. Protocol output
+                       Default: six read-only tools. --context-tools adds audited
+                       retrieval that records preparation metadata. Accepted knowledge
+                       changes stay human CLI actions. Protocol output
                        goes to stdout; diagnostics go to stderr.
 
 Codex configuration:
   codex:preview --project <id> [--codex-home <path>] [--executable <path>]
-                [--entry <path>]
+                [--entry <path>] [--context-tools]
                        Render the Codex profile that starts \`mcp\`. Writes nothing
                        and contains no credential. Options default to the isolated
                        Codex home, the running Node.js and this CLI's entry script.
@@ -327,7 +342,7 @@ export function parseCliArgs(argv: readonly string[]): CliInvocation {
   try {
     parsed = parseArgs({ args: [...argv], options: OPTION_SPEC, allowPositionals: true, strict: true });
   } catch (error) {
-    throw new UsageError(error instanceof Error ? error.message : 'The arguments could not be parsed.');
+    throw new UsageError('The arguments could not be parsed. Run threadline help for supported options.');
   }
   const { values, positionals } = parsed;
 
@@ -391,6 +406,7 @@ export function parseCliArgs(argv: readonly string[]): CliInvocation {
     wait: values.wait,
     waitTimeoutMs: readInteger('--wait-timeout', values['wait-timeout'], 0, 600_000),
 
+    contextTools: values['context-tools'],
     tokenFile: values['token-file'] ?? null,
     codexHome: values['codex-home'] ?? null,
     executable: values.executable ?? null,
@@ -402,6 +418,20 @@ export function parseCliArgs(argv: readonly string[]): CliInvocation {
   };
 
   requireSingleTarget(command, base);
+  if (command === 'context:prepare' || command === 'context:occurrence') {
+    const allowed = new Set(['home', 'input', 'project', 'token-file', 'json', 'help']);
+    for (const flag of Object.keys(values)) {
+      const occurrences = argv.filter((arg) => arg === `--${flag}` || arg.startsWith(`--${flag}=`));
+      if (occurrences.length > 1) throw new UsageError('Context options must be supplied once.');
+      if (!allowed.has(flag) && argv.some((arg) => arg === `--${flag}` || arg.startsWith(`--${flag}=`))) {
+        throw new UsageError(`--${flag} is not accepted by context commands; use the strict input document.`);
+      }
+    }
+    if (positionals.length !== 1) throw new UsageError('Context commands take no positional identity.');
+  }
+  if (base.contextTools && command !== 'mcp' && command !== 'codex:preview') {
+    throw new UsageError('--context-tools belongs to mcp or codex:preview.');
+  }
 
   switch (command) {
     case 'project:add':
@@ -442,6 +472,8 @@ export function parseCliArgs(argv: readonly string[]): CliInvocation {
       requireOption('--idempotency-key', values['idempotency-key']);
       break;
 
+    case 'context:prepare':
+    case 'context:occurrence':
     case 'memory:episode:record':
     case 'memory:propose':
     case 'memory:correct':
@@ -510,7 +542,7 @@ function requireSingleTarget(command: CliCommand, base: CliInvocation): void {
   if (base.waitTimeoutMs !== null && !base.wait) {
     throw new UsageError('--wait-timeout needs --wait.');
   }
-  if (base.input !== null && command !== 'memory:episode:record' && command !== 'memory:propose' && command !== 'memory:correct') {
+  if (base.input !== null && command !== 'memory:episode:record' && command !== 'memory:propose' && command !== 'memory:correct' && command !== 'context:prepare' && command !== 'context:occurrence') {
     throw new UsageError(`--input is only used by the content-bearing commands; "${command}" takes flags.`);
   }
   if (base.expectCurrentVersionId !== null && command !== 'memory:accept') {
@@ -519,8 +551,8 @@ function requireSingleTarget(command: CliCommand, base: CliInvocation): void {
   if (base.expectedTaskRevision !== null && command !== 'task:require') {
     throw new UsageError('--expect-revision belongs to task:require.');
   }
-  if (base.tokenFile !== null && command !== 'mcp') {
-    throw new UsageError('--token-file belongs to the mcp server. A rendered preview never contains a credential.');
+  if (base.tokenFile !== null && command !== 'mcp' && command !== 'context:prepare' && command !== 'context:occurrence') {
+    throw new UsageError('--token-file belongs to mcp or context commands. A rendered preview never contains a credential.');
   }
 }
 

@@ -410,3 +410,42 @@ and is not exercised here. Native identity/capture, validated reuse,
 coordination, retention/erasure and package publication are not established here.
 See [the native contract](native-integration-contract.md) and
 [the development checklist](development-checklist.md). N03 and N06 remain open.
+
+## 7. Optional authored context-client retrieval
+
+This additional section uses the same isolated installation and returned project
+and task above. It exercises client retrieval and preparation audit metadata;
+it does not claim Codex consumed the packet or a model followed it. Sections
+1–6 remain the baseline persistence/recall demonstration.
+
+```bash
+jq -n --arg p "$PROJECT" --arg t "$TASK" \
+  '{projectId:$p,taskId:$t,idempotencyKey:"demo-context-client-1",focus:"UTC",
+    conditions:{selectionHints:[{key:"contract_version",values:["csv-v1"]}]}}' \
+  > "$WORK/context.json"
+tl context:prepare --input "$WORK/context.json" --json > "$WORK/context-result.json"
+jq -e --arg v "$VERSION_60" '.kind == "packet" and
+  any(.packet.items[]; .priority == "mandatory" and .versionId == $v and
+    .text == "Retain inventory rows aged 0 through 60 seconds, inclusive.") and
+  any(.packet.items[]; .kind == "episodic" and
+    .observedUnder.parameters.maxAgeSeconds == "600" and
+    .applicability.predicates[0].values == ["csv-v1"])' "$WORK/context-result.json"
+# Retry the same request/key via stdin; no automatic emission is reported.
+tl context:prepare --input - --json < "$WORK/context.json" > "$WORK/context-retry.json"
+jq -e --slurpfile first "$WORK/context-result.json" \
+  '.packet.occurrenceId == $first[0].packet.occurrenceId and
+   .packet.manifestSourceId == $first[0].packet.manifestSourceId and
+   .packet.body == $first[0].packet.body' "$WORK/context-retry.json"
+# Admission is asynchronous; inspect instead of inferring graph commitment.
+tl operation:inspect --project "$PROJECT" \
+  "$(jq -er '.packet.manifestOperationId' "$WORK/context-result.json")" --json
+```
+
+The exact current 60-second obligation and the historical 600-second observation
+are separate facts. Preparation records a metadata-only manifest and a prepared
+occurrence. It proves no delivery or committed graph admission. To explicitly
+enable audited context retrieval over MCP, start `tl mcp --project "$PROJECT"
+--context-tools`; the default remains six read-only tools. See
+[context clients](context-client.md) for complete tool selectors, token files,
+64 KiB envelope limits and guarded operator occurrence reporting. No occurrence
+report is automatic, and `native_observed` remains unsupported. N03 stays open.
