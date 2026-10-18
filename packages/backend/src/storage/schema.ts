@@ -660,6 +660,14 @@ const MIGRATION_4_STATEMENTS: readonly string[] = [
    $$`,
 ];
 
+// Additive context retry metadata. Existing occurrence rows and forced RLS stay intact.
+const MIGRATION_5_STATEMENTS: readonly string[] = [
+  `ALTER TABLE context_occurrences
+     ADD COLUMN request_digest text CHECK (request_digest ~ '^[0-9a-f]{64}$'),
+     ADD COLUMN update_key text,
+     ADD COLUMN update_digest text CHECK (update_digest ~ '^[0-9a-f]{64}$')`,
+];
+
 export const MEMORY_SQL_MIGRATIONS: readonly SqlMigration[] = [
   {
     version: 1,
@@ -681,6 +689,7 @@ export const MEMORY_SQL_MIGRATIONS: readonly SqlMigration[] = [
     name: 'memory_task_operation_identities',
     statements: MIGRATION_4_STATEMENTS,
   },
+  { version: 5, name: 'context_retry_metadata', statements: MIGRATION_5_STATEMENTS },
 ];
 
 export const LATEST_SQL_SCHEMA_VERSION = MEMORY_SQL_MIGRATIONS.reduce(

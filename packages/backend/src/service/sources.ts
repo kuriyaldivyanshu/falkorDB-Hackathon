@@ -34,15 +34,17 @@ import type { AuthenticatedCall } from './auth.js';
  * An append normalizes and bounds its records first, publishes the permitted
  * bytes as immutable files, and only then takes the short project-scoped SQL
  * transaction that deduplicates, allocates ingestion positions and records the
- * Source plus its graph-admission operation. Bytes are never hashed or written
- * inside the project lock, and a retry of the same delivery is stable while a
- * changed payload refuses.
+ * Source plus its graph-admission operation. Standalone appends publish before
+ * the project lock; an internal atomic caller may publish bounded metadata while
+ * joining its existing transaction. Reads may join the same release barrier.
+ * A retry of the same delivery is stable while a changed payload refuses.
  */
 
 export interface SourceService {
-  append(call: AuthenticatedCall, input: unknown): Promise<SourceAppendResult>;
-  view(call: AuthenticatedCall, projectId: string, sourceId: string): Promise<SourceView>;
-  range(call: AuthenticatedCall, projectId: string, sourceId: string, start?: number, end?: number): Promise<SourceRange>;
+  /** Internal callers may join an existing project-locked transaction. */
+  append(call: AuthenticatedCall, input: unknown, transaction?: TxClient): Promise<SourceAppendResult>;
+  view(call: AuthenticatedCall, projectId: string, sourceId: string, transaction?: TxClient): Promise<SourceView>;
+  range(call: AuthenticatedCall, projectId: string, sourceId: string, start?: number, end?: number, transaction?: TxClient): Promise<SourceRange>;
   history(call: AuthenticatedCall, query: unknown): Promise<SourceHistoryPage>;
 }
 
@@ -128,15 +130,14 @@ export function createSourceService(deps: SourceServiceDeps): SourceService {
     }
   };
 
-  const readRow = async (call: AuthenticatedCall, projectId: string, sourceId: string): Promise<SourceRow> => {
-    const rows = await deps.db.withTenantTransaction(call.scope.tenantId, (tx) =>
-      tx.rows<SourceRow>(
+  const readRow = async (call: AuthenticatedCall, projectId: string, sourceId: string, transaction?: TxClient): Promise<SourceRow> => {
+    const read = (tx: TxClient) => tx.rows<SourceRow>(
         `${SOURCE_SELECT}
           WHERE s.tenant_id = $1 AND s.project_id = $2 AND s.id = $3
             AND (s.visibility = 'project' OR s.owner_principal_id = $4)`,
         [call.scope.tenantId, projectId, sourceId, call.scope.principalId],
-      ),
-    );
+      );
+    const rows = transaction === undefined ? await deps.db.withTenantTransaction(call.scope.tenantId, read) : await read(transaction);
     const row = rows[0];
     if (row === undefined) {
       throw new ThreadlineError('not_found', 'No such source exists in this project scope.');
@@ -179,7 +180,7 @@ export function createSourceService(deps: SourceServiceDeps): SourceService {
   };
 
   return {
-    async append(call: AuthenticatedCall, input: unknown): Promise<SourceAppendResult> {
+    async append(call: AuthenticatedCall, input: unknown, transaction?: TxClient): Promise<SourceAppendResult> {
       const parsed = parseContract(sourceAppendInputSchema, input, 'source append');
       const projectId = parsed.projectId;
       requireProject(call, projectId);
@@ -224,18 +225,16 @@ export function createSourceService(deps: SourceServiceDeps): SourceService {
         }));
       }
 
-      const outcomes = await withProjectWriteLock(
-        deps.db,
-        call.scope.tenantId,
-        projectId,
-        async (tx) => {
-          const results: SourceAppendOutcome[] = [];
-          for (const item of prepared) {
-            results.push(await appendOne(tx, call, projectId, item, stored.get(item.record.deliveryId), clock()));
-          }
-          return results;
-        },
-      );
+      const catalog = async (tx: TxClient): Promise<SourceAppendOutcome[]> => {
+        const results: SourceAppendOutcome[] = [];
+        for (const item of prepared) {
+          results.push(await appendOne(tx, call, projectId, item, stored.get(item.record.deliveryId), clock()));
+        }
+        return results;
+      };
+      const outcomes = transaction === undefined
+        ? await withProjectWriteLock(deps.db, call.scope.tenantId, projectId, catalog)
+        : await catalog(transaction);
 
       let highest: string | null = null;
       for (const outcome of outcomes) {
@@ -243,7 +242,7 @@ export function createSourceService(deps: SourceServiceDeps): SourceService {
           highest = outcome.projectSeq;
         }
       }
-      logger.log({
+      if (transaction === undefined) logger.log({
         level: 'info',
         message: 'Source append settled.',
         fields: {
@@ -259,9 +258,9 @@ export function createSourceService(deps: SourceServiceDeps): SourceService {
       );
     },
 
-    async view(call: AuthenticatedCall, projectId: string, sourceId: string): Promise<SourceView> {
+    async view(call: AuthenticatedCall, projectId: string, sourceId: string, transaction?: TxClient): Promise<SourceView> {
       requireProject(call, projectId);
-      return toView(await readRow(call, projectId, sourceId));
+      return toView(await readRow(call, projectId, sourceId, transaction));
     },
 
     async range(
@@ -270,9 +269,10 @@ export function createSourceService(deps: SourceServiceDeps): SourceService {
       sourceId: string,
       start = 0,
       end = SOURCE_LIMITS.maxRangeBytes,
+      transaction?: TxClient,
     ): Promise<SourceRange> {
       requireProject(call, projectId);
-      const row = await readRow(call, projectId, sourceId);
+      const row = await readRow(call, projectId, sourceId, transaction);
       if (row.availability !== 'available') {
         throw new ThreadlineError('source_unavailable', 'The source bytes are not available.', {
           availability: row.availability,

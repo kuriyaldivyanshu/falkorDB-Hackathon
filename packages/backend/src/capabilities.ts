@@ -33,6 +33,8 @@ export const SUPPORTED_OPERATION_IDS: readonly OperationId[] = [
   'memory.accept',
   'memory.correct',
   'memory.episode.record',
+  'context.prepare',
+  'context.occurrence',
   'task.create',
   'task.require',
 ];
@@ -154,15 +156,13 @@ const OPERATION_TABLE: Readonly<Record<OperationId, OperationDefinition>> = {
   },
   'context.prepare': {
     summary: 'Build one bounded applicable context packet for a boundary.',
-    effect: 'read',
-    scope: 'producer',
-    unavailable: 'Bounded context selection lands in N02C.',
+    effect: 'write',
+    scope: 'both',
   },
   'context.occurrence': {
-    summary: 'Record what was actually prepared, emitted or observed.',
+    summary: 'Record a scoped emission, unknown delivery or refusal report; native observation is unavailable.',
     effect: 'write',
-    scope: 'producer',
-    unavailable: 'Occurrence recording lands with the N02C context contract.',
+    scope: 'both',
   },
   'operation.inspect': {
     summary: 'Read one operation intent, lease, settlement and graph receipt state.',

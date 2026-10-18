@@ -48,9 +48,11 @@ _Avoid_: Execution lock, sandbox permission.
 
 ## Delivery and privacy
 
-**Context packet**: Bounded current authority and applicable evidence selected for a session, with source references and omission reasons.
+**Context packet**: Bounded exact current task authority and applicable optional evidence selected at a graph/task/privacy snapshot, with complete bounded source references and omission reasons. Released applicability predicates and historical observed conditions stay distinct and complete, including optional excerpts; caller selection hints are not authenticated runtime facts.
 
-**Context occurrence**: A record of preparing or delivering a packet at a native boundary. Emission does not prove that a model read or followed it.
+**Context manifest**: The metadata-only Source recording selected identities/versions, snapshot, limits and render digest. Released item text, applicability predicates, historical observed conditions and rendered body are not persisted in the manifest.
+
+**Context occurrence**: A scoped record initially prepared, with a guarded operator/adapter report of emitted, unknown or refused delivery. Preparation proves no emission; reported emission proves no native observation, comprehension or following. Native observation remains unavailable.
 
 **Operation receipt**: Durable proof of a particular guarded memory-state commit. It does not certify the correctness of native code execution.
 
