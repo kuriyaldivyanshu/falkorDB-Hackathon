@@ -87,8 +87,10 @@ These transport/demo checkpoints do not complete N03 or N06.
 
 ### 2C. Bounded context (owner A)
 
-- [x] One backend context-selection service behind authenticated HTTP routes;
-  no context CLI command or MCP tool is implemented.
+- [x] One backend context-selection service behind authenticated HTTP routes,
+  `context:prepare` / `context:occurrence` CLI and explicitly enabled MCP context
+  preparation. Default MCP remains six read-only tools; the seventh tool writes
+  preparation audit metadata only. See [context clients](context-client.md).
 - [x] Exact current task requirements and bounded applicable semantic memories/
   episodes; explicit applicability and separate historical observed conditions.
   Candidate procedures and handoffs are excluded; validated reuse stays N04.
@@ -181,9 +183,17 @@ field) and is listed in the review summary for owner B.
   foreign-principal and same-principal/different-token credentials, recorded in
   [A's context verification](assignments/agent-a-n02c-context-03.md). Credential
   seeding is verification setup, not supported issuance.
-- [ ] Extend the HTTP isolation matrix to native enrollment, coordination and
-  privacy/lifecycle operations as they land; add supported scoped credential
-  issuance under N03. SQL-level RLS alone is not service evidence.
+- [x] Supported owner issuance/listing/revocation of dedicated one-project reader
+  credentials; fixed expiry, one-time secrets, additive migration 6 and enforced
+  HTTP reader permissions. [PR #18's record](assignments/agent-a-reader-access-04.md)
+  records upgrade, authorization and controlled final-release checks.
+- [x] Combined CLI/MCP context verification using API-issued readers after A's
+  merge: 70 focused checks plus build, direct write denials, own-occurrence
+  guards, expiry/revocation during release, and established graph outage/recovery
+  without service restart. [PR #17's record](assignments/agent-b-context-client-04.md)
+  distinguishes real-store checks, controlled pauses and authored responses.
+- [ ] Extend HTTP isolation to native enrollment, coordination and privacy
+  operations as they land. SQL-level RLS alone is not service evidence.
 - [ ] Bounded unreferenced-object sweep for source files left by rejected
   appends; only with reconciliation-aware references, never guessed-dangling
   deletion. Owner A, with N05.
@@ -206,6 +216,26 @@ field) and is listed in the review summary for owner B.
 - [ ] **N06** package, clean installation and demo evidence.
 - [ ] **N07** final consistency and release review.
 
+### N03 checkpoint gates
+
+- [x] Project-bound read-only stdio MCP and explicit audited context retrieval,
+  human context clients, preview-only profiles and supported reader access.
+- [ ] Stable owner-approved native enrollment, least-privilege producer access
+  and one-session pinning: [Agent A round 05](assignments/agent-a-native-access-05.md).
+- [ ] Context-only fail-open Codex hook against existing reader APIs:
+  [Agent B round 05](assignments/agent-b-codex-context-hook-05.md). Authored
+  verification qualifies this transport, not live Codex consumption.
+- [ ] Integrate permitted visible capture with the merged enrollment/session
+  contract, stable delivery identity and explicit coverage/gaps. No raw history
+  scanning, hidden reasoning or implicit acceptance.
+- [ ] Separately authorized installed-Codex runtime checks: hook execution and
+  bounded context delivery/spill behavior, optional MCP startup, tools/call host
+  metadata and fork/subagent correlation. Retain unqualified/unsupported states
+  for any boundary not established. Model-issued knowledge mutation stays disabled.
+- [ ] Demonstrate a genuinely separate-session recall workflow on the supported
+  native path, with current authority, qualified conditions and honest delivery
+  evidence. A repeated authored CLI workflow does not satisfy this gate.
+
 ## 7. Integrated checkpoints and current reservation
 
 Follow [the parallel work rulebook](parallel-work-rulebook.md). Earlier planned
@@ -216,11 +246,20 @@ reservations are completed history, not instructions to restart those batches.
   and read-only MCP, merged.
 - PR #14 episode CLI/demo merged before PR #15 backend context. Both are now
   contained in main `924767aa2d409ef62c394c9edb9498c331757158`.
-- Current coordinator checkpoint: [combined integration verification](assignments/coordinator-ab-integration-03.md)
-  on `threadline/coord-ab-integration-03`, worktree
-  `/tmp/threadline-coord-ab-integration-03`. This reconciles current product
-  instructions and verifies B's existing transport/demo against A's backend.
-  It adds no context CLI/MCP/native adapter.
+- PR #16 combined episode/context integration merged. PR #18 reader access then
+  PR #17 context clients merged; current feature checkpoint is
+  `8a83b57ac9cc003e5c86331dcdc9a3d9b14193d4`. The final merged tree is identical
+  to PR #17's 70-check integration tree and the coordinator main build passed.
+- [Round 05 preparation and retirement](assignments/coordinator-n03-round05.md)
+  reconciles this checklist and retires five merged worktrees and ten containers.
+  Their data volumes, credential roots, external evidence and branches remain
+  recoverable; this is resource retirement, not privacy erasure.
+- Next reservations: A `threadline/a-native-access-05` at
+  `/tmp/threadline-a-native-access-05`; B `threadline/b-codex-context-hook-05` at
+  `/tmp/threadline-b-codex-context-hook-05`. Workers create these only after the
+  preparation PR merges, from the freshly resolved main SHA. A owns backend/shared
+  enrollment and migration 7; B owns CLI/context-hook docs and consumes only
+  the already merged reader/context APIs. No unpublished A contract is B's input.
 
 The next feature assignments require fresh branches/worktrees from updated main.
 N03–N07 remain incomplete. The coordinator owns checklist updates, serial
