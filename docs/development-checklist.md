@@ -21,10 +21,12 @@ One editor owns shared files per parallel batch.
   restricted role, owner bootstrap, project association, source append/dedupe/
   mismatch refusal, inspect/read/range, history paging, graph-outage history.
   Local evidence: `docs/evidence/2026-10-17-n01-storage-foundation.md`.
-- [ ] **N00 native probe** — Codex version/configuration/hooks/MCP seam observed
-  (N03, owner B).
+- [x] **N00 offline native probe** — installed Codex configuration/schema and
+  MCP registration inspected; pure adapter modules and preview qualified in
+  [the native record](assignments/agent-b-codex-qualification.md). Hook runtime,
+  context delivery and native identity remain unqualified under N03.
 
-## 2. N02 — graph memory and bounded context (current)
+## 2. N02 — implemented graph memory and backend context
 
 Dependency for every N02 batch: the verified N01 storage foundation (and, for
 2B/2C, the verified 2A worker). Implement in N02A → N02B → N02C order, leaving a
@@ -60,45 +62,60 @@ buildable result at each boundary.
 
 ### 2B. Canonical memory and task services (owner A)
 
-- [ ] Task create; task requirements bound to stable Memory identities.
-- [ ] Semantic propose → explicit human accept → current query.
-- [ ] Single accepted CURRENT version; correction supersedes without rewriting
-  observation bytes; explicit contradictions.
-- [ ] Observed episodes with honest outcomes; procedures with prerequisites and
-  supporting evidence; no inferred root cause.
-- [ ] Expected-version guards; inspectable operation receipts.
-- [ ] `observed_under` kept separate from `applies_when`.
+- [x] Task create; task requirements bound to stable Memory identities.
+- [x] Semantic propose → explicit human accept → current query.
+- [x] Single accepted CURRENT version; correction supersedes without rewriting
+  observation bytes; conflicting expected-head updates refuse.
+- [ ] Reverify declared contradiction edges on the current combined build;
+  declaration storage is implemented, but not exercised by this integration run.
+- [x] Episode admission with server-resolved precision and honest outcomes;
+  procedures with prerequisites/supporting evidence and human review remain
+  candidates. Validation is still N04; no inferred root cause.
+- [x] Expected-version guards; inspectable operation receipts.
+- [x] `observed_under` kept separate from `applies_when`.
 - Acceptance: source → proposal → explicit human acceptance → current query;
   correction replaces current authority without rewriting observation bytes;
   same-base conflicting updates have one winner; unavailable/unauthorized
   sources cannot support released memory; incompatible prerequisites exclude
   procedures and unknown outcomes remain unknown.
 
+Merged verification: [semantic/task record](assignments/agent-a-n02b-semantic-memory.md)
+and [episodes/procedures record](assignments/agent-a-n02b-evidence-02.md). The human
+memory CLI and read-only MCP are recorded in [PR #13's assignment](assignments/agent-b-mcp-read-02.md);
+the episode command/demo are recorded in [PR #14's assignment](assignments/agent-b-episode-demo-03.md).
+These transport/demo checkpoints do not complete N03 or N06.
+
 ### 2C. Bounded context (owner A)
 
-- [ ] One context-selection service shared by transports.
-- [ ] Exact current task requirements; bounded applicable episodes/procedures/
-  decisions; explicit applicability predicates.
-- [ ] Current source visibility/availability rechecked; mandatory authority
+- [x] One backend context-selection service behind authenticated HTTP routes;
+  no context CLI command or MCP tool is implemented.
+- [x] Exact current task requirements and bounded applicable semantic memories/
+  episodes; explicit applicability and separate historical observed conditions.
+  Candidate procedures and handoffs are excluded; validated reuse stays N04.
+- [x] Current source visibility/availability rechecked; mandatory authority
   exact; explicit refusal on mandatory overflow.
-- [ ] Metadata-only context manifest (a `context_manifest` Source) and truthful
+- [x] Metadata-only context manifest (a `context_manifest` Source) and truthful
   occurrence state; no persisted rendered plaintext.
-- [ ] Limits: 4 KiB default / 8 KiB hard body, ≤8 optional memories, ≤64 source
+- [x] Limits: 4 KiB default / 8 KiB hard body, ≤8 optional memories, ≤64 source
   references.
 - Acceptance: a packet contains exact current obligations and applicable
   sourced lessons within its bounds; changing freshness alone retains the UTC
   lesson; mandatory overflow/incomplete authority refuses; occurrence precision
   is honest; released context cannot reveal text from an unreadable source.
+  Merged verification: [PR #15's assignment](assignments/agent-a-n02c-context-03.md)
+  and [context API](context.md). Review corrections use advancing expiry checks,
+  preserve qualifications within the body budget and persist no focus digest.
+  Occurrences are prepared or self-reported; native observation remains unsupported.
 
 ## 3. Readiness corrections (owner A)
 
-- [x] `durableMemory` no longer derives from SQL/graph connectivity: it stays
-  `false` until accepted-memory services exist, and `graphAdmission` reports the
-  source-backed admission path (SQL + live graph probe + running worker).
+- [x] `durableMemory` requires the implemented accepted-memory path plus usable
+  SQL, the live graph probe and running worker; `graphAdmission` reports the
+  source-backed admission path. An outage removes these guarantees.
 - [x] SQL connectivity, schema readiness, source-history availability, graph
   connectivity (live probe), worker/backlog state and implemented capabilities
-  are reported separately; qualified native capabilities remain `blocked` with
-  their reason.
+  are reported separately; unsupported/unqualified native operations retain
+  their explicit capability reasons.
 
 ## 4. Memory-foundation review corrections (owner A)
 
@@ -160,9 +177,13 @@ field) and is listed in the review summary for owner B.
 
 ## 5. Known follow-ups
 
-- [ ] Service-level second-tenant and second-principal isolation over HTTP via an
-  isolated authorized credential path (SQL-level RLS alone is not service
-  evidence). Owner A, before N05.
+- [x] Context HTTP isolation with real synthetic reader, foreign-tenant,
+  foreign-principal and same-principal/different-token credentials, recorded in
+  [A's context verification](assignments/agent-a-n02c-context-03.md). Credential
+  seeding is verification setup, not supported issuance.
+- [ ] Extend the HTTP isolation matrix to native enrollment, coordination and
+  privacy/lifecycle operations as they land; add supported scoped credential
+  issuance under N03. SQL-level RLS alone is not service evidence.
 - [ ] Bounded unreferenced-object sweep for source files left by rejected
   appends; only with reconciliation-aware references, never guessed-dangling
   deletion. Owner A, with N05.
@@ -185,11 +206,23 @@ field) and is listed in the review summary for owner B.
 - [ ] **N06** package, clean installation and demo evidence.
 - [ ] **N07** final consistency and release review.
 
-## 7. Parallel assignment reservations
+## 7. Integrated checkpoints and current reservation
 
-Follow [the parallel work rulebook](parallel-work-rulebook.md). The coordinator owns this registry/checklist while workers edit their separate assignment result records. These reservations are **PLANNED**; dispatch them only after the rulebook and assignments are merged to main. Resolve and record the then-current full `origin/main` SHA, not the older memory-foundation checkpoint.
+Follow [the parallel work rulebook](parallel-work-rulebook.md). Earlier planned
+reservations are completed history, not instructions to restart those batches.
 
-- **A — `a-n02b-semantic-01`:** [full prompt/contract](assignments/agent-a-n02b-semantic-memory.md). One semantic-memory/task checkpoint within N02B; backend/shared source and explicitly listed core docs. Branch `threadline/a-n02b-semantic-01`; worktree `/tmp/threadline-a-n02b-semantic-01`. N02C, episodes/procedure validation and native work remain later assignments.
-- **B — `b-codex-qualification-01`:** [full prompt/contract](assignments/agent-b-codex-qualification.md). Installed Codex qualification plus pure native-edge preparation; new `cli/src/codex` modules, preview assets and its tracked integration document only. Branch `threadline/b-codex-qualification-01`; worktree `/tmp/threadline-b-codex-qualification-01`. Backend connection, native installation/inference and production CLI/MCP wiring are later assignments.
+- PR #10 semantic/task services and PR #9 offline native qualification merged.
+- PR #12 episode/procedure admission and storage safety, then PR #13 human CLI
+  and read-only MCP, merged.
+- PR #14 episode CLI/demo merged before PR #15 backend context. Both are now
+  contained in main `924767aa2d409ef62c394c9edb9498c331757158`.
+- Current coordinator checkpoint: [combined integration verification](assignments/coordinator-ab-integration-03.md)
+  on `threadline/coord-ab-integration-03`, worktree
+  `/tmp/threadline-coord-ab-integration-03`. This reconciles current product
+  instructions and verifies B's existing transport/demo against A's backend.
+  It adds no context CLI/MCP/native adapter.
 
-Root manifests/lockfiles/build/Compose configuration, the rulebook and the shared checklist are frozen to the workers for this round. A and B cannot write each other's paths or use each other's runtime resources. They may verify/commit/push/open PRs independently after their gates; one integrator handles reviews, main updates and merges serially. A completed PR's worktree receives only review/base-update fixes, then is retired after merge/recovery checks. The next checkpoint starts fresh.
+The next feature assignments require fresh branches/worktrees from updated main.
+N03–N07 remain incomplete. The coordinator owns checklist updates, serial
+integration and retirement; workers retain their own result records and do not
+recycle completed branches for later milestones.
