@@ -149,8 +149,8 @@ Implementation and verification pending.
 
 ### Implemented checkpoint
 
-Status: checkpoint verified; preparing normal feature commits and one PR. The
-coordinator retains merge and retirement ownership. The baseline remains
+Status: **checkpoint-ready and PR-open**. [PR #15](https://github.com/kuriyaldivyanshu/falkorDB-Hackathon/pull/15)
+is open to main. The coordinator retains merge and retirement ownership. The baseline remains
 `106985866429689faf2e166eb89c5d225fbac6d3`; bootstrap commit is `ab798c9`.
 Implementation/source head and final remote/PR confirmation are recorded below
 when those actions complete.
@@ -346,3 +346,36 @@ the service normally. It remains available for review. The worktree's ignored
 node_modules/build output and all synthetic source/history/graph data remain.
 Previous assignments, their databases/volumes and coordinator/native installations
 were not borrowed or retired. No main merge, force push or cleanup is authorized.
+
+
+### Commit, remote and PR confirmation
+
+- Bootstrap: `ab798c9bdd5b392ca6d07e61e058af686e33f6d6`.
+- Verified implementation/source head:
+  `bab8653c439ad9ef53c493aa8592621df74c4bb3`
+  (`Add graph-backed bounded context preparation`). The final source digests are
+  retained at `/tmp/threadline-a-n02c-context-data-03/verified-source-digests.json`.
+- Explicit push:
+  `git push -u origin HEAD:refs/heads/threadline/a-n02c-context-03` succeeded.
+  `git ls-remote` read back that exact implementation SHA. The upstream is
+  `origin/threadline/a-n02c-context-03`, never main.
+- Created exactly one PR through the authenticated GitHub browser session:
+  [PR #15: Add bounded context over canonical FalkorDB memory](https://github.com/kuriyaldivyanshu/falkorDB-Hackathon/pull/15).
+  GitHub visibly confirms open status, base `main`, head
+  `threadline/a-n02c-context-03`, and the verified implementation commit. No
+  GitHub CLI, borrowed API credential, probe issue or merge was used.
+- The prepared multiline body and screenshot proof are outside the repository:
+  `/tmp/threadline-a-n02c-context-03-checks/pr-body.md` and `pr-15.png` in that
+  same directory. This final result-only handoff is committed/pushed on the
+  same branch; it changes no verified source. The final branch tip is reported
+  by the completion handoff and PR, rather than inserting a commit's own hash
+  into its own content.
+- Full-base ownership/frozen-path checks, generated-credential scans and
+  plaintext-free diagnostic checks passed. The checked source did not change
+  after final verification. Only this record changed after the implementation
+  commit; document structure/link/fence and diff checks were repeated for it.
+
+Next coordinator action: review PR #15, reconcile the explicitly requested frozen
+shared documentation, integrate serially with other work, then retire only after
+merge/recovery gates. Keep the assigned worktree, service and stores available
+until that review is complete. This checkpoint is not merged or retired.
