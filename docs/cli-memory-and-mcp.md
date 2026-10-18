@@ -19,11 +19,12 @@ session, and neither writes memory on a model's behalf.
 
 Semantic memory, episodes and procedural candidates are implemented (see
 [docs/memory-kinds.md](memory-kinds.md) for the memory-kind contracts and
-`POST /v2/memories/episodes`). Validated procedural reuse, bounded context,
-coordination claims, handoffs, native capture, native session enrollment and
-strong native identity are **not** implemented and are reported as unavailable by
-`threadline capabilities`. The MCP tool-call identity path is still unqualified,
-which is one reason writes stay human-only.
+`POST /v2/memories/episodes`). Authenticated backend context preparation and
+occurrence reporting are also implemented; see [the context API](context.md).
+There is no context CLI command or MCP tool yet. Validated procedural reuse,
+coordination claims, handoffs, native capture and native session enrollment
+remain unavailable; strong native identity remains unqualified. The MCP tool-call
+identity path is still unqualified, which is one reason writes stay human-only.
 
 ## One complete workflow
 
@@ -352,11 +353,15 @@ paths, and the exact command to run the server by hand.
 - MCP `tools/call` host metadata identifying a conversation remains
   **unqualified**, as does fork/subagent identity correlation. Until that is
   observed, model-issued writes stay disabled and this server stays read-only.
-- Context preparation, occurrence recording and session enrollment are not
-  implemented; there is no `context.prepare` tool or command here.
+- Backend context preparation and occurrence reporting are implemented through
+  authenticated HTTP routes described in [the context guide](context.md). There
+  is no `context.prepare` CLI command or MCP tool here, and native delivery is
+  unqualified. Session enrollment remains unavailable.
 - Claims and handoffs remain unavailable operations.
-- A verified second-credential path over HTTP is still a follow-up for the
-  backend owner; this checkpoint does not close it.
+- Context HTTP isolation is verified with real synthetic reader/foreign-scope
+  credentials. Supported scoped credential issuance and isolation coverage for
+  later native, coordination and privacy operations remain open; synthetic SQL
+  provisioning used in verification is not a supported operator command.
 
 ### Procedure and recall limits
 

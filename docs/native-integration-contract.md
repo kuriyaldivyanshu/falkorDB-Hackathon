@@ -21,8 +21,11 @@ Unchanged by `b-mcp-read-02` after merging `a-n02b-evidence-02`: episode
 admission and procedural candidates with human review now exist in the backend,
 and they change nothing here. `memory:propose`/`memory:accept` carry a procedure
 through the human-reviewed path and stop at `procedureState: "candidate"`;
-validated reuse, bounded context, native capture and strong native identity
-remain unavailable, and this server stays read-only.
+validated reuse, native capture and strong native identity remained unavailable
+at that checkpoint, and this server stays read-only. Since the later N02C merge,
+[backend context preparation and occurrence reporting](context.md) are implemented.
+Context CLI/MCP adapters and qualified native context delivery remain unavailable;
+backend support does not qualify a native boundary.
 
 ## Evidence classes
 

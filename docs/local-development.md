@@ -154,14 +154,23 @@ How the pieces relate:
 
 Operation progress is observable through `GET /v2/operations/:operationId?projectId=<uuid>`. `pending`, `committed` and `rejected` are distinct, and the refusal code names the reason (`version_not_proposed`, `expected_head_conflict`, `task_revision_conflict`, `requirement_already_bound`, `source_unavailable`, …). `threadline status` reports the backlog counts and whether durable memory is currently claimed.
 
-## Unavailable until their batch
+## Backend context and remaining gaps
 
 Episode admission and procedural candidates with human review are implemented;
-see [docs/memory-kinds.md](memory-kinds.md). Still reported unavailable by
-`threadline capabilities`, each with the batch that delivers it: validated
-procedural reuse, bounded context preparation and occurrence recording, claims
-and handoffs, native enrollment and capture, history import, deletion jobs and
-export. There is no hidden legacy command path.
+see [docs/memory-kinds.md](memory-kinds.md). Authenticated bounded context
+preparation and occurrence reporting are now supported by the backend:
+
+```text
+POST /v2/context
+POST /v2/context/occurrences
+```
+
+[The context API guide](context.md) documents scoped idempotency, selection hints,
+exact mandatory authority, byte limits, metadata-only manifests and guarded
+self-reported occurrences. These endpoints have no CLI command or MCP tool yet;
+`native_observed` remains unsupported. Still reported unavailable by
+`threadline capabilities`: validated procedural reuse, claims and handoffs, native
+enrollment and capture, history import, deletion jobs and export. There is no hidden legacy command path.
 
 `threadline memory:episode:record --input <file|-> [--wait]` records the
 existing episode contract, including a caller-provided idempotency key and an
@@ -176,7 +185,8 @@ precision and acceptance. There is still no procedure-validation command.
 Follow [the reproducible memory demo](memory-demo.md) for a public authored
 600 → 60 second correction, an actually executed fixture check, episode
 provenance, an accepted procedural candidate and restart/MCP recall. It uses
-implemented baseline APIs without a Codex inference call or bounded context.
+implemented memory APIs without a Codex inference call. The walkthrough does
+not exercise the separately implemented backend context API.
 
 ## Native qualification
 

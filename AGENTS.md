@@ -2,7 +2,7 @@
 
 ## Current direction and first action
 
-Threadline is a Codex-first local memory and coordination package for FalkorDB Track 2. Codex owns inference, tools, authentication and execution. Owned execution has been removed. Source storage and graph delivery are verified; accepted-memory/context services and native Codex qualification remain incomplete.
+Threadline is a Codex-first local memory and coordination package for FalkorDB Track 2. Codex owns inference, tools, authentication and execution. Owned execution has been removed. Source storage, graph delivery, accepted-memory/task services, episode CLI, read-only MCP and backend bounded context are implemented. Context CLI/MCP adapters, native Codex qualification and later coordination/privacy work remain incomplete.
 
 Before source work, read [docs/development-checklist.md](docs/development-checklist.md), select the next incomplete batch and use its file ownership and completion criteria. Before parallel work, branch/PR operations or worktree cleanup, follow [docs/parallel-work-rulebook.md](docs/parallel-work-rulebook.md) and the tracked assignment contract. Read [CONTEXT.md](CONTEXT.md) when changing domain contracts. The root README describes the product and actual supported commands; the development checklist records implementation status.
 
@@ -27,7 +27,7 @@ Capture only permitted visible records. Use authored/synthetic verification data
 
 ## Development and verification
 
-Use Node.js >=22 and npm. Read actual package scripts before running them. `npm run build` is the workspace build; run it after source/build-configuration changes. Current setup/start scripts target the memory service; capabilities distinguish source storage and graph admission from unimplemented accepted memory and native integration.
+Use Node.js >=22 and npm. Read actual package scripts before running them. `npm run build` is the workspace build; run it after source/build-configuration changes. Current setup/start scripts target the memory service; capabilities distinguish implemented source, memory, task and backend context services from unavailable native integration and later features.
 
 Use focused manual or temporary checks outside the repository for authorized implementation verification. Permanent package test suites were removed at the user's request. For documentation changes, check local links, headings, fences and consistency. Report exactly what ran, passed, failed and remains unverified.
 

@@ -277,8 +277,10 @@ is exposed by `supersedesVersionId`, and its immutable canonical intent Source,
 original evidence and old acceptance operation remain inspectable with the
 implemented commands above. No proposed historical-version endpoint is used.
 The old episode still records `maxAgeSeconds: "600"`. Its CSV-format lesson is
-separate from the changed freshness requirement; applicability-aware context
-selection is a separate feature, unavailable on this merged baseline.
+separate from the changed freshness requirement. Applicability-aware selection
+is implemented by [the backend context API](context.md); this walkthrough uses
+the existing CLI/MCP reads and does not exercise that API or prove native context
+delivery.
 
 ## 5. Human-accept a procedural candidate
 
@@ -403,7 +405,8 @@ Keep the created resources available for review when working under an assignment
 the coordinator owns retirement. Ordinary users should explicitly retire only
 their own named containers/volumes and data root after preserving useful results.
 
-The remaining native identity/capture gates, bounded context, validated reuse,
+The backend context API is documented separately in [the context guide](context.md)
+and is not exercised here. Native identity/capture, validated reuse,
 coordination, retention/erasure and package publication are not established here.
 See [the native contract](native-integration-contract.md) and
 [the development checklist](development-checklist.md). N03 and N06 remain open.
