@@ -13,7 +13,15 @@ The defect is authored demonstration data, not an observed mistake by a model. T
 
 ## How to use it
 
-Copy the seed into an explicitly selected native-agent demo worktree. Run Codex there under its normal permissions. Record actual observed failures/outcomes as Sources, accept the requirement change explicitly, then start a distinct session and inspect which current memory it receives.
+For the implemented baseline, follow the [human memory walkthrough](../../docs/memory-demo.md):
+copy the seed into a disposable directory, run one explicitly selected public
+case and capture the actual stdout, stderr and exit status as evidence. The
+service does not independently check those recorded bytes. This demonstrates
+persistence and read-only MCP recall, not model use.
+
+For a later separately authorized native demonstration, copy the seed into an
+explicitly selected native-agent demo worktree and run Codex there under its
+normal permissions. Record actual observed failures/outcomes as Sources, accept the requirement change explicitly, then start a distinct session and inspect which current memory it receives.
 
 Keep this seed unchanged while a demo copy is edited. A generic implementation may already handle the new freshness value; demonstrate current checked output without inventing a second code change.
 

@@ -13,6 +13,7 @@ import {
   operationViewSchema,
   parseContract,
   proposeMemoryInputSchema,
+  recordEpisodeInputSchema,
   safeParseContract,
   requireMemoryInputSchema,
   sourceRangeSchema,
@@ -29,6 +30,7 @@ import {
   type MemoryView,
   type OperationView,
   type ProposeMemoryInput,
+  type RecordEpisodeInput,
   type RequireMemoryInput,
   type SourceRange,
   type SourceView,
@@ -61,6 +63,7 @@ export interface MemorySurface {
   inspectTaskRequirements(projectId: string, taskId: string): Promise<TaskRequirementsView>;
   bindTaskRequirement(input: RequireMemoryInput): Promise<TaskOperationResult>;
 
+  recordEpisode(input: RecordEpisodeInput): Promise<MemoryOperationResult>;
   proposeMemory(input: ProposeMemoryInput): Promise<MemoryOperationResult>;
   acceptMemory(input: AcceptMemoryInput): Promise<MemoryOperationResult>;
   correctMemory(input: CorrectMemoryInput): Promise<MemoryOperationResult>;
@@ -140,6 +143,12 @@ export function createMemorySurface(client: ApiClient): MemorySurface {
       // again, and naming it once here keeps the two routes' contracts aligned.
       const payload = await client.post(ROUTES.taskRequirements(parsed.taskId), parsed);
       return parseContract(taskOperationResultSchema, payload, 'requirement binding result');
+    },
+
+    async recordEpisode(input) {
+      const parsed = parseInput(recordEpisodeInputSchema, input, 'episode recording');
+      const payload = await client.post(ROUTES.memoryEpisodes, parsed);
+      return parseContract(memoryOperationResultSchema, payload, 'episode recording result');
     },
 
     async proposeMemory(input) {
