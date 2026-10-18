@@ -145,7 +145,8 @@ Keep worktree/resources for coordinator review and retirement.
 Bootstrap: clean coordinator main and fetched origin/main both matched the base;
 branch/path/data/check roots absent, reserved ports available and no Docker
 prefix collision. Worktree verified clean at the base, without upstream.
-Implementation and verification pending.
+At bootstrap, implementation and verification were pending; the completed
+checkpoint and verification are recorded below.
 
 ### Implemented checkpoint
 

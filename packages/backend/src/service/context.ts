@@ -286,7 +286,7 @@ export function createContextService(deps: ContextServiceDeps): ContextService {
             const manifest = parseContract(contextManifestSchema, {
               manifestVersion: CONTEXT_MANIFEST_SCHEMA_VERSION, rendererVersion: CONTEXT_RENDERER_VERSION,
               projectId: parsed.projectId, taskId: parsed.taskId ?? null, taskRevision: task?.revision ?? null,
-              focusDigest: parsed.focus === undefined ? null : sha256Hex(parsed.focus), ...before,
+              focusDigest: null, ...before,
               bodyBytes: Buffer.byteLength(body), maxBodyBytes: parsed.maxBodyBytes,
               items: items.map(metadata), omissions, renderDigest: sha256Hex(body),
               selectedSourceIds: sourceIds(items), selectionPolicyVersion: 1,

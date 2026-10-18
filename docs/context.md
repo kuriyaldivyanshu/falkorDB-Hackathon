@@ -209,7 +209,7 @@ would accidentally retain newly added plaintext-bearing qualification fields.
 The manifest records selected stable identities/versions, task revision,
 representation and text-byte counts, complete source refs, aggregate omissions,
 limits, selection/renderer versions, render digest, graph epoch/head and privacy
-revision. Focus is represented only by a digest. Hint values, request text,
+revision. New manifests store `focusDigest: null`. Hint values, request text,
 statement text, applicability predicates, historical observation conditions and
 rendered plaintext are absent from manifest bytes and items.
 The SQL preparation request is represented only by its digest. Operation payloads
