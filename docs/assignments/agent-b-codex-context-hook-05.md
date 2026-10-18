@@ -207,8 +207,193 @@ no A enrollment APIs in this checkpoint even if A merges first.
 
 ## Result record
 
-Reserved, not started. Record the literal worker base, branch/worktree/clean
-baseline, implementation, changed paths, exact checks/limits, final head/remote,
-real PR URL and retained resources. N03 remains incomplete: connecting permitted
-capture to enrollment and separately authorized native runtime qualification
-are later integration work. The command is a context adapter, not a harness.
+### Baseline and scope
+
+Checkpoint implemented and verified; delivery details follow below. N03 remains
+incomplete. PR #19 merged as literal base
+`e5b2e73598eaf6eb52abb01d26d35f772c8d7712`. The worker fetched origin, verified
+the clean main checkpoint containing this tracked contract and recorded that
+full SHA in its transcript before source edits. The reserved path/local branch
+were absent; the fresh branch/worktree started clean at that literal SHA with
+no upstream. The remote feature name was confirmed absent before delivery.
+
+Branch: `threadline/b-codex-context-hook-05`; canonical worktree:
+`/private/tmp/threadline-b-codex-context-hook-05`. Remote:
+`git@github-personal:kuriyaldivyanshu/falkorDB-Hackathon.git`; PR base main.
+Own npm ci succeeded without changing dependencies/lockfile. Workspace build
+passed after each source correction, including the final command-recognition
+change. Node v22.16.0/npm 10.9.2 were used for workspace install/build; authorized
+external check processes use Node v23.11.0. Both satisfy the Node >=22 requirement.
+
+Changed only allowed CLI source, README/current client guides, assets README,
+new `docs/codex-context-hook.md`, new context-hook preview assets and this record.
+Backend/shared source, domain contracts, migrations, dependency/build files,
+fixtures, historical qualification assets and the shared checklist are unchanged.
+No unpublished A APIs, SQL-seeded readers or peer runtime data were used.
+
+### Implemented behavior
+
+- Dedicated fail-open command recognition precedes normal human parsing,
+  including malformed later flags when --home precedes the hook command.
+  SessionStart/UserPromptSubmit alone retrieve context; ordinary failures exit
+  zero with one bounded safe diagnostic and no context before output.
+- Explicit project UUID and absolute home/reader/workspace/selector paths;
+  strict shared-selector projection with a 64 KiB bound. Asynchronous stdin
+  uses the existing 8 MiB hook cap. Only event name and canonical cwd guard are
+  consumed from envelopes. No prompt/tool/transcript capture or native-history
+  read occurs. All preparation nativeSessionId values are null.
+- Descriptor-checked nonblocking regular-file reads, final-component symlink
+  refusal, canonical directory containment and no owner credential fallback.
+  The hook reads only the non-secret client host/port projection from the
+  selected installation config (existing host/port environment overrides
+  apply); it avoids the synchronous backend config/secrets loader.
+- One random invocation UUID derives stable in-process prepare/report keys;
+  separate hook processes can create separate audits. Human keys/exit behavior
+  remain unchanged. No automatic retries were added.
+- One 2,000 ms default deadline (250–5,000 configurable) covers input, files,
+  preparation, stdout/reporting, with cancellation and a 150 ms report reserve.
+  HTTP reply consumption is also cancelled and capped at 1 MiB. A completed
+  packet is withheld if time expired before output. OS/runtime startup and
+  uninterruptible filesystem failure limits are explicit in the guide.
+- Shared response validation plus project/task/body-budget/UTF-8/digest checks;
+  exact backend body and qualifications, one JSON line, overflow refusal only.
+  A successful stdout callback alone permits same-reader/expected-prepared
+  adapter_report emission. Partial/broken output cannot report emitted; unknown
+  is reported when possible. Failed post-output reporting remains explicitly
+  uncertain. native_observed stays unsupported.
+- Explicit --context-hooks preview owns only the two implemented events,
+  quotes the actual command/flags, uses additionalContextLimit zero and a longer
+  host timeout, and selects the same reader file for MCP. Default six tools and
+  independent --context-tools seventh tool remain unchanged. Ownership/collision
+  guards remain; the new hook route is labelled unqualified. Preview writes no
+  native files/trust. The guide includes an exact later synthetic probe with
+  separate installation, trust and inference authorization gates.
+
+### Observed verification
+
+Temporary scripts and safe logs are retained under
+`/tmp/threadline-b-codex-context-hook-05-checks`; no permanent tests were added.
+Final relevant runs passed, with evidence classes separated:
+
+- `npm ci` and `npm run build`: passed. Final build followed the last source
+  change. Build outputs/dependencies stay ignored and worktree-local.
+- `demo.sh`: documented memory-demo sections 2–5 passed against fresh isolated
+  stores: human proposal/acceptance/binding, actually executed public fixture
+  check and qualified episode, 600→60 correction, preserved old provenance and
+  accepted procedural candidate. No service restart/native inference was
+  included in that script.
+- `verify.mjs` (`verify-delivery.log`): **13 grouped checks passed** on the final
+  hook source. Both authored events returned one exact JSON line containing
+  current 60-second authority and distinct historical 600-second/applicability
+  qualifications. Real SQL audits showed null native identity and adapter_report
+  emission. Separate processes had different invocation keys. Malformed/8 MiB
+  overflow/mismatched/unsupported events, unknown/repeated/native flags, malformed
+  flags after a prefixed home, invalid timeout ranges, missing/relative/foreign
+  configuration, sibling/prefix/symlink escape and strict selector overrides
+  withheld context. FIFO/directory inputs, stalled stdin, injected stalled
+  preparation/reporting, real child EPIPE and post-output reporting failure
+  behaved safely. Actually API-issued expired/revoked readers refused. Every SQL
+  table and reader-produced source was inspected for authored raw markers;
+  only context_manifest sources/audits were added, with no rendered text,
+  qualifications, native refs or standalone focus digest. Human usage still
+  exited 2. Simulated fetch stalls are labelled injected, not network proof.
+- `remaining.mjs` (`remaining.log`): **8 additional groups passed**. Real
+  unaccepted required authority and mandatory multibyte overflow withheld.
+  After an established graph read, stopping only B's graph container withheld
+  context while SQL history stayed readable; the same backend PID **83371**
+  survived and hooks recovered after that container restarted. Controlled
+  Writable callbacks confirmed SQL stayed prepared before callback success and
+  emission was requested afterward. Partial writes requested unknown, stalled
+  stdout was destroyed at the deadline, completed preparation past deadline
+  emitted nothing, broken stderr stayed handled, and exact 4/8 KiB multibyte
+  renderer boundaries plus one-byte overflow passed. Controlled streams are
+  adapter evidence, not Codex behavior.
+- `preview-mcp.mjs` (`preview-mcp.log`): **4 groups passed**, including all four
+  hook/tool opt-in combinations, exact flags/events/timeouts, TOML parsing,
+  deterministic output, no bearer, absent/owned/edited/foreign classification,
+  shell/TOML metacharacter path roundtrips and invalid path/project/budget guards.
+  The real preview left foreign targets byte-identical and wrote no manifest.
+  Actual reader-bound authored stdio MCP initialization/list/call retained six
+  default read-only tools and only the explicit seventh preparation tool, with
+  real current authority/qualified history and preparation-only metadata.
+- `network.mjs` (`network.log`): **4 actual HTTP fault groups passed** on B's
+  reserved HTTP port. The reidentified normal B service was stopped only for
+  this separate transport experiment. Temporary HTTP responses stalled headers
+  or body, exceeded 1 MiB, violated the result contract, failed a report, or
+  stalled a post-output report. Processes exited within the 500 ms handler
+  budget plus measured startup tolerance, with exact output or no output and
+  truthful uncertainty. This uses simulated HTTP replies, not fabricated
+  persistence evidence. Duplicate home refused. The normal service was restored
+  afterward as PID **95356**; this restart was separate from the earlier
+  same-PID graph recovery evidence.
+- `files.mjs` (`files.log`): **4 groups passed**. Installation config FIFO,
+  directory, oversize, final symlink and malformed JSON refused promptly.
+  Empty selectors padded to exactly 64 KiB succeeded with the default budget.
+  Empty/whitespace/oversize/symlink credentials and invalid UTF-8 stdin withheld.
+  Backend logs contained no authored private input marker.
+
+Full-base review passed for all 15 changed/new paths: allowlist/frozen-path
+checks, generated-bearer/database-secret scan, one-H1/heading/fence/local-link
+checks, exact new preview asset reproduction and git diff --check. Six external
+verification log digests are retained in SHA256SUMS.txt.
+
+Total: **33 grouped focused checks**, plus the documented synthetic owner
+workflow, own install/build and documentation/scope checks. Group counts do not
+represent independent native sessions or model agents.
+
+Two initial problems are recorded rather than hidden: PostgreSQL's temporary
+first-start instance briefly passed readiness then restarted, interrupting role
+creation; the resume script reasserted the same named ports/mounts and completed
+setup without reset. The first real EPIPE check found a product listener-order
+bug: write callbacks can precede the error event, and close can precede that
+queued error after explicit destruction. Scoped listeners now survive through
+close and the next event-loop boundary; the reproducer and full matrix passed.
+The same ordering is handled for diagnostics. A temporary verifier was made
+rerunnable with fresh reader output paths and preexisting directory checks.
+No remaining product failure was observed.
+
+### Reference evidence and limits
+
+Official hooks documentation at https://learn.chatgpt.com/docs/hooks was fetched
+on 18 October 2026. Read-only snapshot inspection covered hooks/schema.rs,
+command dispatch/additional-context limits and the core MCP metadata constructor.
+Snapshot metadata IDs were not promoted to native binding.
+
+Installed offline evidence: `/opt/homebrew/bin/codex --version` reported
+`codex-cli 0.163.0`; `codex app-server generate-json-schema --out <checks>/installed-schema`
+with an isolated CODEX_HOME target produced HooksListResponse schema containing
+sessionStart/userPromptSubmit and the description that zero disables spilling.
+A PATH-alias warning stated that the isolated home did not exist; schema
+emission succeeded. No auth, native configuration/trust installation, transcript
+read, hooks/list execution or inference occurred. Historical qualification files
+remain byte-identical to the base.
+
+No actual Codex hook execution, additionalContext delivery/spilling, model
+consumption, strong identity, fork/subagent correlation, enrollment or capture
+was qualified. External termination/OS failure and unreadable/hung storage below
+the OS interface remain process limits. Reader kind is an operational issuance
+requirement because the existing API has no independent introspection endpoint.
+A report lost after stdout may already have committed; diagnostics preserve
+that uncertainty. No occurrence MCP or accepted-knowledge mutation was added.
+
+### Retained resources and coordinator handoff
+
+Fresh resources retained for review:
+
+- Containers `threadline-b-codex-context-hook-05-postgres` (55473) and
+  `threadline-b-codex-context-hook-05-graph` (56473), loopback only; volumes with
+  the same prefix ending pg-data/graph-data.
+- Database `threadline_b_hook_05`, schema threadline_memory, restricted role
+  threadline_b_hook_app, fresh project graphs and sources under
+  `/tmp/threadline-b-codex-context-hook-data-05/home`.
+- Normal service HTTP 47863, restored PID 95356 (reidentify before control);
+  private owner/database/issued-reader files remain only under the assigned
+  data root. Temporary verifiers and the HTTP fault server have exited.
+- Worktree and external scripts/logs/schema metadata retained. No peer stores,
+  real native home, trust, authentication or inference resources were touched.
+
+Coordinator next: review this PR, choose serial integration order, merge current
+main normally into this branch if needed and rerun affected reader/hook/MCP
+checks before integration. Agent B depends only on merged PR #19 and the prior
+reader/context surface; no A enrollment dependency exists. The coordinator
+alone updates the checklist and retires resources. Do not mark N03 complete.

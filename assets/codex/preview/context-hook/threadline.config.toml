@@ -1,0 +1,27 @@
+# threadline:managed v1
+# Generated preview only: this build does not install Codex configuration.
+# Select with: codex --profile threadline
+# Explicit context-only hooks plus the independently selected MCP surface.
+# Context-only hooks: no capture, enrollment or native identity.
+
+[mcp_servers.threadline]
+command = "/usr/local/bin/node"
+args = ["/opt/threadline/packages/cli/dist/index.js", "mcp", "--home", "/Users/example/.threadline", "--project", "00000000-0000-4000-8000-000000000001", "--token-file", "/Users/example/.threadline/project-reader.token"]
+required = false
+startup_timeout_sec = 10
+tool_timeout_sec = 30
+env = { THREADLINE_HOME = "/Users/example/.threadline" }
+
+[[hooks.SessionStart]]
+[[hooks.SessionStart.hooks]]
+type = "command"
+command = "/usr/local/bin/node /opt/threadline/packages/cli/dist/index.js codex-hook SessionStart --home /Users/example/.threadline --project 00000000-0000-4000-8000-000000000001 --token-file /Users/example/.threadline/project-reader.token --workspace-root /Users/example/project --context-input /Users/example/.threadline/context-selectors.json --hook-timeout-ms 2000"
+additionalContextLimit = 0
+timeout = 3
+
+[[hooks.UserPromptSubmit]]
+[[hooks.UserPromptSubmit.hooks]]
+type = "command"
+command = "/usr/local/bin/node /opt/threadline/packages/cli/dist/index.js codex-hook UserPromptSubmit --home /Users/example/.threadline --project 00000000-0000-4000-8000-000000000001 --token-file /Users/example/.threadline/project-reader.token --workspace-root /Users/example/project --context-input /Users/example/.threadline/context-selectors.json --hook-timeout-ms 2000"
+additionalContextLimit = 0
+timeout = 3

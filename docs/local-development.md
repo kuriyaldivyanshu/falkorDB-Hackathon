@@ -65,8 +65,8 @@ threadline memory:query --project <uuid> [--task <id>] [--kind <kind>] [--focus 
 threadline operation:inspect --project <uuid> <operationId>
 ```
 
-An idempotency key is always supplied by the caller. Mutations with a head or
-revision to guard also require the caller's expected version or revision. For
+Human mutation idempotency keys are always supplied by the caller. Mutations
+with a head or revision to guard also require the caller's expected version or revision. For
 `memory:accept`, use `--expect-current none` for the first acceptance and
 `--expect-current <versionId>` for a guarded update. The CLI never derives an
 expected head, invents a key or retries a guarded mutation on its own. Content-bearing
@@ -108,8 +108,14 @@ through `memory:query --kind episodic|procedural` and `memory:inspect`. See
 [docs/memory-kinds.md](memory-kinds.md) for the memory-kind contracts.
 [Context clients](context-client.md) document strict inputs, credential binding,
 occurrence reports and body/envelope limits. Preparation is not emission or proof
-of committed manifest graph admission. Context commands have no --wait or
-automatic emission step.
+of committed manifest graph admission. Human context commands have no --wait or
+automatic emission step. The explicitly configured [context-only hook](codex-context-hook.md) retrieves on SessionStart
+and UserPromptSubmit with a total deadline, captures nothing and reports only
+a successful local stdout callback. It requires absolute --home, --token-file,
+--workspace-root and --context-input paths plus a project UUID. The hook creates
+one invocation UUID for its audit keys; human key semantics remain unchanged.
+Use codex:preview --context-hooks with those same explicit inputs to preview
+the handlers; it writes nothing and uses the selected reader file for MCP too.
 
 ### Privilege model
 

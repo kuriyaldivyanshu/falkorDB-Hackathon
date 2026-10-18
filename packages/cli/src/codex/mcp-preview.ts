@@ -1,4 +1,6 @@
 import { createHash } from 'node:crypto';
+import { uuidSchema } from '@threadline/shared';
+import { CONTEXT_HOOK_EVENTS, hookAbsolutePath, hookTimeout } from './context-hook.js';
 
 import {
   CODEX_MANIFEST_FILE_NAME,
@@ -16,24 +18,7 @@ import {
   type PreviewOwnershipCheck,
 } from './config-preview.js';
 
-/**
- * The executable, MCP-only Codex configuration preview.
- *
- * The qualification renderer (`renderCodexConfigPreview`) also installs hook
- * entries for `threadline codex-hook`, and this build has no such command. A
- * preview that names a command which does not exist is not installable, so this
- * module renders the same route — the `$CODEX_HOME/threadline.config.toml`
- * profile selected with `codex --profile threadline` — with the stdio MCP
- * server alone.
- *
- * Everything the qualification established is preserved: deterministic bytes,
- * the same ownership marker and manifest shape, the same `checkPreviewOwnership`
- * classification, safe quoting, and no credential in the rendered output. Only
- * the hook entries are omitted, and the preview states that explicitly rather
- * than implying a capture path this build does not have.
- *
- * This renderer performs no I/O and writes nothing.
- */
+/** Executable MCP and opt-in context-hook preview; performs no native writes. */
 
 export const MCP_SERVER_STARTUP_TIMEOUT_SEC = 10;
 export const MCP_SERVER_TOOL_TIMEOUT_SEC = 30;
@@ -51,6 +36,12 @@ export interface CodexMcpPreviewInput {
   readonly projectId: string;
   /** Explicit opt-in to preparation audit writes. Defaults to six read-only tools. */
   readonly contextTools?: boolean;
+  readonly contextHooks?: {
+    readonly tokenFile: string;
+    readonly workspaceRoot: string;
+    readonly contextInput: string;
+    readonly timeoutMs: number;
+  };
 }
 
 export interface CodexMcpPreview {
@@ -58,7 +49,7 @@ export interface CodexMcpPreview {
   readonly qualifiedHarnessVersion: string;
   readonly profileName: string;
   readonly mcpServerId: string;
-  readonly mode: 'mcp-only' | 'context-read';
+  readonly mode: 'mcp-only' | 'context-read' | 'context-hook';
   readonly files: readonly ConfigPreviewFile[];
   readonly ownership: CodexOwnershipManifest;
   /** The exact command a reviewer can copy; identical bytes to the profile args. */
@@ -82,7 +73,7 @@ function sha256Digest(content: string): string {
 
 /** The exact argument vector the rendered stdio server receives. */
 export function mcpServerArguments(input: CodexMcpPreviewInput): readonly string[] {
-  return [input.entryScript, 'mcp', '--home', input.threadlineHome, '--project', input.projectId, ...(input.contextTools === true ? ['--context-tools'] : [])];
+  return [input.entryScript, 'mcp', '--home', input.threadlineHome, '--project', input.projectId, ...(input.contextTools === true ? ['--context-tools'] : []), ...(input.contextHooks ? ['--token-file', input.contextHooks.tokenFile] : [])];
 }
 
 /**
@@ -90,21 +81,21 @@ export function mcpServerArguments(input: CodexMcpPreviewInput): readonly string
  *
  * Each argument is quoted exactly once. The project id and home are already
  * validated as single-line absolute-safe values; the credential never appears,
- * because the server reads it from the Threadline home at startup.
+ * because the server reads the selected credential file at startup.
  */
 export function renderMcpServerCommand(input: CodexMcpPreviewInput): string {
   return [input.executable, ...mcpServerArguments(input)].map((part) => shellQuote(part)).join(' ');
 }
 
-function renderMcpOnlyProfile(input: CodexMcpPreviewInput): string {
+function renderProfile(input: CodexMcpPreviewInput): string {
   const lines: string[] = [];
   lines.push(CODEX_OWNERSHIP_MARKER_LINE);
   lines.push('# Generated preview only: this build does not install Codex configuration.');
   lines.push(`# Select with: codex --profile ${CODEX_PROFILE_NAME}`);
-  lines.push(input.contextTools === true
+  lines.push(input.contextHooks ? '# Explicit context-only hooks plus the independently selected MCP surface.' : input.contextTools === true
     ? '# Audited context retrieval: records preparation metadata. No hooks:'
     : '# Read-only memory tools. This preview installs no hooks:');
-  lines.push('# `threadline codex-hook` is not implemented in this build.');
+  lines.push(input.contextHooks ? '# Context-only hooks: no capture, enrollment or native identity.' : '# Context hooks require explicit --context-hooks.');
   lines.push('');
   lines.push(`[mcp_servers.${CODEX_MCP_SERVER_ID}]`);
   lines.push(`command = ${tomlBasicString(input.executable)}`);
@@ -115,11 +106,24 @@ function renderMcpOnlyProfile(input: CodexMcpPreviewInput): string {
   lines.push(`tool_timeout_sec = ${String(MCP_SERVER_TOOL_TIMEOUT_SEC)}`);
   lines.push(`env = { THREADLINE_HOME = ${tomlBasicString(input.threadlineHome)} }`);
   lines.push('');
+  if (input.contextHooks !== undefined) {
+    for (const event of CONTEXT_HOOK_EVENTS) {
+      const hooks = input.contextHooks;
+      const command = [input.executable, input.entryScript, 'codex-hook', event,
+        '--home', input.threadlineHome, '--project', input.projectId,
+        '--token-file', hooks.tokenFile, '--workspace-root', hooks.workspaceRoot,
+        '--context-input', hooks.contextInput, '--hook-timeout-ms', String(hooks.timeoutMs),
+      ].map(shellQuote).join(' ');
+      lines.push(`[[hooks.${event}]]`, `[[hooks.${event}.hooks]]`, 'type = "command"',
+        `command = ${tomlBasicString(command)}`, 'additionalContextLimit = 0',
+        `timeout = ${String(Math.ceil(hooks.timeoutMs / 1000) + 1)}`, '');
+    }
+  }
   return lines.join('\n');
 }
 
 /**
- * Renders the MCP-only profile, its ownership manifest and the notes a
+ * Renders the explicitly selected profile, its ownership manifest and the notes a
  * reviewer needs before installing anything.
  */
 export function renderCodexMcpPreview(input: CodexMcpPreviewInput): CodexMcpPreview {
@@ -131,20 +135,26 @@ export function renderCodexMcpPreview(input: CodexMcpPreviewInput): CodexMcpPrev
     throw new TypeError('projectId must be a non-empty single-line value.');
   }
 
+  if (input.contextHooks !== undefined) {
+    uuidSchema.parse(input.projectId);
+    hookAbsolutePath(input.contextHooks.tokenFile);
+    hookAbsolutePath(input.contextHooks.workspaceRoot);
+    hookAbsolutePath(input.contextHooks.contextInput);
+    hookTimeout(String(input.contextHooks.timeoutMs));
+  }
   const profilePath = `${codexHome}/${CODEX_PROFILE_FILE_NAME}`;
   const manifestPath = `${codexHome}/${CODEX_MANIFEST_FILE_NAME}`;
-  const profileContent = renderMcpOnlyProfile(input);
+  const profileContent = renderProfile(input);
 
   const manifest: CodexOwnershipManifest = {
     kind: 'threadline-codex-ownership',
     manifestVersion: 1,
     marker: CODEX_OWNERSHIP_MARKER,
-    harness: { name: 'codex', qualifiedVersion: CODEX_QUALIFIED_VERSION },
+    harness: { name: 'codex', qualifiedVersion: input.contextHooks ? 'unqualified-context-hook' : CODEX_QUALIFIED_VERSION },
     profileName: CODEX_PROFILE_NAME,
     ownedEntries: {
       mcpServers: [CODEX_MCP_SERVER_ID],
-      // No hook event is owned by this preview: the hook command is unimplemented.
-      hookEvents: [],
+      hookEvents: input.contextHooks === undefined ? [] : [...CONTEXT_HOOK_EVENTS],
     },
     files: [{ role: 'profile', path: profilePath, digest: sha256Digest(profileContent) }],
     policy: {
@@ -158,10 +168,10 @@ export function renderCodexMcpPreview(input: CodexMcpPreviewInput): CodexMcpPrev
 
   return {
     harness: 'codex',
-    qualifiedHarnessVersion: CODEX_QUALIFIED_VERSION,
+    qualifiedHarnessVersion: input.contextHooks ? 'unqualified-context-hook' : CODEX_QUALIFIED_VERSION,
     profileName: CODEX_PROFILE_NAME,
     mcpServerId: CODEX_MCP_SERVER_ID,
-    mode: input.contextTools === true ? 'context-read' : 'mcp-only',
+    mode: input.contextHooks !== undefined ? 'context-hook' : input.contextTools === true ? 'context-read' : 'mcp-only',
     files: [
       { path: profilePath, role: 'profile', content: profileContent, digest: sha256Digest(profileContent) },
       { path: manifestPath, role: 'manifest', content: manifestContent, digest: sha256Digest(manifestContent) },
@@ -174,8 +184,8 @@ export function renderCodexMcpPreview(input: CodexMcpPreviewInput): CodexMcpPrev
       input.contextTools === true
         ? 'Six read-only tools plus audited context retrieval: preparation records metadata, never delivery or accepted knowledge changes.'
         : 'Every exposed tool is read-only: there is no acceptance, proposal, correction or requirement-binding tool.',
-      'The credential is read from the Threadline home at run time and is never written into Codex configuration.',
-      'No hook entry is rendered because `threadline codex-hook` is not implemented in this build.',
+      input.contextHooks ? 'Hook and MCP processes read the selected reader token file; no bearer appears in configuration.' : 'The credential is read from the Threadline home at run time and is never written into Codex configuration.',
+      input.contextHooks ? 'Only SessionStart and UserPromptSubmit retrieve context. Local stdout reporting proves no native consumption; this path remains unqualified.' : 'No hook entry is rendered without --context-hooks.',
       'Native runtime hook execution, MCP tool-call identity and fork/subagent correlation remain unqualified.',
       'This command renders bytes only; it writes nothing into the Codex home.',
     ],

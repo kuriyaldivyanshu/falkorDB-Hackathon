@@ -91,6 +91,10 @@ const OPTION_SPEC = {
   wait: { type: 'boolean', default: false },
   'wait-timeout': { type: 'string' },
   'context-tools': { type: 'boolean', default: false },
+  'context-hooks': { type: 'boolean', default: false },
+  'workspace-root': { type: 'string' },
+  'context-input': { type: 'string' },
+  'hook-timeout-ms': { type: 'string' },
   'token-file': { type: 'string' },
   'codex-home': { type: 'string' },
   executable: { type: 'string' },
@@ -143,6 +147,10 @@ export interface CliInvocation {
 
   /* Read-only MCP server and configuration preview. */
   readonly contextTools: boolean;
+  readonly contextHooks: boolean;
+  readonly workspaceRoot: string | null;
+  readonly contextInput: string | null;
+  readonly hookTimeoutMs: number | null;
   readonly tokenFile: string | null;
   readonly codexHome: string | null;
   readonly executable: string | null;
@@ -264,6 +272,13 @@ Memory:
                        Bounded current-memory read. hasMore is reported when the
                        bounded scan stopped early.
 
+Context-only Codex hooks (explicit configuration, no capture):
+  codex-hook SessionStart|UserPromptSubmit --home <absolute-dir> --project <uuid>
+      --token-file <absolute-reader-file> --workspace-root <absolute-dir>
+      --context-input <absolute-selector-file> [--hook-timeout-ms <250-5000>]
+                       One bounded context JSON line or nothing; ordinary failures
+                       exit 0. Default total deadline 2000 ms. See the hook guide.
+
 Context (audited retrieval):
   context:prepare --input <file|-> [--project <id>] [--token-file <path>] [--json]
                        Prepare exact bounded context; records metadata, not delivery.
@@ -288,6 +303,8 @@ Project-bound MCP server:
 Codex configuration:
   codex:preview --project <id> [--codex-home <path>] [--executable <path>]
                 [--entry <path>] [--context-tools]
+                [--context-hooks --token-file <path> --workspace-root <path>
+                 --context-input <path> --hook-timeout-ms <250-5000>]
                        Render the Codex profile that starts \`mcp\`. Writes nothing
                        and contains no credential. Options default to the isolated
                        Codex home, the running Node.js and this CLI's entry script.
@@ -407,6 +424,10 @@ export function parseCliArgs(argv: readonly string[]): CliInvocation {
     waitTimeoutMs: readInteger('--wait-timeout', values['wait-timeout'], 0, 600_000),
 
     contextTools: values['context-tools'],
+    contextHooks: values['context-hooks'],
+    workspaceRoot: values['workspace-root'] ?? null,
+    contextInput: values['context-input'] ?? null,
+    hookTimeoutMs: readInteger('--hook-timeout-ms', values['hook-timeout-ms'], 250, 5_000),
     tokenFile: values['token-file'] ?? null,
     codexHome: values['codex-home'] ?? null,
     executable: values.executable ?? null,
@@ -431,6 +452,14 @@ export function parseCliArgs(argv: readonly string[]): CliInvocation {
   }
   if (base.contextTools && command !== 'mcp' && command !== 'codex:preview') {
     throw new UsageError('--context-tools belongs to mcp or codex:preview.');
+  }
+
+  if (base.contextHooks || base.workspaceRoot !== null || base.contextInput !== null || base.hookTimeoutMs !== null) {
+    if (command !== 'codex:preview' || !base.contextHooks) throw new UsageError('Hook preview options require codex:preview --context-hooks.');
+    requireOption('--home', values.home);
+    requireOption('--token-file', values['token-file']);
+    requireOption('--workspace-root', values['workspace-root']);
+    requireOption('--context-input', values['context-input']);
   }
 
   switch (command) {
@@ -551,7 +580,7 @@ function requireSingleTarget(command: CliCommand, base: CliInvocation): void {
   if (base.expectedTaskRevision !== null && command !== 'task:require') {
     throw new UsageError('--expect-revision belongs to task:require.');
   }
-  if (base.tokenFile !== null && command !== 'mcp' && command !== 'context:prepare' && command !== 'context:occurrence') {
+  if (base.tokenFile !== null && command !== 'mcp' && command !== 'context:prepare' && command !== 'context:occurrence' && !(command === 'codex:preview' && base.contextHooks)) {
     throw new UsageError('--token-file belongs to mcp or context commands. A rendered preview never contains a credential.');
   }
 }
@@ -564,3 +593,18 @@ const MUTATING_COMMANDS: readonly CliCommand[] = [
   'memory:accept',
   'memory:correct',
 ];
+
+/** Recognize the hook before ordinary usage errors can return exit 2. */
+export function isCodexHookInvocation(argv: readonly string[]): boolean {
+  // Find the command without requiring later arguments to be well formed.
+  // Known option values must not be mistaken for command names.
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index] ?? '';
+    if (arg === '--') return argv[index + 1] === 'codex-hook';
+    if (!arg.startsWith('-')) return arg === 'codex-hook';
+    const name = arg.slice(2).split('=')[0] as keyof typeof OPTION_SPEC;
+    if (arg.startsWith('--') && !arg.includes('=') && OPTION_SPEC[name]?.type === 'string'
+      && argv[index + 1] !== undefined && !argv[index + 1]?.startsWith('--')) index += 1;
+  }
+  return false;
+}

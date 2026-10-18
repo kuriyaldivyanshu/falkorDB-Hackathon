@@ -46,6 +46,33 @@ model consumption is claimed. Hook runtime/additionalContext delivery/spilling,
 host metadata proving a conversation, and fork/subagent correlation remain
 unqualified. No native configuration, trust or credentials are modified.
 
+## Context-only hook checkpoint
+
+`b-codex-context-hook-05` implements explicitly configured SessionStart and
+UserPromptSubmit handlers over the existing reader/context APIs. They capture
+nothing, enroll no session and prepare with nativeSessionId null. Configured
+selectors alone choose task/focus/conditions/budget; reported cwd is an additional
+canonical containment guard, not identity or backend binding. Reader files are
+mandatory; the hook does not fall back to an owner.
+
+The [hook guide](codex-context-hook.md) specifies asynchronous bounded stdin,
+regular-file checks, one total deadline, exact-body overflow refusal and local
+stdout-write reporting. Preview --context-hooks renders only these two commands,
+additionalContextLimit 0 and a longer host timeout; MCP uses the same reader
+file. --context-tools remains independent. Historical six-event qualification
+assets and their digests are unchanged; their command shapes are historical
+reference and do not replace this explicitly configured preview.
+
+Current official [hook documentation](https://learn.chatgpt.com/docs/hooks) was
+rechecked on 18 October 2026. The archive schema and MCP metadata constructor
+were compared read-only. Installed 0.163.0 version/schema metadata was inspected
+separately. These evidence classes do not establish profile hook execution,
+additionalContext delivery/spilling or model use for the new handler. Emitted
+means a successful local write was reported, with no native_observed support.
+The new preview labels the hook route unqualified. The exact later synthetic
+probe in the hook guide requires separate installation, trust and inference
+authorization. N03 and strong native identity gates remain open.
+
 ## Evidence classes
 
 Every finding below is labelled with one of:

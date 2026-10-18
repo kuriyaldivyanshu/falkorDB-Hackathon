@@ -17,6 +17,9 @@ export interface ApiClientOptions {
   readonly baseUrl: string;
   readonly token: string | null;
   readonly timeoutMs: number;
+  /** Invocation cancellation also covers response consumption. */
+  readonly signal?: AbortSignal;
+  readonly maxResponseBytes?: number;
 }
 
 export interface ApiClient {
@@ -40,7 +43,9 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
       response = await fetch(`${baseUrl}${path}`, {
         ...init,
         headers,
-        signal: AbortSignal.timeout(options.timeoutMs),
+        signal: options.signal === undefined
+          ? AbortSignal.timeout(options.timeoutMs)
+          : AbortSignal.any([options.signal, AbortSignal.timeout(options.timeoutMs)]),
       });
     } catch (error) {
       throw new ThreadlineError('service_unavailable', 'The memory service did not answer.', {
@@ -50,7 +55,27 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
     }
 
     let payload: unknown;
-    const text = await response.text();
+    let text: string;
+    if (options.maxResponseBytes === undefined) {
+      text = await response.text();
+    } else {
+      const reader = response.body?.getReader();
+      const chunks: Uint8Array[] = [];
+      let size = 0;
+      try {
+        while (reader !== undefined) {
+          const next = await reader.read();
+          if (next.done) break;
+          size += next.value.byteLength;
+          if (size > options.maxResponseBytes) throw new Error('response_bound');
+          chunks.push(next.value);
+        }
+        text = Buffer.concat(chunks).toString('utf8');
+      } finally {
+        await reader?.cancel().catch(() => undefined);
+        reader?.releaseLock();
+      }
+    }
     try {
       payload = text.length === 0 ? null : JSON.parse(text);
     } catch {
