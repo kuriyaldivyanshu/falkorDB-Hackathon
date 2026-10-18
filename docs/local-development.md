@@ -45,7 +45,7 @@ threadline version                    # client, protocol and service versions
 threadline help                       # the authoritative command surface
 ```
 
-Tasks and semantic memory, added by `b-mcp-read-02`:
+Tasks and memory:
 
 ```sh
 threadline task:create --project <uuid> --title <text> --idempotency-key <key>
@@ -54,6 +54,7 @@ threadline task:require --project <uuid> <taskId> --memory <id> \
         --expect-revision <token> --idempotency-key <key>
 threadline task:requirements --project <uuid> <taskId>
 
+threadline memory:episode:record --input <file|-> [--wait]
 threadline memory:propose --input <file|-> [--wait]
 threadline memory:accept --project <uuid> <memoryId> --version <versionId> \
         --idempotency-key <key> --expect-current <versionId|none> [--reason <text>]
@@ -69,9 +70,10 @@ revision to guard also require the caller's expected version or revision. For
 `memory:accept`, use `--expect-current none` for the first acceptance and
 `--expect-current <versionId>` for a guarded update. The CLI never derives an
 expected head, invents a key or retries a guarded mutation on its own. Content-bearing
-input (`memory:propose`, `memory:correct`) arrives as one bounded JSON document
+input (`memory:episode:record`, `memory:propose`, `memory:correct`) arrives as one bounded JSON document
 of at most 256 KiB, read from a file or from standard input, and is validated by
-the shared input contract rather than by a wide set of flags.
+the shared input contract rather than by a wide set of flags. If `--project` is
+also supplied, it must match the document's `projectId` before any request is sent.
 
 `memory:propose` and `memory:correct` accept semantic and procedural content.
 An episodic proposal is refused, because an episode is recorded through
@@ -161,9 +163,20 @@ procedural reuse, bounded context preparation and occurrence recording, claims
 and handoffs, native enrollment and capture, history import, deletion jobs and
 export. There is no hidden legacy command path.
 
-The client surface has one matching gap: episode recording is served by
-`POST /v2/memories/episodes` but has no CLI command yet, and there is nothing for
-a CLI command to call for procedure validation.
+`threadline memory:episode:record --input <file|-> [--wait]` records the
+existing episode contract, including a caller-provided idempotency key and an
+optional requested `evidencePrecision`. The server alone grants `observed` when
+all evidence eligibility conditions hold. Unsupported observation requests
+refuse without downgrade, authored reports remain proposals, and unknown
+outcomes require uncertainty. A committed episode operation does not by itself
+mean accepted authority, successful completion of the wider task or validated
+procedure reuse. Inspect the returned memory in JSON mode for server-resolved
+precision and acceptance. There is still no procedure-validation command.
+
+Follow [the reproducible memory demo](memory-demo.md) for a public authored
+600 → 60 second correction, an actually executed fixture check, episode
+provenance, an accepted procedural candidate and restart/MCP recall. It uses
+implemented baseline APIs without a Codex inference call or bounded context.
 
 ## Native qualification
 

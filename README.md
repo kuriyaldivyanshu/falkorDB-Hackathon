@@ -6,7 +6,7 @@ Coding agents lose useful context between sessions: a requirement changed, a pre
 
 Threadline is being built as a local npm package for **FalkorDB Track 2: Agent Memory and Coordination**. It connects to an existing coding agent, records permitted evidence, and supplies a small, current, source-backed memory packet when the agent needs it.
 
-> **Development status:** the repository is migrating to this product. The storage foundation (SQL catalog, restricted-role row-level security, immutable source files), the source-backed graph admission worker, semantic memory (task creation, sourced proposals, explicit human acceptance, corrections and task requirements, with current-memory reads) and source-backed episodes and procedural candidates with human review are verified against local PostgreSQL and FalkorDB. A human CLI and a project-bound, read-only stdio MCP server now expose that memory, and the Codex profile that starts the MCP server can be rendered as a preview. Validated procedural reuse, bounded context, native capture, session enrollment, model-written memory, coordination claims and handoffs are not yet implemented; capability output reports each of them as unavailable. The retired owned-execution code has been removed.
+> **Development status:** the repository is migrating to this product. The storage foundation (SQL catalog, restricted-role row-level security, immutable source files), the source-backed graph admission worker, semantic memory (task creation, sourced proposals, explicit human acceptance, corrections and task requirements, with current-memory reads) and source-backed episodes and procedural candidates with human review are verified against local PostgreSQL and FalkorDB. A human CLI (including `memory:episode:record`) and a project-bound, read-only stdio MCP server now expose that memory, and the Codex profile that starts the MCP server can be rendered as a preview. Validated procedural reuse, bounded context, native capture, session enrollment, model-written memory, coordination claims and handoffs are not yet implemented; capability output reports each of them as unavailable. The retired owned-execution code has been removed.
 
 ## What we are building
 
@@ -111,6 +111,32 @@ Deletion first blocks future releases, then removes managed source copies and de
 
 The hackathon demo uses authored synthetic data. The intended seven-day raw-history default, pinned evidence policy and erasure protocol must be implemented and verified before personal-history import is enabled.
 
+## Supported human workflow
+
+With a configured local service, a human can associate a project, create a task,
+append evidence, propose a requirement and explicitly accept it under an
+expected-current guard. Task requirements resolve the accepted version; a
+sourced correction changes current authority while retaining old provenance.
+
+```sh
+threadline memory:episode:record --input episode.json --wait --json
+threadline memory:inspect --project <projectId> <memoryId> --json
+threadline mcp --project <projectId>
+```
+
+The episode document supplies the action, outcome, observation, uncertainty,
+source references, applicability, observed conditions, optional requested
+precision and an explicit idempotency key. The service decides evidence
+precision; authored reports are proposals until a human accepts them. Procedures
+can be proposed and human-accepted but remain candidates. The six-tool MCP
+surface retrieves memory read-only.
+
+Follow [the reproducible memory demonstration](docs/memory-demo.md) for setup,
+a public exporter check, the 600 → 60 second correction, an accepted procedural
+candidate, service restart and fresh authored MCP recall. It demonstrates
+persistent memory and transport recall without a Codex inference call. Distinct
+Codex session consumption and model use remain unverified.
+
 ## Intended user workflow
 
 After the package is built and qualified, a user will:
@@ -138,16 +164,20 @@ The workspace contains `packages/shared`, `packages/backend` and `packages/cli`.
 The owned execution, provider integration and coding TUI have been removed. The current build serves source capture, project association, history and capability reporting, plus semantic memory, tasks, episodes and procedural candidates: `POST /v2/tasks`, `POST /v2/memories/proposals`, `POST /v2/memories/episodes`, `POST /v2/memories/:memoryId/acceptance`, `POST /v2/memories/:memoryId/corrections`, `POST /v2/tasks/:taskId/requirements`, and the `GET` reads that resolve current memory and current requirement versions. Validated procedural reuse, bounded context, coordination and native capture are reported as unavailable with their batch. Setup and status commands are:
 
 ```sh
-npm run setup    # applies schema threadline_memory, verifies the privilege model, creates the local owner credential
-npm run serve    # runs the loopback memory service
-npm run status   # prints health, component readiness and storage state using the local credential
+npm run setup -- --home /absolute/isolated/installation
+                 # applies threadline_memory, verifies privileges, creates the owner credential
+npm run serve -- --home /absolute/isolated/installation
+                 # runs the loopback memory service
+npm run status -- --home /absolute/isolated/installation
+                 # prints health, readiness and storage state
 ```
 
 See [docs/local-development.md](docs/local-development.md) for configuration and the full command surface, and [docs/cli-memory-and-mcp.md](docs/cli-memory-and-mcp.md) for one complete human memory workflow and the read-only MCP server. The agent work sequence, current status and completion criteria are in [the development checklist](docs/development-checklist.md). Parallel assignments follow [the worktree and PR rulebook](docs/parallel-work-rulebook.md).
 
 ## Hackathon demonstration
 
-The target demonstration shows a failure remembered across two genuinely distinct Codex sessions, a changed requirement, a reusable procedure and a source-backed handoff. Supporting checks cover restart, stale-update rejection, concurrent protocol clients and two synthetic tenants. Measured client traffic is reported separately from live model agents.
+The [implemented human demonstration](docs/memory-demo.md) covers the baseline
+memory lifecycle. The target demonstration shows a failure remembered across two genuinely distinct Codex sessions, a changed requirement, a reusable procedure and a source-backed handoff. Supporting checks cover restart, stale-update rejection, concurrent protocol clients and two synthetic tenants. Measured client traffic is reported separately from live model agents.
 
 Submission will include complete local setup, the consequential Cypher queries, graph model, working video, supported-version evidence and AI-assistance disclosure. Native integration and performance results will be recorded only after they are observed.
 

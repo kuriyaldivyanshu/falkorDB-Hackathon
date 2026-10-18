@@ -43,6 +43,61 @@ Review full diff against baseline, stage explicit paths, inspect cached diff/che
 
 ## Result record
 
-Status: contract bootstrap; implementation and verification pending.
+Status: checkpoint verified against the merged baseline; preparing the feature commit/push and one PR. Final integration still waits for coordinator confirmation that A has merged.
 
 Creation checks: coordinator main clean; fetched origin/main equals required baseline; branch/path unused; worktree canonical identity/HEAD/clean state verified; branch has no upstream. No existing runtime state borrowed.
+
+
+### Implemented behavior and scope
+
+- `packages/cli/src/options.ts`: registers/help-documents `memory:episode:record --input <file|-> [--wait]` and permits the existing wait/input flags.
+- `packages/cli/src/memory-surface.ts`: one `recordEpisode(RecordEpisodeInput)` transport method, using the shared input/result schemas and `ROUTES.memoryEpisodes`. It decides no evidence policy, invents no key, accepts nothing and performs no downgrade/retry.
+- `packages/cli/src/index.ts`: dispatches the episode through that method and the existing operation follower/reporter. Human output names operation/version and actual state; JSON remains one operation result. Shared structured-input handling now rejects conflicting flag/document projects before sending (also for propose/correct), handles non-object documents safely, and bounds file reads themselves as well as stdin. This closes the file-size-check/read race without adding a second reader.
+- Product docs: README, local-development and CLI/MCP guide describe the actual command, evidence/acceptance/validation distinctions and current limits. New `docs/memory-demo.md` gives complete synthetic storage setup and an executable human workflow using returned identifiers, actual exporter output, correction, procedural support, normal restart and an authored MCP client. Fixture READMEs link it and disclose the authored defect.
+- No other CLI source was necessary. Backend/shared source, contracts, migrations, dependencies/lockfile, build/Compose configuration, checklist/rulebook, native contract, inventory manifest and seed remain byte-identical to the base. No context command/tool, permanent tests, fixtures with fabricated observed output, executor or installer was added.
+
+### Actual verification
+
+Environment: local shell Node.js v23.11.0/npm 11.4.1; approved verification commands resolved Node.js v22.16.0, also within the declared >=22 engine. `npm ci` installed 84 packages in this worktree using the unchanged lockfile. `npm run build` (`tsc -b`) passed after source edits and again at the final source/document review. `git diff --check` passed.
+
+Temporary scripts live only under `/tmp/threadline-b-episode-demo-03-checks`. They are disposable acceptance checks, not shipped package tests.
+
+- `run-demo.sh` executes Bash blocks extracted from `docs/memory-demo.md` sections 2–6, after equivalent explicit setup using this assignment's database/role/resource names. **Two complete runs passed**, each using a fresh associated project and dynamically returned task/source/memory/version identities. Both proved proposed 600 seconds does not govern, explicit acceptance and binding, actual mixed-offset exporter output capture (exit 0, CSV mismatch), observed-grade episode admission, guarded 60-second correction, retained old intent/evidence and acceptance operation, a human-accepted procedural candidate supported by the real failed episode, normal service restart and fresh CLI/MCP recall. Transcript: `demo-transcript.txt`; safe run identifiers: `demo-run-1.json` / `demo-run-2.json` under the data root. Every setup invocation pinned the absolute assigned home; home/source root/database/ports were asserted before mutation.
+- `episode-checks.mjs`: **25/25 passed**. Authored file/stdin inputs; omitted precision stays authored; unknown/denied/interrupted preserved; authored commit remains proposed; unknown without uncertainty refuses; eligible observed episode has server-returned observed precision/accepted state/no accepting principal; unsupported observation refuses with no downgrade; invalid project/task/source IDs and missing key refuse with bounded field details; file and stdin oversize refuse; matching project allowed and conflicting project refused before send for all three structured commands; explicit acceptance guard still required; stale expected head settles rejected with exit 1; exact retry preserves operation/memory/version and one candidate, changed payload refuses; human/JSON committed output; corrected task authority and procedure candidate remain intact.
+- `outage-mcp.mjs`: **22/22 passed**. Authored handshake, exact six read-only tools and real backend reads through each, corrected requirement/observed episode/candidate recall, unknown mutation-tool refusal and project-override refusal. Established graph connection before stopping only the assignment graph container. Same service **PID 93804** and same MCP process stayed alive; CLI and MCP reads returned `storage_unavailable`; SQL history remained readable; graph readiness/durable-memory guarantee became false. Non-wait and bounded-wait episode admission reported unresolved states with exit 3 under the same identity. Restoring the graph committed that original intent and restored reads without restarting either service or MCP. A replay kept one authored candidate. Transcript: `outage-transcript.txt`.
+- `transport-checks.mjs`: **6/6 passed**, explicitly authored transport responses. Verified exactly one shared-schema route call, unmodified precision/key and no server-owned author fields sent; invalid input never posts; ambiguous/rejected/committed responses stay distinct in the follower. This is parser/follower evidence, **not a deliberately lost real graph reply**. Transcript: `transport-transcript.txt`.
+- `retained-graph.mjs`: **4/4 passed**, direct read-only store verification, separate from supported CLI commands. In both demo projects the old graph version is still `superseded` with its exact 600-second content and retained `SOURCED_FROM` edges. Graph key was resolved from the assigned SQL store under the local tenant fence. Transcript: `retained-graph-transcript.txt`.
+- `docs-check.py`: all **seven changed Markdown files** passed single H1, hierarchical headings, labelled/closed fences and local-link resolution. Full committed/uncommitted/untracked scope inspection found only the **ten allowed paths**. Generated assignment credential values were absent from every changed file. No frozen source or dependency changed.
+
+### Findings and corrected verification attempts
+
+- First fetch/commit/Docker/loopback commands were refused by the workspace sandbox and were rerun through explicit approval. No permissions were bypassed.
+- Initial verification setup used the wrong backend build-output path; corrected to the package export. Its following initialization attempt was sandbox-refused before database access; the approved attempt first asserted the target and initialized only the assigned schema/store.
+- The installed FalkorDB image ignores positional server arguments. The first fresh container therefore ignored the config include and init accurately reported graph unavailable. Before demo mutations, inspected the image entry point and recreated **only this assignment's fresh container** using supported `REDIS_ARGS` via an owner-only env file and the correct `/var/lib/falkordb/data` volume. Graph authentication and append-only persistence were then active and service readiness passed. No backend policy changed.
+- Temporary CLI verifier initially treated early-close `EPIPE` while feeding oversized stdin as a product failure; it now attaches the actual oversized file as stdin and asserts usage exit 2. A second verifier assumption expected a settled acceptance rejection on stderr; corrected to parse the operation's JSON `state: rejected` / `errorCode: expected_head_conflict`. Final CLI rerun passed all 25 checks. Neither failed attempt is counted as passed acceptance.
+
+### Evidence and remaining limits
+
+The requirement/change and proposed checking procedure are public human-authored data. The exporter actually ran on disposable copies; the complete recorded stdout/stderr/exit status and mismatched public specification support each observed episode. The fixture defect was deliberately authored and is not attributed to Codex. Threadline checks evidence eligibility, not output truth. Failed support remains failed in procedural recall. Runtime source bytes/results stay outside Git; fixture expectations remain specifications.
+
+No actual native inference/capture/hook/session identity or distinct Codex-session consumption was exercised or claimed. No claims/handoffs, validated reuse, applicability-aware context selection, production credential issuance, retention/erasure or package publication is established. Bounded context remains unavailable on this baseline; A's unmerged branch was never consumed. No reader/service credential was needed for these checks; MCP used the synthetic local owner with only its read-only tool surface. Real submitted graph reply loss/ambiguity was not deliberately triggered; authored response checks do not replace that evidence. No broad unrelated suite was run.
+
+### Created resources and ownership
+
+All resources below belong to this assignment; retain for review and coordinator retirement:
+
+- Containers `threadline-b-episode-demo-03-postgres` (`postgres:18-alpine`, 127.0.0.1:55453) and `threadline-b-episode-demo-03-falkordb` (`falkordb/falkordb:6.0.2`, 127.0.0.1:56453, generated password, appendonly/appendfsync always).
+- Volumes `threadline-b-episode-demo-03-pg-data` and `threadline-b-episode-demo-03-falkordb-data`. PostgreSQL database `threadline_b03`, restricted role `threadline_b03_app`, normal unchanged migrations 1–4 under `threadline_memory`; fresh versioned project graphs only.
+- `/tmp/threadline-b-episode-demo-data-03` (0700), installation `home/`, immutable `home/sources/`, generated 0600 env/bootstrap/password/credential files, service logs, two fresh disposable project/exporter copies and run identifiers. No credential was copied from another installation.
+- `/tmp/threadline-b-episode-demo-03-checks` (0700): temporary scripts and safe transcripts. `service.pid` under the data root identifies the still-running assignment service on 127.0.0.1:47843. Two deliberate normal demo restarts preceded the separate no-restart outage check. Both containers and the final service remain running.
+- Worktree `/tmp/threadline-b-episode-demo-03` (canonical `/private/tmp/threadline-b-episode-demo-03`), own node_modules/dist/build artifacts. Previous worktrees, stores, volumes and native state were not borrowed or retired.
+
+### Coordinator checklist and integration handoff
+
+Proposed checklist update after merge: record the human episode command and reproducible baseline lifecycle demo as delivered, with observed evidence eligibility, authored/proposed distinction, candidate-only procedures, persistence and authored MCP recall. Keep N03 and N06 unchecked; preserve native identity/capture, context/occurrence, procedure validation, coordination and privacy gates.
+
+The next coordinator action is **merge/confirm A first**, then request B's integration update on this same branch: fetch, normally merge origin/main into a clean B branch, review shared-schema compatibility, reconcile only B-owned product docs with A's merged capabilities, rebuild and rerun affected episode/demo/MCP checks. Then review/merge B serially. Do not merge B before that integration pass. Do not force-push, retire this worktree or start another milestone here.
+
+### Commit, remote and PR status
+
+Contract bootstrap committed as `510550d`. Implementation commit, remote confirmation and real PR URL are recorded in the final handoff update below. No merge or retirement is authorized to this worker.
