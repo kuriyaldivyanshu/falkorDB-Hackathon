@@ -1,4 +1,5 @@
 import { parseArgs, type ParseArgsOptionsConfig } from 'node:util';
+import { isAbsolute } from 'node:path';
 
 /**
  * Command-line surface of the Threadline client.
@@ -461,6 +462,12 @@ export function parseCliArgs(argv: readonly string[]): CliInvocation {
     requireOption('--token-file', values['token-file']);
     requireOption('--workspace-root', values['workspace-root']);
     requireOption('--context-input', values['context-input']);
+    for (const flag of ['token-file', 'workspace-root', 'context-input'] as const) {
+      const path = values[flag];
+      if (path === undefined || !isAbsolute(path) || /[\0\r\n]/.test(path)) {
+        throw new UsageError(`--${flag} must be an absolute single-line path.`);
+      }
+    }
   }
 
   switch (command) {

@@ -132,9 +132,25 @@ async function readEnvelope(input: Readable, deadline: HookDeadline): Promise<Re
   return parsed as Record<string, unknown>;
 }
 
+const guardedOutputs = new WeakSet<Writable>();
+
+/** A late stream error can follow a successful callback. One guard per stream
+ * remains until close, including after this invocation has finished. */
+function guardOutputErrors(output: Writable): void {
+  if (guardedOutputs.has(output) || output.closed) return;
+  guardedOutputs.add(output);
+  const onError = (): void => { output.destroy(); };
+  output.on('error', onError);
+  output.once('close', () => {
+    output.removeListener('error', onError);
+    guardedOutputs.delete(output);
+  });
+}
+
 /** One write; success means its callback succeeded, never host consumption. */
 async function writePacket(output: Writable, line: string, deadline: HookDeadline): Promise<void> {
   deadline.check();
+  guardOutputErrors(output);
   await new Promise<void>((resolve, reject) => {
     const signal = deadline.controller.signal;
     let settled = false;
@@ -145,14 +161,11 @@ async function writePacket(output: Writable, line: string, deadline: HookDeadlin
     const finish = (error?: Error | null): void => {
       if (settled) return;
       settled = true;
-      signal.removeEventListener('abort', onAbort);
+      cleanup();
       if (error) {
-        // write callbacks can precede the stream's error event. Keep the local
-        // listener until close; never install a global exception handler.
-        output.once('close', () => { setImmediate(cleanup); });
         output.destroy();
         reject(new Error('stdout_uncertain'));
-      } else { cleanup(); resolve(); }
+      } else resolve();
     };
     const onError = (): void => finish(new Error('stdout_uncertain'));
     const onAbort = (): void => finish(new Error('deadline'));
@@ -177,6 +190,7 @@ async function endpoint(home: string, deadline: HookDeadline): Promise<string> {
 
 /** No raw error, path, envelope, token or backend message reaches diagnostics. */
 async function diagnostic(output: Writable, code: string, deadline?: HookDeadline): Promise<void> {
+  guardOutputErrors(output);
   const line = `threadline hook: ${code}\n`;
   // Also bound stderr backpressure, including failures found at the deadline.
   const time = Math.max(1, Math.min(25, deadline?.remaining() ?? 25));
@@ -188,10 +202,8 @@ async function diagnostic(output: Writable, code: string, deadline?: HookDeadlin
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      if (failed) {
-        output.once('close', () => { setImmediate(cleanup); });
-        output.destroy();
-      } else cleanup();
+      cleanup();
+      if (failed) output.destroy();
       resolve();
     };
     const onError = (): void => done(true);

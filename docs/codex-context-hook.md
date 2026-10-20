@@ -57,7 +57,7 @@ The hook reads no installation owner credential or database secrets.
 
 ## Input, workspace and identity
 
-Stdin is read asynchronously under the existing hook byte bound (8 MiB).
+Stdin is read asynchronously under the existing hook byte bound (1 MiB).
 Malformed/oversized input and a hook_event_name different from the command
 withhold context. Only that event name and cwd are used from the envelope.
 Prompt/tool text, transcript paths and native identifiers are never persisted,
@@ -143,6 +143,12 @@ than the handler deadline, and additionalContextLimit 0. The handler enforces it
 own byte limit before output. Its ownership manifest names just those events
 and labels the new hook path unqualified. The MCP process uses the same selected
 reader file. No bearer appears in arguments, TOML or the manifest.
+
+The SessionStart entry has no matcher, so it does not exclude the startup,
+resume, clear, compact and fork events defined by the referenced hook schema.
+Actual native hook execution remains unqualified. Each invocation uses the
+same explicitly configured selectors; the adapter does not infer a new task or
+native session identity.
 
 Default preview remains six-tool MCP-only. Independent `--context-tools` adds
 the seventh audited retrieval tool, with or without hooks. There is no occurrence
