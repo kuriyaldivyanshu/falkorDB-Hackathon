@@ -77,8 +77,12 @@ unaffected. These operations create no graph receipt.
   Human member grants cannot administer native access either.
 
 These checks apply at HTTP and core service entry points. Native observation
-and model knowledge writes remain unavailable. An owner cannot attribute an
-append or context audit to a foreign producer's session.
+and model knowledge writes remain unavailable. Each enrolled producer has a
+separate service principal. A human owner cannot attribute a source append or
+context request to any enrolled producer's session, including a session from an
+enrollment that owner issued. Human source appends without native-session
+attribution remain supported. Producers cannot append public sources; context
+preparation uses a separate trusted internal path to record its audit manifest.
 
 ## Safe operator example
 

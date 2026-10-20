@@ -35,7 +35,7 @@ const ENROLLMENT_SELECT = `SELECT e.id,e.project_id,e.principal_id,e.binding_id,
   e.label,e.binding_generation,e.native_session_id,e.created_at,e.expires_at,t.idle_expires_at,e.revoked_at,e.request_digest,
   CASE WHEN e.state<>'active' OR t.state<>'active' OR t.revoked_at IS NOT NULL OR a.state<>'active'
          OR t.kind<>'producer' OR a.kind<>'service' OR g.role<>'reader'
-         OR g.state<>'active' OR b.state<>'active' OR (e.native_session_id IS NOT NULL AND s.state<>'active') THEN 'revoked'
+         OR g.state<>'active' OR b.state<>'active' OR (e.native_session_id IS NOT NULL AND s.state IS DISTINCT FROM 'active') THEN 'revoked'
        WHEN e.expires_at<=clock_timestamp() OR t.expires_at<=clock_timestamp() OR t.idle_expires_at<=clock_timestamp() THEN 'expired'
        ELSE 'active' END AS state
   FROM threadline_memory.native_enrollments e
