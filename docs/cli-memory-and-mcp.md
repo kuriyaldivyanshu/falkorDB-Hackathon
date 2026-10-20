@@ -15,7 +15,8 @@ session, and neither writes memory on a model's behalf.
 | --- | --- | --- |
 | CLI commands | Human mutations and bounded reads over the loopback API | No inference, no session control, no native configuration writes |
 | `threadline mcp` | Six read-only tools; explicit --context-tools adds preparation audit writes | No accepted-knowledge mutation, acceptance or HTTP/SQL/shell/filesystem tool |
-| `threadline codex:preview` | Renders the Codex profile that starts `mcp` | Writes nothing; renders no hook entry and no credential |
+| `threadline codex:preview` | Renders MCP and explicit --context-hooks handlers | Writes no native configuration or bearer |
+| `threadline codex-hook` | Explicit context-only SessionStart/UserPromptSubmit retrieval | No capture, enrollment, accepted-knowledge write or qualified native identity |
 
 Semantic memory, episodes and procedural candidates are implemented (see
 [docs/memory-kinds.md](memory-kinds.md) for the memory-kind contracts and
@@ -362,9 +363,10 @@ paths, and the exact command to run the server by hand.
 - It writes nothing, into the real Codex home or anywhere else.
 - It renders no credential: the server reads it from the Threadline home at
   startup.
-- It renders no hook entry, because `threadline codex-hook` is not implemented
-  in this build. Installing a hook that names a missing command would not be
-  installable.
+- The default preview is MCP-only and renders no hook entries. Explicit
+  `--context-hooks` renders both `SessionStart` and `UserPromptSubmit` handlers
+  using the implemented context-only `threadline codex-hook` command; these
+  retrieve context without capture, enrollment or qualified native identity.
 - Ownership is classified exactly as the qualification established: `absent`,
   `owned`, `edited` (marker present, needs a human) and `foreign` (never
   touched).
@@ -395,3 +397,14 @@ Procedures use `memory:propose` / `memory:accept` and stay
 is unavailable; there is no CLI validation command. Episodes and procedures
 are readable through the existing query and inspect MCP tools, so no dedicated
 mutation or episode tool is added.
+
+## Explicit context-only hooks
+
+The [hook guide](codex-context-hook.md) describes required project/absolute paths,
+API-issued readers, strict configured selectors, the total 2,000 ms default
+deadline and exit-0 withholding. Hook JSON preserves exact backend authority and
+qualifications. Only successful local stdout acceptance permits best-effort
+adapter_report; Codex consumption remains unqualified. Preview --context-hooks
+adds just SessionStart/UserPromptSubmit and selects the same reader for MCP.
+Default MCP remains six tools; --context-tools independently enables the seventh.
+No native installation, trust changes or inference is performed by the preview.

@@ -6,7 +6,7 @@ Coding agents lose useful context between sessions: a requirement changed, a pre
 
 Threadline is being built as a local npm package for **FalkorDB Track 2: Agent Memory and Coordination**. It connects to an existing coding agent, records permitted evidence, and supplies a small, current, source-backed memory packet when the agent needs it.
 
-> **Development status:** the repository is migrating to this product. The storage foundation (SQL catalog, restricted-role row-level security, immutable source files), the source-backed graph admission worker, semantic memory (task creation, sourced proposals, explicit human acceptance, corrections and task requirements, with current-memory reads) and source-backed episodes and procedural candidates with human review are verified against local PostgreSQL and FalkorDB. A human CLI (including `memory:episode:record`) and a project-bound, read-only stdio MCP server now expose that memory, and the Codex profile that starts the MCP server can be rendered as a preview. Authenticated backend context preparation and occurrence recording are also implemented, with a 4 KiB default / 8 KiB hard body limit, exact current requirements, applicable semantic/episodic memory and metadata-only manifests. Context CLI commands and an opt-in audited MCP context tool are implemented. Validated procedural reuse, native capture, session enrollment, model-written memory, coordination claims and handoffs remain unavailable. The retired owned-execution code has been removed.
+> **Development status:** the repository is migrating to this product. The storage foundation (SQL catalog, restricted-role row-level security, immutable source files), the source-backed graph admission worker, semantic memory (task creation, sourced proposals, explicit human acceptance, corrections and task requirements, with current-memory reads) and source-backed episodes and procedural candidates with human review are verified against local PostgreSQL and FalkorDB. A human CLI (including `memory:episode:record`) and a project-bound, read-only stdio MCP server now expose that memory, and the Codex profile that starts the MCP server can be rendered as a preview. Authenticated backend context preparation and occurrence recording are also implemented, with a 4 KiB default / 8 KiB hard body limit, exact current requirements, applicable semantic/episodic memory and metadata-only manifests. Context CLI commands, an opt-in audited MCP context tool and explicitly configured context-only Codex hooks are implemented; native hook execution and consumption remain unqualified. Validated procedural reuse, native capture, session enrollment, model-written memory, coordination claims and handoffs remain unavailable. The retired owned-execution code has been removed.
 
 ## What we are building
 
@@ -25,7 +25,7 @@ An agent's proposal remains a proposal until its acceptance policy is satisfied.
 
 Codex owns the coding experience: authentication, model selection, reasoning, filesystem tools, approvals and cancellation. Threadline supplies memory through supported native integration surfaces:
 
-1. **Hooks** capture supported visible events and request current memory at qualified session/prompt boundaries.
+1. **Hooks** currently request context at explicitly configured session/prompt boundaries; native execution and consumption remain unqualified. Capturing supported visible events is a future capability; native capture remains unavailable.
 2. **Local MCP tools** retrieve memory, inspect evidence, propose sourced updates and exchange handoffs.
 3. **Selected history import** reads explicitly chosen stored sessions through a qualified read-only interface.
 
@@ -40,6 +40,10 @@ tool; accepted knowledge is changed by a human through the CLI. Explicit
 `--context-tools` adds only `threadline_context_prepare`, which records preparation
 audit metadata without changing accepted knowledge. MCP native identity remains
 unqualified; preparation proves no delivery. See [context clients](docs/context-client.md).
+Explicit `codex-hook SessionStart|UserPromptSubmit` retrieves context with an
+issued reader and fixed selectors, captures nothing and reports only local stdout
+writes. `codex:preview --context-hooks` renders the two bounded handlers without
+installing them. See [the hook guide](docs/codex-context-hook.md).
 
 Each simultaneous root agent uses its own project-bound enrollment. A coordination claim governs memory updates; it does not lock native files or stop another process from editing them.
 

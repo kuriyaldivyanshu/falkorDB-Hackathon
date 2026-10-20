@@ -46,6 +46,7 @@ import {
   MAX_INPUT_DOCUMENT_BYTES,
   UsageError,
   parseCliArgs,
+  isCodexHookInvocation,
   type CliInvocation,
 } from './options.js';
 import {
@@ -57,6 +58,7 @@ import {
 } from './memory-surface.js';
 import { startStdioMcpServer, verifyProjectBinding } from './mcp/server.js';
 import { classifyPreviewTargets, renderCodexMcpPreview } from './codex/mcp-preview.js';
+import { runCodexContextHook } from './codex/context-hook.js';
 import { shellQuote } from './codex/config-preview.js';
 
 /**
@@ -87,6 +89,7 @@ const note = (line: string): void => {
 };
 
 async function main(argv: readonly string[]): Promise<number> {
+  if (isCodexHookInvocation(argv)) return runCodexContextHook(argv);
   let invocation: CliInvocation;
   try {
     invocation = parseCliArgs(argv);
@@ -662,6 +665,7 @@ function readServerCredential(invocation: CliInvocation, credentialFile: string)
  * rendered — the server reads it from the Threadline home at startup.
  */
 function runCodexPreview(invocation: CliInvocation): Promise<number> {
+  if (invocation.contextHooks && !invocation.home?.startsWith('/')) throw new UsageError('Hook preview requires an absolute --home.');
   const home = resolveHomeDirectory(invocation.home);
   const preview = renderCodexMcpPreview({
     codexHome: invocation.codexHome ?? defaultCodexHome(),
@@ -670,6 +674,10 @@ function runCodexPreview(invocation: CliInvocation): Promise<number> {
     threadlineHome: home,
     projectId: invocation.projectId ?? '',
     contextTools: invocation.contextTools,
+    ...(invocation.contextHooks ? { contextHooks: {
+      tokenFile: invocation.tokenFile ?? '', workspaceRoot: invocation.workspaceRoot ?? '',
+      contextInput: invocation.contextInput ?? '', timeoutMs: invocation.hookTimeoutMs ?? 2000,
+    } } : {}),
   });
 
   const existing = new Map<string, string>();

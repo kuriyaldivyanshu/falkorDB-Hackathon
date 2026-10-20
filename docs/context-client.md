@@ -75,7 +75,9 @@ Use `state: "unknown"` when delivery is uncertain, or `state: "refused"` with
 state is explicitly `prepared`. Guarded changes, identical replays and conflicting
 requests keep backend semantics. `native_observed` is refused as unsupported.
 Emitted is self-reported; it proves no native observation, comprehension or
-following. No automatic prepare→emit sequence or occurrence MCP tool exists.
+following. Human commands have no automatic prepare→emit sequence, and no
+occurrence MCP tool exists. The separately enabled context hook reports only
+a successful local stdout write.
 A transport failure is a failed/uncertain report, never successful emission.
 
 ## Credential binding and lost responses
@@ -174,7 +176,7 @@ threadline codex:preview --home "$INSTALL" --project "$PROJECT" \
 
 Default preview stays the six-tool MCP-only profile. Explicit context preview
 is labelled `context-read` and adds the real `--context-tools` startup flag.
-Both write nothing, render no bearer or unimplemented hook, and preserve the
+Both write nothing, render no bearer or hook, and preserve the
 existing ownership/collision checks. Review targets before any separately
 authorized installation; no real Codex configuration, trust or credential is
 changed here.
@@ -184,3 +186,19 @@ transport/configuration only. They do not establish actual model use. Hook
 runtime/additionalContext delivery and spilling, host metadata proving a native
 conversation, and fork/subagent correlation remain unqualified. N03 remains
 incomplete. See [the native boundary](native-integration-contract.md).
+
+## Context-only hook adapter
+
+[The context hook](codex-context-hook.md) uses these same merged APIs with an
+explicit reader file, project, workspace root and strict selector file. Only
+SessionStart and UserPromptSubmit are implemented. It ignores prompt/session
+identity, prepares with nativeSessionId null and enforces one total 2,000 ms
+default deadline (250–5,000 ms configurable). Ordinary pre-output failures exit
+0 without context. Exact output is followed by best-effort adapter_report only
+after the local stdout callback succeeds; consumption stays unqualified.
+
+Hook keys derive from one random invocation UUID. Separate hook processes may
+create separate audits; human caller-key semantics above are unchanged. Explicit
+`codex:preview --context-hooks` renders these two commands with the selected
+reader file used for MCP as well. Independent --context-tools still controls
+the seventh MCP tool. Preview writes no native configuration or trust state.
