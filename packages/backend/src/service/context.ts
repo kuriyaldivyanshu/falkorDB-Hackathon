@@ -17,6 +17,7 @@ import { projectRootIdFor, readProjectRoot, readVersionDetailRows } from '../sto
 import { projectWriteLockKey, type SqlDatabase, type TxClient } from '../storage/pg.js';
 import type { AuthenticatedCall } from './auth.js';
 import { requirePermission } from './permissions.js';
+import { PRODUCER_AUTHORITY_SQL, requireNativeSession } from './nativeAuthority.js';
 import { assertRootMatchesScope, requireProjectScope, toMemoryVersion, withGraphRead } from './semanticSupport.js';
 import type { SourceService } from './sources.js';
 import type { TaskService } from './tasks.js';
@@ -86,8 +87,11 @@ export function createContextService(deps: ContextServiceDeps): ContextService {
           AND t.expires_at>clock_timestamp() AND t.idle_expires_at>clock_timestamp() AND a.state='active'
           AND (t.project_id IS NULL OR t.project_id=p.id) AND t.kind=$5
           AND (t.kind<>'reader' OR (g.role='reader' AND a.kind='service' AND t.project_id=p.id))
-          AND t.native_session_id IS NOT DISTINCT FROM $6::uuid`,
-      [call.scope.tenantId, call.scope.projectId, call.scope.principalId, call.tokenId, call.scope.tokenKind, call.scope.nativeSessionId],
+          AND t.native_session_id IS NOT DISTINCT FROM $6::uuid
+          AND (t.kind<>'producer' OR (t.native_session_id IS NOT NULL AND t.enrollment_id=$7 AND t.binding_generation=$8))
+          AND ${PRODUCER_AUTHORITY_SQL}`,
+      [call.scope.tenantId, call.scope.projectId, call.scope.principalId, call.tokenId, call.scope.tokenKind,
+        call.scope.nativeSessionId, call.enrollmentId, call.bindingGeneration],
     );
     const row = rows[0];
     if (row === undefined) throw new ThreadlineError('scope_denied', 'Context release is not authorized.');
@@ -218,7 +222,7 @@ export function createContextService(deps: ContextServiceDeps): ContextService {
           return await withContextLock(deps.db, call, async (tx) => {
             // A bounded database lock wait; no indefinite release barrier.
             await releaseScope(tx, call);
-            await requireSession(tx, call, parsed.nativeSessionId ?? null);
+            await requireNativeSession(tx, call, parsed.nativeSessionId ?? null);
             const known = await tx.rows<OccurrenceRow>(
               `SELECT * FROM threadline_memory.context_occurrences WHERE tenant_id=$1 AND project_id=$2 AND nonce=$3`,
               [call.scope.tenantId, parsed.projectId, nonce],
@@ -350,10 +354,12 @@ export function createContextService(deps: ContextServiceDeps): ContextService {
         );
         const row = rows[0];
         if (row === undefined) throw new ThreadlineError('not_found', 'No such occurrence exists in this credential scope.');
-        await requireSession(tx, call, row.native_session_id);
+        await requireNativeSession(tx, call, row.native_session_id);
         if (row.update_key === key) {
           if (row.update_digest !== digest) throw new ThreadlineError('idempotency_mismatch', 'This occurrence update identity names another report.');
-          return occurrence(row);
+          const result = occurrence(row);
+          await releaseScope(tx, call);
+          return result;
         }
         if (row.state !== parsed.expectedState) throw new ThreadlineError('stale_revision', 'The occurrence has already left the expected state.');
         const updated = await tx.rows<OccurrenceRow>(
@@ -364,7 +370,9 @@ export function createContextService(deps: ContextServiceDeps): ContextService {
             parsed.refusalReason ?? null, parsed.state === 'emitted' ? clock() : null, key, digest],
         );
         if (updated[0] === undefined) throw new ThreadlineError('stale_revision', 'The occurrence changed before the report.');
-        return occurrence(updated[0]);
+        const result = occurrence(updated[0]);
+        await releaseScope(tx, call);
+        return result;
       });
     },
   };
@@ -461,20 +469,6 @@ function occurrence(row: OccurrenceRow): ContextOccurrence {
     privacyRevision: row.privacy_revision, emittedAtMs: row.emitted_at?.getTime() ?? null, refusalReason: row.refusal_reason,
   }, 'context occurrence');
 }
-async function requireSession(tx: TxClient, call: AuthenticatedCall, id: string | null): Promise<void> {
-  if (id === null) {
-    if (call.scope.nativeSessionId !== null) throw new ThreadlineError('scope_denied', 'A bound credential must name its session.');
-    return;
-  }
-  if (call.scope.nativeSessionId !== null && call.scope.nativeSessionId !== id) throw new ThreadlineError('scope_denied', 'The requested session differs from the credential binding.');
-  const rows = await tx.rows<{ id: string }>(
-    `SELECT id FROM threadline_memory.native_sessions WHERE tenant_id=$1 AND project_id=$2
-       AND id=$3 AND principal_id=$4 AND state='active'`,
-    [call.scope.tenantId, call.scope.projectId, id, call.scope.principalId],
-  );
-  if (rows[0] === undefined) throw new ThreadlineError('not_found', 'No active session exists in this principal scope.');
-}
-
 /** Local timeouts are set before waiting for the project lock. All SQL reads
  * during selection reuse this transaction, preventing pool starvation. */
 async function withContextLock<T>(db: SqlDatabase, call: AuthenticatedCall, work: (tx: TxClient) => Promise<T>): Promise<T> {

@@ -29,6 +29,7 @@ import type { SqlDatabase, TxClient } from '../storage/pg.js';
 import { withProjectWriteLock } from '../storage/pg.js';
 import type { AuthenticatedCall } from './auth.js';
 import { requirePermission } from './permissions.js';
+import { requireNativeSession } from './nativeAuthority.js';
 
 /**
  * Source capture and history.
@@ -129,6 +130,7 @@ export function createSourceService(deps: SourceServiceDeps): SourceService {
   const clock = deps.clock ?? (() => new Date());
 
   const requireProject = (call: AuthenticatedCall, projectId: string): void => {
+    requirePermission(call, 'read');
     if (call.scope.projectId === null || call.scope.projectId !== projectId) {
       throw new ThreadlineError('scope_denied', 'The credential is not scoped to that project.');
     }
@@ -424,6 +426,20 @@ async function appendOne(
     throw new ThreadlineError('internal_error', 'Source bytes were not published before catalog insertion.');
   }
 
+  // Validate attribution even on a byte-identical delivery retry. A duplicate
+  // identity must not turn an unauthorized supplied session into an accepted
+  // request, or keep accepting a now-closed session.
+  if (record.nativeSessionId != null) {
+    try { await requireNativeSession(tx, call, record.nativeSessionId); }
+    catch (error) {
+      if (!(error instanceof ThreadlineError) || error.code !== 'scope_denied') throw error;
+      return {
+        status: 'rejected', deliveryId: record.deliveryId, code: 'unknown_native_session',
+        detail: 'No active native session belongs to this principal and binding.',
+      };
+    }
+  }
+
   const duplicate = await findExisting(tx, call.scope.tenantId, projectId, record);
   if (duplicate !== null) {
     if (duplicate.digest === item.digest) {
@@ -464,22 +480,6 @@ async function appendOne(
       };
     }
     parentOriginKey = record.parentOriginKey;
-  }
-
-  if (record.nativeSessionId != null) {
-    const session = await tx.rows<{ id: string }>(
-      `SELECT id FROM threadline_memory.native_sessions
-        WHERE tenant_id = $1 AND project_id = $2 AND id = $3`,
-      [call.scope.tenantId, projectId, record.nativeSessionId],
-    );
-    if (session[0] === undefined) {
-      return {
-        status: 'rejected',
-        deliveryId: record.deliveryId,
-        code: 'unknown_native_session',
-        detail: 'The native session is not registered in this project.',
-      };
-    }
   }
 
   const sequence = await tx.rows<{ next_source_seq: string }>(

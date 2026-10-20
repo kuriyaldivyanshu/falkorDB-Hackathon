@@ -262,6 +262,11 @@ function toPoolConfig(config: PostgresConfig): PoolConfig {
 export function toStorageError(error: unknown, stage: string): ThreadlineError {
   const name = describeError(error);
   const code = readPgCode(error);
+  if (code === 'P7501') {
+    return new ThreadlineError('schema_incompatible',
+      'Migration 7 refused unissued legacy producer/session rows. Preserve this database and review native access rows with the operator before retrying; no owner authority can be inferred. No native rows were deleted.',
+      { stage, sqlState: code });
+  }
   if (code === '23505' || code === '23503' || code === '23514' || code === '23P01') {
     return new ThreadlineError('internal_error', 'The database rejected the statement.', {
       stage,

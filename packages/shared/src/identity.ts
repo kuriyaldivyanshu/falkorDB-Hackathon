@@ -28,9 +28,9 @@ export type NativeHarness = (typeof NATIVE_HARNESSES)[number];
 /**
  * How precisely a native session was identified.
  *
- * `strong` means the harness supplied a stable thread identity that the adapter
- * qualified. `provisional` means the adapter observed an instance (root id plus
- * locator fingerprint) that cannot safely identify forks or subagents.
+ * `strong` is reserved for a qualified harness identity (unavailable).
+ * `provisional` identifies a server-registered instance without proving a native
+ * conversation, fork or subagent.
  */
 export const IDENTITY_PRECISIONS = ['strong', 'provisional'] as const;
 export type IdentityPrecision = (typeof IDENTITY_PRECISIONS)[number];
@@ -95,14 +95,15 @@ export const nativeSessionViewSchema = z.object({
   projectId: uuidSchema,
   bindingId: uuidSchema,
   enrollmentId: uuidSchema,
-  bindingGeneration: z.number().int().nonnegative(),
+  bindingGeneration: z.literal(1),
   harness: z.enum(NATIVE_HARNESSES),
   harnessVersion: byteBoundedText(64),
   /** Native thread/root id when the harness reports one; never required. */
   nativeThreadRef: z.string().min(1).max(256).nullable(),
   parentThreadRef: z.string().min(1).max(256).nullable(),
-  identityPrecision: z.enum(IDENTITY_PRECISIONS),
-  captureCoverage: z.enum(CAPTURE_COVERAGES),
+  identityPrecision: z.literal('provisional'),
+  captureCoverage: z.literal('unknown'),
+  state: z.enum(['active', 'closed']),
   createdAtMs: z.number().int().nonnegative(),
   lastSeenAtMs: z.number().int().nonnegative(),
 });
@@ -111,18 +112,24 @@ export type NativeSessionView = z.infer<typeof nativeSessionViewSchema>;
 /**
  * A project-scoped enrollment of a native adapter.
  *
- * Enrollment identifies scope, not a conversation: the writable instance is
+ * Enrollment identifies scope, not a conversation: the registered instance is
  * pinned separately to one native session per binding generation.
  */
-export const enrollmentViewSchema = z.object({
+export const enrollmentViewSchema = z.strictObject({
   enrollmentId: uuidSchema,
   projectId: uuidSchema,
   principalId: uuidSchema,
   bindingId: uuidSchema,
-  bindingGeneration: z.number().int().nonnegative(),
+  credentialId: uuidSchema,
+  label: byteBoundedText(256),
+  bindingGeneration: z.literal(1),
   harness: z.enum(NATIVE_HARNESSES),
-  state: z.enum(['active', 'revoked']),
+  state: z.enum(['active', 'revoked', 'expired']),
+  nativeSessionId: uuidSchema.nullable(),
   createdAtMs: z.number().int().nonnegative(),
+  expiresAtMs: z.number().int().nonnegative(),
+  idleExpiresAtMs: z.number().int().nonnegative(),
+  revokedAtMs: z.number().int().nonnegative().nullable(),
 });
 export type EnrollmentView = z.infer<typeof enrollmentViewSchema>;
 
@@ -144,17 +151,15 @@ export const projectJoinResultSchema = z.object({
 });
 export type ProjectJoinResult = z.infer<typeof projectJoinResultSchema>;
 
-export const nativeSessionRegisterInputSchema = z.object({
-  projectId: uuidSchema,
-  bindingId: uuidSchema,
-  enrollmentId: uuidSchema,
-  bindingGeneration: z.number().int().nonnegative(),
-  harness: z.enum(NATIVE_HARNESSES),
+export const nativeSessionRegisterInputSchema = z.strictObject({
+  expectedBindingGeneration: z.number().int().min(1).max(2147483647),
+  idempotencyKey: byteBoundedText(200),
+  adapterInstanceNonce: byteBoundedText(256),
   harnessVersion: byteBoundedText(64),
-  nativeThreadRef: z.string().min(1).max(256).nullable().optional(),
-  parentThreadRef: z.string().min(1).max(256).nullable().optional(),
-  identityPrecision: z.enum(IDENTITY_PRECISIONS),
-  captureCoverage: z.enum(CAPTURE_COVERAGES),
+  nativeThreadRef: byteBoundedText(256).nullable().default(null),
+  parentThreadRef: byteBoundedText(256).nullable().default(null),
+  identityPrecision: z.literal('provisional').default('provisional'),
+  captureCoverage: z.literal('unknown').default('unknown'),
 });
 export type NativeSessionRegisterInput = z.infer<typeof nativeSessionRegisterInputSchema>;
 

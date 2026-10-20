@@ -11,6 +11,7 @@ import {
 import type { Logger } from '../log.js';
 import { silentLogger } from '../log.js';
 import type { SqlDatabase } from '../storage/pg.js';
+import { requireProducerAuthority } from './nativeAuthority.js';
 
 /**
  * Bearer authentication and scope resolution.
@@ -29,9 +30,6 @@ export const CLIENT_TOKEN_PREFIX = 'tl_';
 /** Human administrator tokens are local and long-lived. */
 export const HUMAN_ADMIN_TOKEN_TTL_MS = 90 * 24 * 60 * 60 * 1000;
 export const HUMAN_ADMIN_IDLE_MS = 30 * 24 * 60 * 60 * 1000;
-/** Producer tokens are narrower and shorter-lived; hooks refresh them via enrollment. */
-export const PRODUCER_TOKEN_TTL_MS = 72 * 60 * 60 * 1000;
-export const PRODUCER_TOKEN_IDLE_MS = 12 * 60 * 60 * 1000;
 
 export function generateClientToken(): string {
   return `${CLIENT_TOKEN_PREFIX}${randomBytes(32).toString('base64url')}`;
@@ -77,6 +75,7 @@ export interface AuthenticatedCall {
   readonly tokenId: string;
   readonly displayLabel: string;
   readonly enrollmentId: string | null;
+  readonly bindingGeneration: number;
   readonly mcpInstanceId: string | null;
 }
 
@@ -207,30 +206,17 @@ export function createAuthService(deps: AuthServiceDeps): AuthService {
         throw new ThreadlineError('invalid_request', 'This operation requires a project scope.');
       }
 
-      // Producer liveness is tracked so an abandoned enrollment expires; the
-      // update is fenced by the tenant that the token just resolved.
-      if (row.token_kind === 'producer') {
-        const idleUntil = new Date(now.getTime() + PRODUCER_TOKEN_IDLE_MS);
-        await deps.db.withTenantTransaction(row.tenant_id, (tx) =>
-          tx.rows(
-            `UPDATE threadline_memory.client_tokens
-                SET last_seen_at = $3, idle_expires_at = $4
-              WHERE tenant_id = $1 AND id = $2 AND state = 'active'`,
-            [row.tenant_id, row.token_id, now, idleUntil],
-          ),
-        );
-      }
-
       logger.log({
         level: 'debug',
         message: 'Authenticated a client call.',
         fields: { principalKind: row.principal_kind, clientKind: row.token_kind, projectBound: projectId !== null },
       });
 
-      return {
+      const call: AuthenticatedCall = {
         tokenId: row.token_id,
         displayLabel: row.display_label,
         enrollmentId: row.enrollment_id,
+        bindingGeneration: row.binding_generation,
         mcpInstanceId: row.mcp_instance_id,
         scope: {
           tenantId: row.tenant_id,
@@ -245,6 +231,10 @@ export function createAuthService(deps: AuthServiceDeps): AuthService {
           nativeSessionId: row.native_session_id,
         },
       };
+      if (row.token_kind === 'producer') {
+        await deps.db.withTenantTransaction(row.tenant_id, (tx) => requireProducerAuthority(tx, call));
+      }
+      return call;
     },
   };
 }

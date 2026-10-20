@@ -214,6 +214,49 @@ function buildApp(deps: ApiServerDeps): FastifyInstance {
       ok(reply, await service.access.revoke(call, projectId, credentialId));
     });
 
+  app.post<{ Params: { projectId: string } }>(ROUTES.enrollments(':projectId'), async (request, reply) => {
+    reply.header('Cache-Control', 'no-store');
+    const projectId = request.params.projectId;
+    const call = await service.auth.authenticate(authorizationOf(request), { projectId });
+    ok(reply, await service.nativeAccess.issue(call, projectId, request.body));
+  });
+  app.get<{ Params: { projectId: string } }>(ROUTES.enrollments(':projectId'), async (request, reply) => {
+    reply.header('Cache-Control', 'no-store');
+    const projectId = request.params.projectId;
+    const call = await service.auth.authenticate(authorizationOf(request), { projectId });
+    const query = readObject(request.query ?? {}, 'native enrollment list');
+    if (Object.keys(query).some((key) => key !== 'limit')) throw new ThreadlineError('invalid_request', 'Only the metadata limit may be selected.');
+    ok(reply, await service.nativeAccess.list(call, projectId, readIntegerField(query, 'limit', 50, 1, 100)));
+  });
+  app.get<{ Params: { projectId: string; enrollmentId: string } }>(ROUTES.enrollment(':projectId', ':enrollmentId'), async (request, reply) => {
+    reply.header('Cache-Control', 'no-store');
+    const { projectId, enrollmentId } = request.params;
+    const call = await service.auth.authenticate(authorizationOf(request), { projectId });
+    ok(reply, await service.nativeAccess.inspect(call, projectId, enrollmentId));
+  });
+  app.post<{ Params: { projectId: string; enrollmentId: string } }>(ROUTES.enrollmentRevocation(':projectId', ':enrollmentId'), async (request, reply) => {
+    reply.header('Cache-Control', 'no-store');
+    const { projectId, enrollmentId } = request.params;
+    const call = await service.auth.authenticate(authorizationOf(request), { projectId });
+    if (request.body !== undefined && Object.keys(readObject(request.body, 'revocation')).length > 0) {
+      throw new ThreadlineError('invalid_request', 'Revocation accepts no additional fields.');
+    }
+    ok(reply, await service.nativeAccess.revoke(call, projectId, enrollmentId));
+  });
+  app.post(ROUTES.nativeSessions, async (request, reply) => {
+    reply.header('Cache-Control', 'no-store');
+    const call = await service.auth.authenticate(authorizationOf(request));
+    ok(reply, await service.nativeAccess.register(call, request.body));
+  });
+  app.get<{ Params: { projectId: string } }>(ROUTES.projectSessions(':projectId'), async (request, reply) => {
+    reply.header('Cache-Control', 'no-store');
+    const projectId = request.params.projectId;
+    const call = await service.auth.authenticate(authorizationOf(request), { projectId });
+    const query = readObject(request.query ?? {}, 'native session list');
+    if (Object.keys(query).some((key) => key !== 'limit')) throw new ThreadlineError('invalid_request', 'Only the metadata limit may be selected.');
+    ok(reply, await service.nativeAccess.sessions(call, projectId, readIntegerField(query, 'limit', 50, 1, 100)));
+  });
+
   app.post(ROUTES.appendSources, async (request, reply) => {
     const body = readObject(request.body, 'source append');
     const projectId = readStringField(body, 'projectId');
@@ -379,7 +422,6 @@ function buildApp(deps: ApiServerDeps): FastifyInstance {
   // rather than falling through as an anonymous 404.
   const unavailable: ReadonlyArray<{ readonly operation: Parameters<typeof unsupportedOperation>[0]; readonly path: string }> = [
     { operation: 'claim.status', path: ROUTES.claimStatus },
-    { operation: 'session.register', path: ROUTES.nativeSessions },
     { operation: 'job.import', path: ROUTES.jobs },
   ];
   for (const entry of unavailable) {

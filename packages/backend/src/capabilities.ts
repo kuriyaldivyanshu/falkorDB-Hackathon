@@ -26,6 +26,12 @@ export const SUPPORTED_OPERATION_IDS: readonly OperationId[] = [
   'access.reader.issue',
   'access.reader.list',
   'access.reader.revoke',
+  'access.enrollment.issue',
+  'access.enrollment.list',
+  'access.enrollment.inspect',
+  'access.enrollment.revoke',
+  'session.register',
+  'session.list',
   'source.append',
   'source.inspect',
   'source.read',
@@ -62,22 +68,24 @@ const OPERATION_TABLE: Readonly<Record<OperationId, OperationDefinition>> = {
   'access.reader.list': { summary: 'List bounded project reader credential metadata.', effect: 'admin', scope: 'human' },
   'access.reader.revoke': { summary: 'Revoke one project reader credential.', effect: 'admin', scope: 'human' },
   'project.grant.list': { summary: 'List grants for one project.', effect: 'read', scope: 'human' },
+  'access.enrollment.issue': { summary: 'Issue owner-approved enrollment and one-time producer bearer.', effect: 'admin', scope: 'human' },
+  'access.enrollment.list': { summary: 'List bounded enrollment metadata as the project owner.', effect: 'read', scope: 'human' },
+  'access.enrollment.inspect': { summary: 'Inspect an enrollment as its owner or bound producer.', effect: 'read', scope: 'both' },
+  'access.enrollment.revoke': { summary: 'Revoke an enrollment and its dedicated access.', effect: 'admin', scope: 'human' },
   'session.register': {
-    summary: 'Register one native session against an enrollment and binding.',
+    summary: 'Pin one provisional session; capture coverage stays unknown.',
     effect: 'write',
     scope: 'producer',
-    unavailable: 'Native enrollment and session identity are qualified in N03.',
   },
   'session.list': {
-    summary: 'List native sessions observed for a project.',
+    summary: 'List bounded registered sessions as owner or own session as producer.',
     effect: 'read',
     scope: 'both',
-    unavailable: 'Native enrollment and session identity are qualified in N03.',
   },
   'source.append': {
     summary: 'Append bounded permitted visible records as immutable sources.',
     effect: 'write',
-    scope: 'both',
+    scope: 'human',
   },
   'source.inspect': { summary: 'Read one source catalog entry without its bytes.', effect: 'read', scope: 'both' },
   'source.read': { summary: 'Read one bounded byte range of a source.', effect: 'read', scope: 'both' },
@@ -90,7 +98,7 @@ const OPERATION_TABLE: Readonly<Record<OperationId, OperationDefinition>> = {
   'memory.propose': {
     summary: 'Capture a candidate semantic or procedural memory version from cited sources.',
     effect: 'write',
-    scope: 'both',
+    scope: 'human',
   },
   'memory.accept': {
     summary: 'Explicitly accept one proposed version as current memory as a human actor.',
@@ -105,7 +113,7 @@ const OPERATION_TABLE: Readonly<Record<OperationId, OperationDefinition>> = {
   'memory.episode.record': {
     summary: 'Record one attempted action and the outcome established for it, with server-resolved evidence precision.',
     effect: 'write',
-    scope: 'both',
+    scope: 'human',
   },
   'memory.procedure.validate': {
     summary: 'Move a procedure from candidate to validated reuse.',
@@ -117,12 +125,12 @@ const OPERATION_TABLE: Readonly<Record<OperationId, OperationDefinition>> = {
   'task.create': {
     summary: 'Create a task with a bounded title and optional family.',
     effect: 'write',
-    scope: 'both',
+    scope: 'human',
   },
   'task.require': {
     summary: 'Bind a required memory identity to a task and resolve current requirement versions.',
     effect: 'write',
-    scope: 'both',
+    scope: 'human',
   },
   'claim.acquire': {
     summary: 'Acquire a bounded exclusive claim over a task.',
@@ -233,7 +241,7 @@ export function buildCapabilityReport(): CapabilityReport {
       captureCoverage: 'Native configuration and capture are not installed or qualified by this build.',
       modelMutations: false,
       detail:
-        'The Codex adapter is probed in N03. Until then this service accepts human-authored and producer-recorded sources only, and no episode is admitted as observed unless a human recorded complete outcome evidence.',
+        'Owner enrollment and provisional registration are available over HTTP. Codex capture and identity remain unqualified; producers have no knowledge-write permission. Observed episodes require human-recorded complete outcome evidence.',
     },
   };
 }

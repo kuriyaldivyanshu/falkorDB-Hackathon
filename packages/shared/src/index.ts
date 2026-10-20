@@ -346,3 +346,10 @@ export {
   type IssueReaderCredentialResult,
   type ListReaderCredentialsResult,
 } from './access.js';
+
+export {
+  ENROLLMENT_DEFAULT_LIFETIME_SECONDS, ENROLLMENT_MAX_LIFETIME_SECONDS, NATIVE_ACCESS_LIST_MAX,
+  issueEnrollmentInputSchema, issueEnrollmentResultSchema, listEnrollmentsResultSchema,
+  listNativeSessionsResultSchema,
+  type IssueEnrollmentResult, type ListEnrollmentsResult, type ListNativeSessionsResult,
+} from './native-access.js';
