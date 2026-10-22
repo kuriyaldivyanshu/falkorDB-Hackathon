@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { uuidSchema } from '@threadline/shared';
 import { CONTEXT_HOOK_EVENTS, hookAbsolutePath, hookTimeout } from './context-hook.js';
+import { readCompatibilityEvidence } from '../runtime.js';
 
 import {
   CODEX_MANIFEST_FILE_NAME,
@@ -9,7 +10,6 @@ import {
   CODEX_OWNERSHIP_MARKER_LINE,
   CODEX_PROFILE_FILE_NAME,
   CODEX_PROFILE_NAME,
-  CODEX_QUALIFIED_VERSION,
   type CodexOwnershipManifest,
   type ConfigPreviewFile,
   checkPreviewOwnership,
@@ -127,6 +127,7 @@ function renderProfile(input: CodexMcpPreviewInput): string {
  * reviewer needs before installing anything.
  */
 export function renderCodexMcpPreview(input: CodexMcpPreviewInput): CodexMcpPreview {
+  const evidence = readCompatibilityEvidence();
   const codexHome = assertAbsoluteSingleLinePath(input.codexHome, 'codexHome').replace(/\/+$/, '');
   assertAbsoluteSingleLinePath(input.executable, 'executable');
   assertAbsoluteSingleLinePath(input.entryScript, 'entryScript');
@@ -150,7 +151,7 @@ export function renderCodexMcpPreview(input: CodexMcpPreviewInput): CodexMcpPrev
     kind: 'threadline-codex-ownership',
     manifestVersion: 1,
     marker: CODEX_OWNERSHIP_MARKER,
-    harness: { name: 'codex', qualifiedVersion: input.contextHooks ? 'unqualified-context-hook' : CODEX_QUALIFIED_VERSION },
+    harness: { name: 'codex', qualifiedVersion: input.contextHooks ? 'unqualified-context-hook' : 'unqualified-native-runtime' },
     profileName: CODEX_PROFILE_NAME,
     ownedEntries: {
       mcpServers: [CODEX_MCP_SERVER_ID],
@@ -168,7 +169,7 @@ export function renderCodexMcpPreview(input: CodexMcpPreviewInput): CodexMcpPrev
 
   return {
     harness: 'codex',
-    qualifiedHarnessVersion: input.contextHooks ? 'unqualified-context-hook' : CODEX_QUALIFIED_VERSION,
+    qualifiedHarnessVersion: input.contextHooks ? 'unqualified-context-hook' : 'unqualified-native-runtime',
     profileName: CODEX_PROFILE_NAME,
     mcpServerId: CODEX_MCP_SERVER_ID,
     mode: input.contextHooks !== undefined ? 'context-hook' : input.contextTools === true ? 'context-read' : 'mcp-only',
@@ -179,13 +180,15 @@ export function renderCodexMcpPreview(input: CodexMcpPreviewInput): CodexMcpPrev
     ownership: manifest,
     serverCommand: { executable: input.executable, args: mcpServerArguments(input) },
     notes: [
+      'Development artifact skeleton: setup/connection/explorer, owner-only socket and privacy transition remain pending.',
+      `Bundled historical compatibility evidence records Codex ${evidence.historicalVersion}; it does not qualify native identity, callbacks or delivery.`,
       `Select the profile with \`codex --profile ${CODEX_PROFILE_NAME}\`; sessions without it load nothing.`,
       `The stdio server is bound to project ${input.projectId} at startup; a tool call cannot select another project, tenant or service address.`,
       input.contextTools === true
         ? 'Six read-only tools plus audited context retrieval: preparation records metadata, never delivery or accepted knowledge changes.'
         : 'Every exposed tool is read-only: there is no acceptance, proposal, correction or requirement-binding tool.',
       input.contextHooks ? 'Hook and MCP processes read the selected reader token file; no bearer appears in configuration.' : 'The credential is read from the Threadline home at run time and is never written into Codex configuration.',
-      input.contextHooks ? 'Only SessionStart and UserPromptSubmit retrieve context. Local stdout reporting proves no native consumption; this path remains unqualified.' : 'No hook entry is rendered without --context-hooks.',
+      input.contextHooks ? 'Legacy opt-in SessionStart/UserPromptSubmit automatic retrieval is outside the selected MVP. This historical path remains unqualified; do not install it as the MVP connection plan.' : 'No hook entry is rendered without --context-hooks. The selected MVP uses requested recall only, with no automatic startup, per-message, task-change or post-compaction recall.',
       'Native runtime hook execution, MCP tool-call identity and fork/subagent correlation remain unqualified.',
       'This command renders bytes only; it writes nothing into the Codex home.',
     ],

@@ -60,6 +60,7 @@ import { startStdioMcpServer, verifyProjectBinding } from './mcp/server.js';
 import { classifyPreviewTargets, renderCodexMcpPreview } from './codex/mcp-preview.js';
 import { runCodexContextHook } from './codex/context-hook.js';
 import { shellQuote } from './codex/config-preview.js';
+import { readCliVersion } from './runtime.js';
 
 /**
  * Process entry point.
@@ -950,18 +951,6 @@ function formatDuration(ms: number): string {
   const minutes = Math.floor(seconds / 60);
   if (minutes < 60) return `${String(minutes)}m`;
   return `${String(Math.floor(minutes / 60))}h`;
-}
-
-function readCliVersion(): string {
-  try {
-    const parsed: unknown = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
-    if (typeof parsed === 'object' && parsed !== null && typeof (parsed as { version?: unknown }).version === 'string') {
-      return (parsed as { version: string }).version;
-    }
-  } catch {
-    // A bundled build may not carry package.json next to the output.
-  }
-  return '0.0.0';
 }
 
 main(process.argv.slice(2))
