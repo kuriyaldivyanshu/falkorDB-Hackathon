@@ -12,11 +12,12 @@
     "packages/*"
   ],
   "scripts": {
-    "build": "tsc -b",
-    "clean": "tsc -b --clean",
-    "setup": "npm run build && node packages/cli/dist/index.js init",
-    "serve": "node packages/cli/dist/index.js serve",
-    "status": "node packages/cli/dist/index.js status"
+    "build": "npm run clean && tsc -b && node scripts/build-artifact.mjs",
+    "pack:artifact": "npm run build && npm pack ./dist/npm",
+    "clean": "tsc -b --clean && node -e \"const fs = require('node:fs'); for (const path of ['packages/cli/dist', 'packages/backend/dist', 'packages/shared/dist', 'dist/npm']) fs.rmSync(path, { recursive: true, force: true })\"",
+    "setup": "npm run build && node dist/npm/dist/cli/index.js init",
+    "serve": "node dist/npm/dist/cli/index.js serve",
+    "status": "node dist/npm/dist/cli/index.js status"
   },
   "devDependencies": {
     "@types/node": "^26.6.5",

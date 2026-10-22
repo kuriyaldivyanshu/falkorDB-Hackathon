@@ -205,6 +205,16 @@ export const HELP_TEXT = `Threadline — Codex-first local memory and coordinati
 Usage:
   threadline [options] <command> [arguments]
 
+Development artifact skeleton:
+  Native identity and callbacks are unqualified. Setup/connection/explorer,
+  owner-only socket and privacy transition remain pending. Legacy service and
+  context commands below retain their current v2 behavior; packaging does not
+  qualify them for the locked MVP. PostgreSQL and FalkorDB must be provisioned
+  separately for service commands. npm installation starts no service and runs
+  no database initialization, native configuration or model inference.
+  The selected MVP uses requested recall only. Legacy opt-in automatic context
+  hooks are outside that design; default preview renders no hooks.
+
 Service:
   init                 Initialize this installation: apply the memory schema, create
                        the local owner credential and record configuration.
