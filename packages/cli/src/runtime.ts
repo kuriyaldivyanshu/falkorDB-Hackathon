@@ -1,7 +1,10 @@
 import { closeSync, constants, fstatSync, openSync, readSync } from 'node:fs';
 
-/** Fixed installed layout: dist/cli/runtime.js -> the distribution root. */
-const distributionRoot = new URL('../../', import.meta.url);
+/** Fixed layouts: packages/cli/dist/runtime.js in the workspace, dist/cli/runtime.js in the artifact. */
+const distributionRoot = new URL(
+  import.meta.url.endsWith('/packages/cli/dist/runtime.js') ? '../../../' : '../../',
+  import.meta.url,
+);
 
 function readPackageJson(path: URL, maximumBytes: number, label: string): unknown {
   let descriptor: number | undefined;
