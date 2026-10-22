@@ -6,7 +6,7 @@ const distributionRoot = new URL(
   import.meta.url,
 );
 
-function readPackageJson(path: URL, maximumBytes: number, label: string): unknown {
+function readJsonFile(path: URL, maximumBytes: number, label: string): unknown {
   let descriptor: number | undefined;
   try {
     descriptor = openSync(path, constants.O_RDONLY | constants.O_NONBLOCK);
@@ -29,7 +29,7 @@ function readPackageJson(path: URL, maximumBytes: number, label: string): unknow
 }
 
 export function readCliVersion(): string {
-  const metadata = readPackageJson(new URL('package.json', distributionRoot), 32_768, 'package.json');
+  const metadata = readJsonFile(new URL('package.json', distributionRoot), 32_768, 'package.json');
   if (typeof metadata !== 'object' || metadata === null || !('version' in metadata)
     || typeof metadata.version !== 'string' || metadata.version.length > 100
     || !/^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$/.test(metadata.version)) {
@@ -41,7 +41,7 @@ export function readCliVersion(): string {
 /** Historical compatibility evidence is not native runtime qualification. */
 export function readCompatibilityEvidence(): { readonly historicalVersion: string } {
   const label = 'assets/codex/compatibility.json';
-  const data = readPackageJson(new URL(label, distributionRoot), 65_536, label);
+  const data = readJsonFile(new URL(label, distributionRoot), 65_536, label);
   if (typeof data !== 'object' || data === null
     || !('kind' in data) || data.kind !== 'threadline-codex-compatibility'
     || !('harness' in data) || data.harness !== 'codex'
@@ -50,7 +50,7 @@ export function readCompatibilityEvidence(): { readonly historicalVersion: strin
     || !/^[0-9]+\.[0-9]+\.[0-9]+$/.test(data.qualifiedVersion)
     || !('unverified' in data) || !Array.isArray(data.unverified)
     || !data.unverified.every((value: unknown) => typeof value === 'string')) {
-    throw new Error('Threadline package installation has invalid compatibility evidence. Reinstall the artifact.');
+    throw new Error(`Threadline package installation has invalid compatibility evidence: ${label}. Reinstall the artifact.`);
   }
   return { historicalVersion: data.qualifiedVersion };
 }

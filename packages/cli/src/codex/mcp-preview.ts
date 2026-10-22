@@ -127,7 +127,6 @@ function renderProfile(input: CodexMcpPreviewInput): string {
  * reviewer needs before installing anything.
  */
 export function renderCodexMcpPreview(input: CodexMcpPreviewInput): CodexMcpPreview {
-  const evidence = readCompatibilityEvidence();
   const codexHome = assertAbsoluteSingleLinePath(input.codexHome, 'codexHome').replace(/\/+$/, '');
   assertAbsoluteSingleLinePath(input.executable, 'executable');
   assertAbsoluteSingleLinePath(input.entryScript, 'entryScript');
@@ -143,6 +142,7 @@ export function renderCodexMcpPreview(input: CodexMcpPreviewInput): CodexMcpPrev
     hookAbsolutePath(input.contextHooks.contextInput);
     hookTimeout(String(input.contextHooks.timeoutMs));
   }
+  const evidence = readCompatibilityEvidence();
   const profilePath = `${codexHome}/${CODEX_PROFILE_FILE_NAME}`;
   const manifestPath = `${codexHome}/${CODEX_MANIFEST_FILE_NAME}`;
   const profileContent = renderProfile(input);

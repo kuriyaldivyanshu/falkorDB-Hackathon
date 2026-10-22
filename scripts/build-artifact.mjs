@@ -132,7 +132,9 @@ try {
     dependencies: Object.fromEntries(Object.entries(dependencies).sort(([a], [b]) => a.localeCompare(b))),
   }, null, 2)}\n`);
   await chmod(join(staging, 'dist/cli/index.js'), 0o755);
-  // Only the generated artifact root is replaced; failed assembly leaves it intact.
+  // Staging is complete. Assembly failures before this point leave the previous
+  // artifact intact; a failure during replacement can leave none until the next
+  // successful build regenerates it.
   await rm(output, { recursive: true, force: true });
   await rename(staging, output);
   console.log(`Assembled standalone artifact at ${relative(root, output)}`);
