@@ -104,6 +104,20 @@ export const CONTRACT_API_PREFIX_V3 = '/v3';
 export const CONTRACT_ROUTES_V3 = {
   captureEvents: `${CONTRACT_API_PREFIX_V3}/capture/events`,
   checkpoints: `${CONTRACT_API_PREFIX_V3}/checkpoints`,
+  recall: `${CONTRACT_API_PREFIX_V3}/recall`,
+  deliveryAck: (id: string): string => `${CONTRACT_API_PREFIX_V3}/deliveries/${id}/ack`,
+  memories: `${CONTRACT_API_PREFIX_V3}/memories`,
+  memory: (id: string): string => `${CONTRACT_API_PREFIX_V3}/memories/${id}`,
+  memoryCorrections: (id: string): string => `${CONTRACT_API_PREFIX_V3}/memories/${id}/corrections`,
+  memoryAcceptance: (id: string): string => `${CONTRACT_API_PREFIX_V3}/memories/${id}/acceptance`,
+  memoryMarkers: (id: string): string => `${CONTRACT_API_PREFIX_V3}/memories/${id}/markers`,
+  memoryVersions: (id: string): string => `${CONTRACT_API_PREFIX_V3}/memories/${id}/versions`,
+  conflictResolution: (id: string): string => `${CONTRACT_API_PREFIX_V3}/conflicts/${id}/resolution`,
+  shares: `${CONTRACT_API_PREFIX_V3}/shares`,
+  handoffs: `${CONTRACT_API_PREFIX_V3}/handoffs`,
+  graphNeighborhood: `${CONTRACT_API_PREFIX_V3}/graph/neighborhood`,
+  timeline: `${CONTRACT_API_PREFIX_V3}/timeline`,
+  sourceRange: (id: string): string => `${CONTRACT_API_PREFIX_V3}/sources/${id}/range`,
   policy: (projectId: string): string => `${CONTRACT_API_PREFIX_V3}/projects/${projectId}/policy`,
   deletions: `${CONTRACT_API_PREFIX_V3}/privacy/deletions`,
   deletion: (id: string): string => `${CONTRACT_API_PREFIX_V3}/privacy/deletions/${id}`,
@@ -132,3 +146,13 @@ export const V2_TRANSITION_V3 = {
   context: 'unsupported_upgrade_required',
   runtimeImplemented: false,
 } as const;
+
+/** Serialize already schema-parsed data as the exact compact success envelope.
+ * Parse first so defaults and schema field order are fixed. Recall accounting
+ * and transport must use these identical UTF-8 bytes. Formatting or envelope
+ * extensions require an explicit canonical-contract and accounting update; a
+ * different reported byte count alone cannot redefine the unchanged contract.
+ * This formatter does not validate data or qualify token counts. */
+export function serializeSuccessEnvelopeV3<TData>(validatedData: TData): string {
+  return JSON.stringify({ ok: true, data: validatedData });
+}
