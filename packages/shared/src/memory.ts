@@ -2,6 +2,10 @@ import { z } from 'zod';
 
 import { operationStateSchema } from './operations.js';
 import { byteBoundedText, uuidSchema, utf8ByteLength } from './validation.js';
+import { expectedPolicyV3Schema, policyFenceV3Schema } from './policy.js';
+import { CONTRACT_PROTOCOL_VERSION_V3 } from './protocol.js';
+import { guardedMutationV3Schema } from './operations.js';
+import { isoInstantSchema } from './validation.js';
 
 /**
  * Accepted memory contracts.
@@ -636,3 +640,205 @@ export function encodeMemoryDocument(document: MemoryDocument): string {
     requestedEvidencePrecision: document.requestedEvidencePrecision ?? null,
   });
 }
+
+
+export const MEMORY_KINDS_V3 = [...MEMORY_KINDS, 'preference', 'progress'] as const;
+export const MEMORY_METADATA_MAX_ASSOCIATIONS_V3 = 32;
+
+/** Labels are data, not grants or task assignments. An inferred label cannot
+ * encode a confirmed association; confirmation is an explicit guarded edit. */
+export const memoryAssociationV3Schema = z.discriminatedUnion('provenance', [
+  z.strictObject({ provenance: z.literal('manual'), confirmed: z.literal(true),
+    field: z.enum(['session', 'agent', 'task', 'topic', 'ticket', 'feature', 'tag']),
+    value: byteBoundedText(256), assertedByPrincipalId: uuidSchema }),
+  z.strictObject({ provenance: z.literal('inferred'), confirmed: z.literal(false),
+    field: z.enum(['session', 'agent', 'task', 'topic', 'ticket', 'feature', 'tag']),
+    value: byteBoundedText(256), sourceVersionId: uuidSchema }),
+]).refine((v) => v.field !== 'task' || uuidSchema.safeParse(v.value).success,
+  'Task associations require a task UUID.');
+export type MemoryAssociationV3 = z.infer<typeof memoryAssociationV3Schema>;
+
+export const memoryMetadataV3Schema = z.strictObject({
+  projectId: uuidSchema,
+  associations: z.array(memoryAssociationV3Schema).max(MEMORY_METADATA_MAX_ASSOCIATIONS_V3),
+  date: isoInstantSchema.nullable(),
+  dateProvenance: z.enum(['manual', 'inferred']).nullable(),
+}).refine((v) => (v.date === null) === (v.dateProvenance === null),
+  'A date and its provenance must be supplied together.');
+export type MemoryMetadataV3 = z.infer<typeof memoryMetadataV3Schema>;
+
+export const preferenceContentV3Schema = z.strictObject({
+  kind: z.literal('preference'), statement: byteBoundedText(4096),
+  conditions: z.array(byteBoundedText(512)).max(8),
+});
+export type PreferenceContentV3 = z.infer<typeof preferenceContentV3Schema>;
+export const progressContentV3Schema = z.strictObject({
+  kind: z.literal('progress'), objective: byteBoundedText(2048),
+  state: z.enum(['in_progress', 'blocked', 'completed', 'unknown']),
+  progress: byteBoundedText(2048),
+  blockers: z.array(byteBoundedText(512)).max(8),
+  openQuestions: z.array(byteBoundedText(512)).max(8),
+  nextSteps: z.array(byteBoundedText(512)).max(8),
+}).refine((v) => v.state !== 'blocked' || v.blockers.length > 0,
+  'Blocked progress requires an explicit blocker.');
+export type ProgressContentV3 = z.infer<typeof progressContentV3Schema>;
+
+/** V3 reuses existing content shapes with strict boundaries. Procedure reuse
+ * qualification remains deferred; only candidate procedures can be recorded. */
+export const memoryAuthoringV3Schema = z.union([
+  semanticContentSchema.strict(), preferenceContentV3Schema, progressContentV3Schema,
+  episodicContentSchema.omit({ evidencePrecision: true }).strict(),
+  procedureAuthoringSchema.extend({
+    steps: z.array(procedureStepSchema.strict()).min(1).max(MEMORY_LIMITS.maxProcedureSteps),
+    parameters: z.array(z.strictObject({ name: byteBoundedText(128), value: byteBoundedText(512) }))
+      .max(MEMORY_LIMITS.maxProcedureParameters),
+  }),
+]).refine((v) => utf8ByteLength(JSON.stringify(v)) <= MEMORY_LIMITS.maxVersionBytes,
+  'Memory content exceeds the version byte limit.');
+export type MemoryAuthoringV3 = z.infer<typeof memoryAuthoringV3Schema>;
+
+/** Proposal input has no acceptance, visibility or evidence-precision override.
+ * Policy acceptance is resolved by the service, never a caller-selected flag. */
+export const proposeMemoryV3Schema = z.strictObject({
+  protocolVersion: z.literal(CONTRACT_PROTOCOL_VERSION_V3),
+  requestId: uuidSchema, projectId: uuidSchema, guard: expectedPolicyV3Schema,
+  content: memoryAuthoringV3Schema, metadata: memoryMetadataV3Schema,
+  sourceVersionIds: z.array(uuidSchema).max(MEMORY_LIMITS.maxSourceClosure),
+}).refine((v) => v.projectId === v.metadata.projectId, 'Metadata must name the selected project.');
+export type ProposeMemoryV3 = z.infer<typeof proposeMemoryV3Schema>;
+export const correctMemoryV3Schema = guardedMutationV3Schema.extend({
+  content: memoryAuthoringV3Schema, metadata: memoryMetadataV3Schema,
+  reason: byteBoundedText(512), sourceVersionIds: z.array(uuidSchema).max(MEMORY_LIMITS.maxSourceClosure),
+}).refine((v) => v.projectId === v.metadata.projectId, 'Correction metadata must keep project scope.');
+export type CorrectMemoryV3 = z.infer<typeof correctMemoryV3Schema>;
+
+/** This is an owner-controlled policy view, not model input. Defaults require
+ * human review; owner_policy requires a matching current owner rule at runtime. */
+export const memoryAcceptancePolicyV3Schema = z.strictObject({
+  protocolVersion: z.literal(CONTRACT_PROTOCOL_VERSION_V3), projectId: uuidSchema,
+  ownerPrincipalId: uuidSchema, fence: policyFenceV3Schema,
+  defaultAcceptance: z.literal('human_review'),
+  rules: z.array(z.strictObject({ ruleId: uuidSchema,
+    kind: z.enum(MEMORY_KINDS_V3), semanticSubtype: z.enum(SEMANTIC_SUBTYPES).nullable(),
+    acceptance: z.enum(['human_review', 'owner_policy']),
+  }).refine((v) => (v.kind === 'semantic') === (v.semanticSubtype !== null),
+    'Only semantic rules have a semantic subtype.')).max(32),
+});
+export type MemoryAcceptancePolicyV3 = z.infer<typeof memoryAcceptancePolicyV3Schema>;
+export const memoryAcceptanceV3Schema = z.discriminatedUnion('state', [
+  z.strictObject({ state: z.literal('proposed') }),
+  z.strictObject({ state: z.literal('accepted'), acceptedAt: isoInstantSchema,
+    authority: z.discriminatedUnion('basis', [
+      z.strictObject({ basis: z.literal('human'), principalId: uuidSchema }),
+      z.strictObject({ basis: z.literal('owner_policy'), ownerPrincipalId: uuidSchema,
+        ruleId: uuidSchema, fence: policyFenceV3Schema }),
+    ]),
+  }),
+  z.strictObject({ state: z.literal('superseded'), supersededByVersionId: uuidSchema }),
+  z.strictObject({ state: z.literal('retracted'), reason: byteBoundedText(512) }),
+]);
+export type MemoryAcceptanceV3 = z.infer<typeof memoryAcceptanceV3Schema>;
+export const acceptMemoryV3Schema = guardedMutationV3Schema.extend({
+  proposalVersionId: uuidSchema,
+});
+export type AcceptMemoryV3 = z.infer<typeof acceptMemoryV3Schema>;
+
+export const memoryMarkersV3Schema = z.strictObject({
+  pinned: z.boolean(),
+  stale: z.discriminatedUnion('state', [
+    z.strictObject({ state: z.literal('unflagged') }),
+    z.strictObject({ state: z.literal('flagged'), reason: byteBoundedText(512), flaggedAt: isoInstantSchema }),
+  ]),
+});
+export type MemoryMarkersV3 = z.infer<typeof memoryMarkersV3Schema>;
+/** Pin affects ranking only; it cannot extend retention, confer acceptance or
+ * bypass denial. These edits are guarded mutations, not direct content edits. */
+export const markMemoryV3Schema = guardedMutationV3Schema.extend({ markers: memoryMarkersV3Schema });
+export type MarkMemoryV3 = z.infer<typeof markMemoryV3Schema>;
+export const memoryVersionRefV3Schema = z.strictObject({ memoryId: uuidSchema, versionId: uuidSchema });
+export type MemoryVersionRefV3 = z.infer<typeof memoryVersionRefV3Schema>;
+const conflictParticipantsV3Schema = z.array(memoryVersionRefV3Schema).min(2).max(16)
+  .refine((v) => new Set(v.map((p) => p.memoryId)).size === v.length,
+    'A conflict must name distinct memories with their current versions.');
+export const memoryConflictV3Schema = z.strictObject({
+  conflictId: uuidSchema, projectId: uuidSchema,
+  participants: conflictParticipantsV3Schema,
+  resolution: z.discriminatedUnion('state', [
+    z.strictObject({ state: z.literal('unresolved') }),
+    z.strictObject({ state: z.literal('resolved'), resolutionVersionId: uuidSchema,
+      resolvedByPrincipalId: uuidSchema, resolvedAt: isoInstantSchema }),
+  ]),
+});
+export type MemoryConflictV3 = z.infer<typeof memoryConflictV3Schema>;
+export const resolveMemoryConflictV3Schema = z.strictObject({
+  protocolVersion: z.literal(CONTRACT_PROTOCOL_VERSION_V3), requestId: uuidSchema,
+  projectId: uuidSchema, guard: expectedPolicyV3Schema,
+  conflictId: uuidSchema, expectedParticipants: conflictParticipantsV3Schema,
+  resolution: byteBoundedText(4096),
+});
+export type ResolveMemoryConflictV3 = z.infer<typeof resolveMemoryConflictV3Schema>;
+
+/** Sharing publishes a new destination proposal under destination policy.
+ * Origin details stay in the protected dependency ledger, not recipient text. */
+export const shareMemoryV3Schema = z.strictObject({
+  protocolVersion: z.literal(CONTRACT_PROTOCOL_VERSION_V3), requestId: uuidSchema,
+  originProjectId: uuidSchema, origin: memoryVersionRefV3Schema,
+  originGuard: expectedPolicyV3Schema, destinationProjectId: uuidSchema,
+  destinationGuard: expectedPolicyV3Schema,
+  selectedSourceVersionIds: z.array(uuidSchema).max(MEMORY_LIMITS.maxSourceClosure),
+}).refine((v) => v.originProjectId !== v.destinationProjectId,
+  'Sharing requires a separate destination project.');
+export type ShareMemoryV3 = z.infer<typeof shareMemoryV3Schema>;
+export const sharingLineageV3Schema = z.strictObject({
+  publicationId: uuidSchema, destination: memoryVersionRefV3Schema,
+  dependencyLedgerRef: uuidSchema,
+  originDisclosure: z.literal('protected'),
+});
+export type SharingLineageV3 = z.infer<typeof sharingLineageV3Schema>;
+
+/** Requested knowledge transfer only; no execution/claim transfer or inferred
+ * task ownership. Composition uses the recall packet's same whole budget. */
+export const requestedHandoffV3Schema = z.strictObject({
+  protocolVersion: z.literal(CONTRACT_PROTOCOL_VERSION_V3), projectId: uuidSchema,
+  kind: z.literal('handoff'), requestId: uuidSchema, taskId: uuidSchema.nullable(),
+  fromSessionId: uuidSchema.nullable(),
+  progressVersionIds: z.array(uuidSchema).max(16),
+  objective: byteBoundedText(2048), conditions: z.array(byteBoundedText(512)).max(8),
+  outcomes: z.array(z.strictObject({ outcome: z.enum(EPISODE_OUTCOMES),
+    precision: z.enum(EPISODE_EVIDENCE_PRECISIONS), sourceVersionId: uuidSchema })).max(8),
+  unresolved: z.array(byteBoundedText(512)).max(16),
+  sourceVersionIds: z.array(uuidSchema).max(MEMORY_LIMITS.maxSourceClosure),
+  state: z.enum(['ready', 'incomplete', 'conflict', 'unavailable']),
+  limitations: z.array(byteBoundedText(256)).max(16),
+}).refine((v) => v.state === 'ready' || v.limitations.length > 0,
+  'Incomplete handoffs require explicit limitations.');
+export type RequestedHandoffV3 = z.infer<typeof requestedHandoffV3Schema>;
+
+export const memoryContentV3Schema = z.union([
+  semanticContentSchema.strict(), preferenceContentV3Schema, progressContentV3Schema,
+  episodicContentSchema.strict(),
+  proceduralContentSchema.extend({
+    procedureState: z.literal('candidate'), reviewRef: z.null(),
+    steps: z.array(procedureStepSchema.strict()).min(1).max(MEMORY_LIMITS.maxProcedureSteps),
+    parameters: z.array(z.strictObject({ name: byteBoundedText(128), value: byteBoundedText(512) }))
+      .max(MEMORY_LIMITS.maxProcedureParameters),
+  }).strict(),
+  requestedHandoffV3Schema,
+]).refine((v) => utf8ByteLength(JSON.stringify(v)) <= MEMORY_LIMITS.maxVersionBytes,
+  'Stored content exceeds the version byte limit.');
+export type MemoryContentV3 = z.infer<typeof memoryContentV3Schema>;
+export const memoryRecordV3Schema = z.strictObject({
+  protocolVersion: z.literal(CONTRACT_PROTOCOL_VERSION_V3),
+  projectId: uuidSchema, memoryId: uuidSchema, versionId: uuidSchema,
+  content: memoryContentV3Schema, metadata: memoryMetadataV3Schema,
+  acceptance: memoryAcceptanceV3Schema, markers: memoryMarkersV3Schema,
+  sourceVersionIds: z.array(uuidSchema).max(MEMORY_LIMITS.maxSourceClosure),
+  conflictIds: z.array(uuidSchema).max(16),
+  createdAt: isoInstantSchema,
+}).refine((v) => v.projectId === v.metadata.projectId,
+  'Stored metadata must match the memory project.')
+  .refine((v) => !('projectId' in v.content) || v.content.projectId === v.projectId,
+    'Handoff content must match the memory project.')
+  .refine((v) => utf8ByteLength(JSON.stringify(v)) <= MEMORY_LIMITS.maxVersionBytes,
+    'The complete memory version exceeds its byte limit.');
+export type MemoryRecordV3 = z.infer<typeof memoryRecordV3Schema>;
