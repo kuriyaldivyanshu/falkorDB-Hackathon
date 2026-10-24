@@ -503,3 +503,15 @@ export {
   type ExplorerPageV3,
   type ExplorerResyncV3,
 } from './explorer.js';
+
+export {
+  SANITIZER_VERSION_V3,
+  SANITIZATION_LIMITS_V3,
+  SANITIZATION_FIELDS_V3,
+  sanitizationPolicyV3Schema,
+  sanitizationInputV3Schema,
+  sanitizeContentV3,
+  type SanitizationFieldV3,
+  type SanitizationPolicyV3,
+  type SanitizationInputV3,
+} from './sanitization.js';
