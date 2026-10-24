@@ -508,6 +508,7 @@ export {
   SANITIZER_VERSION_V3,
   SANITIZATION_LIMITS_V3,
   SANITIZATION_FIELDS_V3,
+  SANITIZATION_PROFILES_V3,
   sanitizationPolicyV3Schema,
   sanitizationInputV3Schema,
   sanitizeContentV3,
