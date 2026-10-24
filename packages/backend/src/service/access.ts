@@ -6,6 +6,7 @@ import {
   type ReaderCredentialMetadata, type IssueReaderCredentialResult, type ListReaderCredentialsResult,
 } from '@threadline/shared';
 
+import { withProjectWriteLock } from '../storage/pg.js';
 import { canonicalDigest, sha256Hex } from '../storage/digest.js';
 import type { SqlDatabase, TxClient } from '../storage/pg.js';
 import { generateClientToken, hashClientToken, type AuthenticatedCall } from './auth.js';
@@ -42,8 +43,8 @@ function metadata(row: CredentialRow): ReaderCredentialMetadata {
 
 /** Recheck stored owner authority inside each transaction. Row locks preserve
  * that authority through mutation commit; current expiry uses advancing time.
- * This does not take the context project lock: revocation can commit while a
- * context packet is being selected and its final release query will see it.
+ * Mutations take the common project barrier before these authority locks.
+ * Release holds shared authority locks until its permit commits.
  */
 export async function authorizeProjectOwner(tx: TxClient, call: AuthenticatedCall, projectId: string): Promise<void> {
   requireProjectScope(call, projectId);
@@ -76,7 +77,7 @@ export function createAccessService(deps: { db: SqlDatabase }): AccessService {
       const parsed = parseContract(issueReaderCredentialInputSchema, input, 'reader credential issuance');
       const keyDigest = sha256Hex(parsed.idempotencyKey);
       const digest = canonicalDigest({ label: parsed.label, lifetimeSeconds: parsed.lifetimeSeconds });
-      return deps.db.withTenantTransaction(call.scope.tenantId, async (tx) => {
+      return withProjectWriteLock(deps.db, call.scope.tenantId, projectId, async (tx) => {
         await tx.rows('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',
           [`reader-issuance:${call.scope.tenantId}:${projectId}:${call.scope.principalId}:${keyDigest}`]);
         await authorizeProjectOwner(tx, call, projectId);
@@ -110,7 +111,7 @@ export function createAccessService(deps: { db: SqlDatabase }): AccessService {
     async list(call, projectId, limit = 50) {
       parseContract(uuidSchema, projectId, 'project identity');
       if (!Number.isInteger(limit) || limit < 1 || limit > READER_LIST_MAX) throw new ThreadlineError('invalid_request', 'Reader metadata limit must be 1 through 100.');
-      return deps.db.withTenantTransaction(call.scope.tenantId, async (tx) => {
+      return withProjectWriteLock(deps.db, call.scope.tenantId, projectId, async (tx) => {
         await authorizeProjectOwner(tx, call, projectId);
         const rows = await tx.rows<CredentialRow>(`${SELECT_METADATA}
           WHERE r.tenant_id=$1 AND r.project_id=$2 ORDER BY t.created_at DESC,r.credential_id DESC LIMIT $3`,
@@ -121,7 +122,7 @@ export function createAccessService(deps: { db: SqlDatabase }): AccessService {
     async revoke(call, projectId, credentialId) {
       parseContract(uuidSchema, projectId, 'project identity');
       parseContract(uuidSchema, credentialId, 'credential identity');
-      return deps.db.withTenantTransaction(call.scope.tenantId, async (tx) => {
+      return withProjectWriteLock(deps.db, call.scope.tenantId, projectId, async (tx) => {
         await authorizeProjectOwner(tx, call, projectId);
         const row = await read(tx, call.scope.tenantId, projectId, credentialId);
         await tx.rows(`UPDATE threadline_memory.client_tokens SET state='revoked',revoked_at=clock_timestamp(),revision=revision+1

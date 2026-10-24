@@ -26,6 +26,7 @@ import {
 import type { SqlDatabase } from '../storage/pg.js';
 import { withProjectWriteLock } from '../storage/pg.js';
 import type { AuthenticatedCall } from './auth.js';
+import type { ReleaseService } from './release.js';
 import { requirePermission } from './permissions.js';
 import {
   classifyDedupe,
@@ -63,6 +64,7 @@ export interface TaskService {
 export interface TaskServiceDeps {
   readonly db: SqlDatabase;
   readonly graphStore: GraphStore;
+  readonly release: ReleaseService;
   readonly clock?: () => Date;
   readonly logger?: Logger;
 }
@@ -153,6 +155,7 @@ export function createTaskService(deps: TaskServiceDeps): TaskService {
     async view(call, projectId, taskId): Promise<TaskView> {
       requirePermission(call, 'read');
       requireProjectScope(call, projectId);
+      if (!await deps.release.eligible(call, [{projectId,kind:'task',id:taskId}])) throw new ThreadlineError('not_found', 'The requested resource does not exist.');
       const graph = requireGraph(call);
       return withGraphRead(async () => {
         await requireActiveProjectRoot(graph, call);
@@ -202,6 +205,7 @@ export function createTaskService(deps: TaskServiceDeps): TaskService {
     async requirements(call, projectId, taskId): Promise<TaskRequirementsView> {
       requirePermission(call, 'read');
       requireProjectScope(call, projectId);
+      if (!await deps.release.eligible(call, [{projectId,kind:'task',id:taskId}])) throw new ThreadlineError('not_found', 'The requested resource does not exist.');
       const graph = requireGraph(call);
       return withGraphRead(async () => {
         await requireActiveProjectRoot(graph, call);

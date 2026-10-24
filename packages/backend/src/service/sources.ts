@@ -30,6 +30,7 @@ import { withProjectWriteLock } from '../storage/pg.js';
 import type { AuthenticatedCall } from './auth.js';
 import { requirePermission } from './permissions.js';
 import { requireNativeSession } from './nativeAuthority.js';
+import { createReleaseService, RELEASE_LIMITS, type ReleaseService } from './release.js';
 
 /**
  * Source capture and history.
@@ -56,6 +57,7 @@ export interface SourceService {
 export interface SourceServiceDeps {
   readonly db: SqlDatabase;
   readonly files: SourceFileStore;
+  readonly release?: ReleaseService;
   readonly clock?: () => Date;
   readonly logger?: Logger;
 }
@@ -126,6 +128,7 @@ const SOURCE_SELECT = `
     FROM threadline_memory.sources s`;
 
 export function createSourceService(deps: SourceServiceDeps): SourceService {
+  const release = deps.release ?? createReleaseService({ db: deps.db, files: deps.files });
   const logger = deps.logger ?? silentLogger;
   const clock = deps.clock ?? (() => new Date());
 
@@ -147,6 +150,9 @@ export function createSourceService(deps: SourceServiceDeps): SourceService {
     const row = rows[0];
     if (row === undefined) {
       throw new ThreadlineError('not_found', 'No such source exists in this project scope.');
+    }
+    if (!await release.eligible(call, [{projectId, kind: 'source', id: sourceId}], transaction)) {
+      throw new ThreadlineError('not_found', 'The requested resource does not exist.');
     }
     return row;
   };
@@ -266,6 +272,10 @@ export function createSourceService(deps: SourceServiceDeps): SourceService {
   return {
     async append(call, input, transaction) {
       requirePermission(call, 'knowledge.write');
+      const parsed = parseContract(sourceAppendInputSchema, input, 'source append');
+      if (parsed.records.some((record) => record.kind === 'context_manifest')) {
+        throw new ThreadlineError('scope_denied', 'Context manifests require the trusted audit path.');
+      }
       return appendStored(call, input, transaction);
     },
     async appendContextManifest(call, input, nonce, transaction) {
@@ -326,6 +336,7 @@ export function createSourceService(deps: SourceServiceDeps): SourceService {
     },
 
     async history(call: AuthenticatedCall, query: unknown): Promise<SourceHistoryPage> {
+      const deadline = Date.now() + RELEASE_LIMITS.workMs;
       const parsed = parseContract(sourceHistoryQuerySchema, query, 'history query');
       requireProject(call, parsed.projectId);
 
@@ -364,7 +375,7 @@ export function createSourceService(deps: SourceServiceDeps): SourceService {
         values.push(parsed.nativeSessionId);
         conditions.push(`s.producer_session_id = $${String(values.length)}::uuid`);
       }
-      values.push(limit + 1);
+      values.push(RELEASE_LIMITS.dependencies + 1);
       const rows = await deps.db.withTenantTransaction(call.scope.tenantId, (tx) =>
         tx.rows<SourceRow>(
           `${SOURCE_SELECT}
@@ -375,20 +386,15 @@ export function createSourceService(deps: SourceServiceDeps): SourceService {
         ),
       );
 
-      // The fetch asks for one row beyond the page: if it arrives, a further page
-      // exists. Available rows fill the page up to the limit; unavailable ones
-      // are counted and skipped, and the cursor still advances across them so a
-      // later page can never stick on the same hole.
+      // Never silently truncate before eligibility. If the complete bounded
+      // candidate window cannot be discovered, refuse and request narrower scope.
+      if (rows.length > RELEASE_LIMITS.dependencies) throw new ThreadlineError('overloaded', 'Select a narrower history scope.');
       const entries: SourceView[] = [];
-      let unavailableCount = 0;
+      const unavailableCount = 0;
       let hasMore = false;
       let cursorRow: SourceRow | null = null;
       for (const row of rows) {
-        if (row.availability !== 'available') {
-          unavailableCount += 1;
-          cursorRow = row;
-          continue;
-        }
+        if (row.availability !== 'available' || !await release.eligible(call, [{projectId: parsed.projectId, kind: 'source', id: row.id}], undefined, deadline)) continue;
         if (entries.length === limit) {
           hasMore = true;
           break;
@@ -396,9 +402,7 @@ export function createSourceService(deps: SourceServiceDeps): SourceService {
         entries.push(toView(row));
         cursorRow = row;
       }
-      if (!hasMore) {
-        hasMore = rows.length > limit;
-      }
+
       const nextCursor =
         hasMore && cursorRow !== null
           ? encodeCursor({ v: 1, projectSeq: cursorRow.project_seq, filterDigest })
@@ -534,6 +538,11 @@ async function appendOne(
       record.gapReason ?? null,
     ],
   );
+
+  if (record.kind === 'context_manifest') {
+    await tx.rows(`UPDATE threadline_memory.sources SET release_state='eligible'
+      WHERE tenant_id=$1 AND project_id=$2 AND id=$3`, [call.scope.tenantId, projectId, sourceId]);
+  }
 
   if (parentOriginKey !== null) {
     await tx.rows(

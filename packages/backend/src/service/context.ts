@@ -17,9 +17,10 @@ import { projectRootIdFor, readProjectRoot, readVersionDetailRows } from '../sto
 import { projectWriteLockKey, type SqlDatabase, type TxClient } from '../storage/pg.js';
 import type { AuthenticatedCall } from './auth.js';
 import { requirePermission } from './permissions.js';
-import { PRODUCER_AUTHORITY_SQL, requireNativeSession } from './nativeAuthority.js';
+import { requireNativeSession } from './nativeAuthority.js';
 import { assertRootMatchesScope, requireProjectScope, toMemoryVersion, withGraphRead } from './semanticSupport.js';
 import type { SourceService } from './sources.js';
+import { lockReleaseAuthority, identityOf, type ReleaseService } from './release.js';
 import type { TaskService } from './tasks.js';
 
 export const CONTEXT_CANDIDATE_LIMIT = 32;
@@ -34,6 +35,7 @@ export interface ContextServiceDeps {
   readonly graphStore: GraphStore;
   readonly sources: SourceService;
   readonly tasks: TaskService;
+  readonly release: ReleaseService;
   readonly clock?: () => Date;
 }
 
@@ -75,27 +77,8 @@ export function createContextService(deps: ContextServiceDeps): ContextService {
    * Bearer authentication at route entry remains the sole source of scope.
    */
   const releaseScope = async (tx: TxClient, call: AuthenticatedCall): Promise<void> => {
-    const rows = await tx.rows<{ graph_epoch: string; privacy_revision: string }>(
-      `SELECT p.graph_epoch, p.privacy_revision::text AS privacy_revision
-         FROM threadline_memory.projects p
-         JOIN threadline_memory.project_grants g ON g.tenant_id=p.tenant_id AND g.project_id=p.id
-         JOIN threadline_memory.client_tokens t ON t.tenant_id=p.tenant_id AND t.id=$4
-         JOIN threadline_memory.principals a ON a.tenant_id=t.tenant_id AND a.id=t.principal_id
-        WHERE p.tenant_id=$1 AND p.id=$2 AND g.principal_id=$3 AND g.state='active'
-          AND p.state='active' AND p.policy_state <> 'blocked'
-          AND t.principal_id=$3 AND t.state='active' AND t.revoked_at IS NULL
-          AND t.expires_at>clock_timestamp() AND t.idle_expires_at>clock_timestamp() AND a.state='active'
-          AND (t.project_id IS NULL OR t.project_id=p.id) AND t.kind=$5
-          AND (t.kind<>'reader' OR (g.role='reader' AND a.kind='service' AND t.project_id=p.id))
-          AND t.native_session_id IS NOT DISTINCT FROM $6::uuid
-          AND (t.kind<>'producer' OR (t.native_session_id IS NOT NULL AND t.enrollment_id=$7 AND t.binding_generation=$8))
-          AND ${PRODUCER_AUTHORITY_SQL}`,
-      [call.scope.tenantId, call.scope.projectId, call.scope.principalId, call.tokenId, call.scope.tokenKind,
-        call.scope.nativeSessionId, call.enrollmentId, call.bindingGeneration],
-    );
-    const row = rows[0];
-    if (row === undefined) throw new ThreadlineError('scope_denied', 'Context release is not authorized.');
-    if (row.graph_epoch !== call.scope.graphEpoch || row.privacy_revision !== call.scope.privacyRevision) {
+    const current = await lockReleaseAuthority(tx, identityOf(call));
+    if (current.graphEpoch !== call.scope.graphEpoch || current.privacyRevision !== call.scope.privacyRevision) {
       throw new ContextRefusal('stale_snapshot');
     }
   };
@@ -249,6 +232,7 @@ export function createContextService(deps: ContextServiceDeps): ContextService {
               if (prior === undefined) omissions.push({ kind, reason, count: 1 }); else prior.count++;
             };
             for (const id of [...(task?.requiredMemoryIds ?? [])].sort()) {
+              if (!await deps.release.eligible(call, [{projectId: parsed.projectId,kind:'memory',id}], tx)) throw new ContextRefusal('missing_current_authority');
               const v = await version(call, id);
               if (v.content.kind !== 'semantic') throw new ContextRefusal('missing_current_authority');
               items.push(await makeItem(tx, call, v, true, parsed.taskId ?? null));
@@ -256,17 +240,18 @@ export function createContextService(deps: ContextServiceDeps): ContextService {
             if (sourceIds(items).length > CONTEXT_MAX_SOURCE_REFS) throw new ContextRefusal('incomplete_provenance');
             if (Buffer.byteLength(render(items)) > parsed.maxBodyBytes) throw new ContextRefusal('mandatory_overflow');
             const candidates = await withGraphRead(() => readContextCandidates(graphFor(call), projectRootIdFor(parsed.projectId), CONTEXT_CANDIDATE_LIMIT + 1));
-            if (candidates.length > CONTEXT_CANDIDATE_LIMIT) omit('orientation', 'candidate_limit');
+            if (candidates.length > CONTEXT_CANDIDATE_LIMIT) throw new ThreadlineError('overloaded', 'Select a narrower context scope.');
             const ranked: MemoryVersion[] = [];
-            for (const id of candidates.slice(0, CONTEXT_CANDIDATE_LIMIT)) {
+            for (const id of candidates) {
               if (task?.requiredMemoryIds.includes(id)) continue;
               try {
+                if (!await deps.release.eligible(call, [{projectId: parsed.projectId,kind:'memory',id}], tx)) continue;
                 const v = await version(call, id);
                 if (v.content.kind === 'semantic' && v.content.subtype === 'requirement') continue;
                 if (!applicable(v, parsed, task)) { omit(v.content.kind, 'not_applicable'); continue; }
                 ranked.push(v);
               } catch (error) {
-                if (error instanceof ContextRefusal) { omit('orientation', 'not_applicable'); continue; }
+                if (error instanceof ContextRefusal) continue;
                 throw error;
               }
             }
@@ -305,6 +290,15 @@ export function createContextService(deps: ContextServiceDeps): ContextService {
             if (canonicalDigest(before) !== canonicalDigest(await rootFor(call))) throw new ContextRefusal('stale_snapshot');
             const outcome = (await deps.sources.appendContextManifest(call, manifest, nonce, tx)).outcomes[0];
             if (outcome === undefined || outcome.status === 'rejected') throw new ThreadlineError('idempotency_mismatch', 'The context manifest identity is unavailable.');
+            const dependencies = [
+              ...items.map((item) => ({kind:'version',id:item.versionId})),
+              ...sourceIds(items).map((id) => ({kind:'source',id})),
+              ...(task ? [{kind:'task',id:task.taskId}] : []),
+            ];
+            for (const dependency of dependencies) await tx.rows(`INSERT INTO threadline_memory.release_dependencies
+              (tenant_id,project_id,resource_kind,resource_id,dependency_project_id,dependency_kind,dependency_id)
+              VALUES ($1,$2,'source',$3,$2,$4,$5) ON CONFLICT DO NOTHING`,
+            [call.scope.tenantId,parsed.projectId,outcome.sourceId,dependency.kind,dependency.id]);
             const id = randomUUID();
             await tx.rows(
               `INSERT INTO threadline_memory.context_occurrences

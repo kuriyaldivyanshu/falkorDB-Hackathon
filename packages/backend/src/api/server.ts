@@ -8,6 +8,8 @@ import {
   type ThreadlineErrorCode,
 } from '@threadline/shared';
 
+import type { AuthenticatedCall, AuthenticateTarget } from '../service/auth.js';
+import type { ReleaseTicket, ReleaseResource } from '../service/release.js';
 import { requirePermission } from '../service/permissions.js';
 import { unsupportedOperation } from '../capabilities.js';
 import type { ServiceConfig } from '../config.js';
@@ -120,6 +122,41 @@ function buildApp(deps: ApiServerDeps): FastifyInstance {
     trustProxy: false,
   });
 
+  const tickets = new WeakMap<FastifyRequest, ReleaseTicket>();
+  const authenticate = async (request: FastifyRequest, target?: AuthenticateTarget): Promise<AuthenticatedCall> => {
+    const call = await service.auth.authenticate(authorizationOf(request), target);
+    const surface = `${request.method} ${request.routeOptions.url ?? '/unknown'}`;
+    const params = request.params as Record<string, string>;
+    const seeds: ReleaseResource[] = [];
+    if (call.scope.projectId !== null) for (const [field,kind] of [
+      ['sourceId','source'],['memoryId','memory'],['taskId','task'],['operationId','operation'],
+    ] as const) {
+      if (params?.[field]) seeds.push({projectId: call.scope.projectId, kind, id: params[field]});
+    }
+    tickets.set(request, await service.release.begin(call, surface, seeds, /\/(sources|history|memories|tasks|operations|context)(\/|$)/.test(request.routeOptions.url ?? '')));
+    return call;
+  };
+  app.addHook('onSend', async (request, reply, payload) => {
+    if (reply.statusCode >= 400) return payload;
+    const ticket = tickets.get(request);
+    // Liveness is the only unauthenticated successful route. New authenticated
+    // routes cannot accidentally bypass the final gate by forgetting a helper.
+    if (!ticket) {
+      if (request.routeOptions.url === ROUTES.health) return payload;
+      throw new ThreadlineError('scope_denied', 'This release is not authorized.');
+    }
+    if (typeof payload !== 'string') throw new ThreadlineError('invalid_request', 'Only bounded JSON responses can be released.');
+    let current = ticket;
+    if (request.method === 'POST' && request.routeOptions.url === ROUTES.nativeSessions) {
+      // Registration intentionally changes the caller's stored pin. Obtain a
+      // fresh metadata ticket under the newly authenticated binding.
+      const call = await service.auth.authenticate(authorizationOf(request));
+      current = await service.release.begin(call, ticket.surface, [], false);
+    }
+    await service.release.permit(current, payload);
+    return payload;
+  });
+
   app.setErrorHandler((error: unknown, _request: FastifyRequest, reply: FastifyReply) => {
     const mapped = toSafeError(error);
     if (mapped.code === 'internal_error') {
@@ -144,8 +181,8 @@ function buildApp(deps: ApiServerDeps): FastifyInstance {
     reply.code(STATUS_BY_CODE[error.code]).send({ ok: false, error });
   });
 
-  const ok = <T>(reply: FastifyReply, data: T): void => {
-    void reply.send({ ok: true, data });
+  const ok = <T>(reply: FastifyReply, data: T): FastifyReply => {
+    return reply.send({ ok: true, data });
   };
 
   // Unauthenticated liveness only: it proves the process answers and names the
@@ -156,119 +193,119 @@ function buildApp(deps: ApiServerDeps): FastifyInstance {
   // Operational detail is authorized: the backlog is a cross-tenant count and
   // readiness describes the shared stores, which is not public information.
   app.get(ROUTES.status, async (request, reply) => {
-    const call = await service.auth.authenticate(authorizationOf(request), { allowTenantLevel: true });
+    const call = await authenticate(request, { allowTenantLevel: true });
     requirePermission(call, 'service.status');
-    ok(reply, service.status());
+    return ok(reply, service.status());
   });
 
   app.get(ROUTES.capabilities, async (request, reply) => {
-    const call = await service.auth.authenticate(authorizationOf(request), { allowTenantLevel: true });
+    const call = await authenticate(request, { allowTenantLevel: true });
     requirePermission(call, 'capabilities');
-    ok(reply, service.capabilities());
+    return ok(reply, service.capabilities());
   });
 
   app.get(ROUTES.projects, async (request, reply) => {
-    const call = await service.auth.authenticate(authorizationOf(request), { allowTenantLevel: true });
+    const call = await authenticate(request, { allowTenantLevel: true });
     requirePermission(call, 'read');
-    ok(reply, await service.projects.list(call));
+    return ok(reply, await service.projects.list(call));
   });
 
   app.post(ROUTES.projects, async (request, reply) => {
-    const call = await service.auth.authenticate(authorizationOf(request), { allowTenantLevel: true });
+    const call = await authenticate(request, { allowTenantLevel: true });
     requirePermission(call, 'project.admin');
-    ok(reply, await service.projects.add(call, request.body));
+    return ok(reply, await service.projects.add(call, request.body));
   });
 
   app.get<{ Params: { projectId: string } }>(ROUTES.projectGrants(':projectId'), async (request, reply) => {
     const projectId = request.params.projectId;
-    const call = await service.auth.authenticate(authorizationOf(request), { projectId });
+    const call = await authenticate(request, { projectId });
     requirePermission(call, 'project.admin');
-    ok(reply, await service.projects.listGrants(call, projectId));
+    return ok(reply, await service.projects.listGrants(call, projectId));
   });
 
   app.post<{ Params: { projectId: string } }>(ROUTES.readerCredentials(':projectId'), async (request, reply) => {
     reply.header('Cache-Control', 'no-store');
     const projectId = request.params.projectId;
-    const call = await service.auth.authenticate(authorizationOf(request), { projectId });
+    const call = await authenticate(request, { projectId });
     requirePermission(call, 'access.admin');
-    ok(reply, await service.access.issue(call, projectId, request.body));
+    return ok(reply, await service.access.issue(call, projectId, request.body));
   });
   app.get<{ Params: { projectId: string } }>(ROUTES.readerCredentials(':projectId'), async (request, reply) => {
     reply.header('Cache-Control', 'no-store');
     const projectId = request.params.projectId;
-    const call = await service.auth.authenticate(authorizationOf(request), { projectId });
+    const call = await authenticate(request, { projectId });
     requirePermission(call, 'access.admin');
     const query = readObject(request.query ?? {}, 'reader credential list');
     if (Object.keys(query).some((key) => key !== 'limit')) throw new ThreadlineError('invalid_request', 'Only the metadata limit may be selected.');
-    ok(reply, await service.access.list(call, projectId, readIntegerField(query, 'limit', 50, 1, 100)));
+    return ok(reply, await service.access.list(call, projectId, readIntegerField(query, 'limit', 50, 1, 100)));
   });
   app.post<{ Params: { projectId: string; credentialId: string } }>(
     ROUTES.readerCredentialRevocation(':projectId', ':credentialId'), async (request, reply) => {
       reply.header('Cache-Control', 'no-store');
       const { projectId, credentialId } = request.params;
-      const call = await service.auth.authenticate(authorizationOf(request), { projectId });
+      const call = await authenticate(request, { projectId });
       requirePermission(call, 'access.admin');
       if (request.body !== undefined && Object.keys(readObject(request.body, 'revocation')).length > 0) {
         throw new ThreadlineError('invalid_request', 'Revocation accepts no additional fields.');
       }
-      ok(reply, await service.access.revoke(call, projectId, credentialId));
+      return ok(reply, await service.access.revoke(call, projectId, credentialId));
     });
 
   app.post<{ Params: { projectId: string } }>(ROUTES.enrollments(':projectId'), async (request, reply) => {
     reply.header('Cache-Control', 'no-store');
     const projectId = request.params.projectId;
-    const call = await service.auth.authenticate(authorizationOf(request), { projectId });
-    ok(reply, await service.nativeAccess.issue(call, projectId, request.body));
+    const call = await authenticate(request, { projectId });
+    return ok(reply, await service.nativeAccess.issue(call, projectId, request.body));
   });
   app.get<{ Params: { projectId: string } }>(ROUTES.enrollments(':projectId'), async (request, reply) => {
     reply.header('Cache-Control', 'no-store');
     const projectId = request.params.projectId;
-    const call = await service.auth.authenticate(authorizationOf(request), { projectId });
+    const call = await authenticate(request, { projectId });
     const query = readObject(request.query ?? {}, 'native enrollment list');
     if (Object.keys(query).some((key) => key !== 'limit')) throw new ThreadlineError('invalid_request', 'Only the metadata limit may be selected.');
-    ok(reply, await service.nativeAccess.list(call, projectId, readIntegerField(query, 'limit', 50, 1, 100)));
+    return ok(reply, await service.nativeAccess.list(call, projectId, readIntegerField(query, 'limit', 50, 1, 100)));
   });
   app.get<{ Params: { projectId: string; enrollmentId: string } }>(ROUTES.enrollment(':projectId', ':enrollmentId'), async (request, reply) => {
     reply.header('Cache-Control', 'no-store');
     const { projectId, enrollmentId } = request.params;
-    const call = await service.auth.authenticate(authorizationOf(request), { projectId });
-    ok(reply, await service.nativeAccess.inspect(call, projectId, enrollmentId));
+    const call = await authenticate(request, { projectId });
+    return ok(reply, await service.nativeAccess.inspect(call, projectId, enrollmentId));
   });
   app.post<{ Params: { projectId: string; enrollmentId: string } }>(ROUTES.enrollmentRevocation(':projectId', ':enrollmentId'), async (request, reply) => {
     reply.header('Cache-Control', 'no-store');
     const { projectId, enrollmentId } = request.params;
-    const call = await service.auth.authenticate(authorizationOf(request), { projectId });
+    const call = await authenticate(request, { projectId });
     if (request.body !== undefined && Object.keys(readObject(request.body, 'revocation')).length > 0) {
       throw new ThreadlineError('invalid_request', 'Revocation accepts no additional fields.');
     }
-    ok(reply, await service.nativeAccess.revoke(call, projectId, enrollmentId));
+    return ok(reply, await service.nativeAccess.revoke(call, projectId, enrollmentId));
   });
   app.post(ROUTES.nativeSessions, async (request, reply) => {
     reply.header('Cache-Control', 'no-store');
-    const call = await service.auth.authenticate(authorizationOf(request));
-    ok(reply, await service.nativeAccess.register(call, request.body));
+    const call = await authenticate(request);
+    return ok(reply, await service.nativeAccess.register(call, request.body));
   });
   app.get<{ Params: { projectId: string } }>(ROUTES.projectSessions(':projectId'), async (request, reply) => {
     reply.header('Cache-Control', 'no-store');
     const projectId = request.params.projectId;
-    const call = await service.auth.authenticate(authorizationOf(request), { projectId });
+    const call = await authenticate(request, { projectId });
     const query = readObject(request.query ?? {}, 'native session list');
     if (Object.keys(query).some((key) => key !== 'limit')) throw new ThreadlineError('invalid_request', 'Only the metadata limit may be selected.');
-    ok(reply, await service.nativeAccess.sessions(call, projectId, readIntegerField(query, 'limit', 50, 1, 100)));
+    return ok(reply, await service.nativeAccess.sessions(call, projectId, readIntegerField(query, 'limit', 50, 1, 100)));
   });
 
   app.post(ROUTES.appendSources, async (request, reply) => {
     const body = readObject(request.body, 'source append');
     const projectId = readStringField(body, 'projectId');
-    const call = await service.auth.authenticate(authorizationOf(request), { projectId });
+    const call = await authenticate(request, { projectId });
     requirePermission(call, 'knowledge.write');
-    ok(reply, await service.sources.append(call, body));
+    return ok(reply, await service.sources.append(call, body));
   });
 
   app.get(ROUTES.history, async (request, reply) => {
     const query = readObject(request.query ?? {}, 'history query');
     const projectId = readStringField(query, 'projectId');
-    const call = await service.auth.authenticate(authorizationOf(request), { projectId });
+    const call = await authenticate(request, { projectId });
     const kinds = readStringList(query, 'kinds');
     const limit = readIntegerField(query, 'limit', 50, 1, 100);
     const historyQuery = {
@@ -280,14 +317,14 @@ function buildApp(deps: ApiServerDeps): FastifyInstance {
         : { nativeSessionId: readOptionalString(query, 'nativeSessionId') }),
       ...(readOptionalString(query, 'cursor') === undefined ? {} : { cursor: readOptionalString(query, 'cursor') }),
     };
-    ok(reply, await service.sources.history(call, historyQuery));
+    return ok(reply, await service.sources.history(call, historyQuery));
   });
 
   app.get<{ Params: { sourceId: string } }>(ROUTES.source(':sourceId'), async (request, reply) => {
     const query = readObject(request.query ?? {}, 'source query');
     const projectId = readStringField(query, 'projectId');
-    const call = await service.auth.authenticate(authorizationOf(request), { projectId });
-    ok(reply, await service.sources.view(call, projectId, request.params.sourceId));
+    const call = await authenticate(request, { projectId });
+    return ok(reply, await service.sources.view(call, projectId, request.params.sourceId));
   });
 
   app.get<{ Params: { sourceId: string } }>(ROUTES.sourceRange(':sourceId'), async (request, reply) => {
@@ -295,15 +332,15 @@ function buildApp(deps: ApiServerDeps): FastifyInstance {
     const projectId = readStringField(query, 'projectId');
     const start = readIntegerField(query, 'start', 0, 0, Number.MAX_SAFE_INTEGER);
     const end = readIntegerField(query, 'end', start + 32_768, start, Number.MAX_SAFE_INTEGER);
-    const call = await service.auth.authenticate(authorizationOf(request), { projectId });
-    ok(reply, await service.sources.range(call, projectId, request.params.sourceId, start, end));
+    const call = await authenticate(request, { projectId });
+    return ok(reply, await service.sources.range(call, projectId, request.params.sourceId, start, end));
   });
 
   app.get<{ Params: { operationId: string } }>(ROUTES.operation(':operationId'), async (request, reply) => {
     const query = readObject(request.query ?? {}, 'operation query');
     const projectId = readStringField(query, 'projectId');
-    const call = await service.auth.authenticate(authorizationOf(request), { projectId });
-    ok(reply, await service.operations.inspect(call, projectId, request.params.operationId));
+    const call = await authenticate(request, { projectId });
+    return ok(reply, await service.operations.inspect(call, projectId, request.params.operationId));
   });
 
   app.get(ROUTES.memories, async (request, reply) => {
@@ -313,8 +350,8 @@ function buildApp(deps: ApiServerDeps): FastifyInstance {
     const taskId = readOptionalString(query, 'taskId');
     const kind = readOptionalString(query, 'kind');
     const focus = readOptionalString(query, 'focus');
-    const call = await service.auth.authenticate(authorizationOf(request), { projectId });
-    ok(
+    const call = await authenticate(request, { projectId });
+    return ok(
       reply,
       await service.memories.query(call, {
         projectId,
@@ -329,24 +366,24 @@ function buildApp(deps: ApiServerDeps): FastifyInstance {
   app.post(ROUTES.memoryProposals, async (request, reply) => {
     const body = readObject(request.body, 'memory proposal');
     const projectId = readStringField(body, 'projectId');
-    const call = await service.auth.authenticate(authorizationOf(request), { projectId });
+    const call = await authenticate(request, { projectId });
     requirePermission(call, 'knowledge.write');
-    ok(reply, await service.memories.propose(call, body));
+    return ok(reply, await service.memories.propose(call, body));
   });
 
   app.post(ROUTES.memoryEpisodes, async (request, reply) => {
     const body = readObject(request.body, 'episode recording');
     const projectId = readStringField(body, 'projectId');
-    const call = await service.auth.authenticate(authorizationOf(request), { projectId });
+    const call = await authenticate(request, { projectId });
     requirePermission(call, 'knowledge.write');
-    ok(reply, await service.memories.recordEpisode(call, body));
+    return ok(reply, await service.memories.recordEpisode(call, body));
   });
 
   app.get<{ Params: { memoryId: string } }>(ROUTES.memory(':memoryId'), async (request, reply) => {
     const query = readObject(request.query ?? {}, 'memory query');
     const projectId = readStringField(query, 'projectId');
-    const call = await service.auth.authenticate(authorizationOf(request), { projectId });
-    ok(reply, await service.memories.view(call, projectId, request.params.memoryId));
+    const call = await authenticate(request, { projectId });
+    return ok(reply, await service.memories.view(call, projectId, request.params.memoryId));
   });
 
   app.post<{ Params: { memoryId: string } }>(ROUTES.memoryAccept(':memoryId'), async (request, reply) => {
@@ -356,9 +393,9 @@ function buildApp(deps: ApiServerDeps): FastifyInstance {
     if (readStringField(body, 'memoryId') !== request.params.memoryId) {
       throw new ThreadlineError('invalid_request', 'The body memoryId must match the path memoryId.');
     }
-    const call = await service.auth.authenticate(authorizationOf(request), { projectId });
+    const call = await authenticate(request, { projectId });
     requirePermission(call, 'knowledge.write');
-    ok(reply, await service.memories.accept(call, body));
+    return ok(reply, await service.memories.accept(call, body));
   });
 
   app.post<{ Params: { memoryId: string } }>(ROUTES.memoryCorrections(':memoryId'), async (request, reply) => {
@@ -367,31 +404,31 @@ function buildApp(deps: ApiServerDeps): FastifyInstance {
     if (readStringField(body, 'memoryId') !== request.params.memoryId) {
       throw new ThreadlineError('invalid_request', 'The body memoryId must match the path memoryId.');
     }
-    const call = await service.auth.authenticate(authorizationOf(request), { projectId });
+    const call = await authenticate(request, { projectId });
     requirePermission(call, 'knowledge.write');
-    ok(reply, await service.memories.correct(call, body));
+    return ok(reply, await service.memories.correct(call, body));
   });
 
   app.post(ROUTES.tasks, async (request, reply) => {
     const body = readObject(request.body, 'task creation');
     const projectId = readStringField(body, 'projectId');
-    const call = await service.auth.authenticate(authorizationOf(request), { projectId });
+    const call = await authenticate(request, { projectId });
     requirePermission(call, 'knowledge.write');
-    ok(reply, await service.tasks.create(call, body));
+    return ok(reply, await service.tasks.create(call, body));
   });
 
   app.get<{ Params: { taskId: string } }>(ROUTES.task(':taskId'), async (request, reply) => {
     const query = readObject(request.query ?? {}, 'task query');
     const projectId = readStringField(query, 'projectId');
-    const call = await service.auth.authenticate(authorizationOf(request), { projectId });
-    ok(reply, await service.tasks.view(call, projectId, request.params.taskId));
+    const call = await authenticate(request, { projectId });
+    return ok(reply, await service.tasks.view(call, projectId, request.params.taskId));
   });
 
   app.get<{ Params: { taskId: string } }>(ROUTES.taskRequirements(':taskId'), async (request, reply) => {
     const query = readObject(request.query ?? {}, 'task requirements query');
     const projectId = readStringField(query, 'projectId');
-    const call = await service.auth.authenticate(authorizationOf(request), { projectId });
-    ok(reply, await service.tasks.requirements(call, projectId, request.params.taskId));
+    const call = await authenticate(request, { projectId });
+    return ok(reply, await service.tasks.requirements(call, projectId, request.params.taskId));
   });
 
   app.post<{ Params: { taskId: string } }>(ROUTES.taskRequirements(':taskId'), async (request, reply) => {
@@ -400,22 +437,22 @@ function buildApp(deps: ApiServerDeps): FastifyInstance {
     if (readStringField(body, 'taskId') !== request.params.taskId) {
       throw new ThreadlineError('invalid_request', 'The body taskId must match the path taskId.');
     }
-    const call = await service.auth.authenticate(authorizationOf(request), { projectId });
+    const call = await authenticate(request, { projectId });
     requirePermission(call, 'knowledge.write');
-    ok(reply, await service.tasks.require(call, body));
+    return ok(reply, await service.tasks.require(call, body));
   });
 
   app.post(ROUTES.context, async (request, reply) => {
     const body = readObject(request.body, 'context preparation');
-    const call = await service.auth.authenticate(authorizationOf(request), { projectId: readStringField(body, 'projectId') });
+    const call = await authenticate(request, { projectId: readStringField(body, 'projectId') });
     requirePermission(call, 'context.audit');
-    ok(reply, await service.context.prepare(call, body));
+    return ok(reply, await service.context.prepare(call, body));
   });
   app.post(ROUTES.contextOccurrences, async (request, reply) => {
     const body = readObject(request.body, 'context occurrence');
-    const call = await service.auth.authenticate(authorizationOf(request), { projectId: readStringField(body, 'projectId') });
+    const call = await authenticate(request, { projectId: readStringField(body, 'projectId') });
     requirePermission(call, 'context.audit');
-    ok(reply, await service.context.recordOccurrence(call, body));
+    return ok(reply, await service.context.recordOccurrence(call, body));
   });
 
   // Known product operations that are not in this build answer explicitly
@@ -446,7 +483,7 @@ interface SafeError {
 /** Reduces any thrown value to the shared payload; driver messages never escape. */
 function toSafeError(error: unknown): SafeError {
   if (error instanceof ThreadlineError) {
-    return { code: error.code, payload: error.toPayload() };
+    return { code: error.code, payload: errorPayload(error.code) };
   }
   if (isFastifyBodyError(error)) {
     return {

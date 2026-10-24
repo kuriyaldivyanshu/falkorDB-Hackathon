@@ -236,10 +236,11 @@ export function createProjectService(deps: ProjectServiceDeps): ProjectService {
             WHERE g.tenant_id = $1 AND g.principal_id = $2
               AND g.state = 'active' AND p.state = 'active'
               AND ($3::uuid IS NULL OR p.id=$3)
-            ORDER BY p.created_at ASC, p.id ASC`,
+            ORDER BY p.created_at ASC, p.id ASC LIMIT 17`,
           [call.scope.tenantId, call.scope.principalId, call.scope.projectId],
         ),
       );
+      if (rows.length > 16) throw new ThreadlineError('overloaded', 'Select a narrower project scope.');
       return rows.map((row) =>
         parseContract(
           projectViewSchema,
@@ -272,10 +273,11 @@ export function createProjectService(deps: ProjectServiceDeps): ProjectService {
           `SELECT project_id, principal_id, role, state, grant_revision::text AS grant_revision
              FROM threadline_memory.project_grants
             WHERE tenant_id = $1 AND project_id = $2
-            ORDER BY issued_at ASC`,
+            ORDER BY issued_at ASC LIMIT 257`,
           [call.scope.tenantId, projectId],
         ),
       );
+      if (rows.length > 256) throw new ThreadlineError('overloaded', 'The grant response exceeds the bounded release scope.');
       return rows.map((row) =>
         parseContract(
           projectGrantViewSchema,

@@ -40,6 +40,7 @@ import {
 import type { SqlDatabase } from '../storage/pg.js';
 import { withProjectWriteLock } from '../storage/pg.js';
 import type { AuthenticatedCall } from './auth.js';
+import { createReleaseService, RELEASE_LIMITS, type ReleaseService } from './release.js';
 import { requirePermission } from './permissions.js';
 import {
   MEMORY_DOCUMENT_MAX_BYTES,
@@ -99,12 +100,14 @@ export interface MemoryServiceDeps {
   readonly db: SqlDatabase;
   readonly files: SourceFileStore;
   readonly graphStore: GraphStore;
+  readonly release?: ReleaseService;
   readonly clock?: () => Date;
   readonly logger?: Logger;
 }
 
 /** Creates scoped memory admission and read operations backed by SQL, source files and the graph. */
 export function createMemoryService(deps: MemoryServiceDeps): MemoryService {
+  const release = deps.release ?? createReleaseService(deps);
   const logger = deps.logger ?? silentLogger;
   const clock = deps.clock ?? (() => new Date());
 
@@ -262,6 +265,24 @@ export function createMemoryService(deps: MemoryServiceDeps): MemoryService {
           stored.storageKey,
         ],
       );
+      for (const sourceId of intent.document.sourceIds) await tx.rows(
+        `INSERT INTO threadline_memory.source_links
+         (tenant_id,project_id,parent_source_id,child_source_id,relation)
+         VALUES ($1,$2,$3,$4,'depends_on') ON CONFLICT DO NOTHING`,
+        [call.scope.tenantId,projectId,sourceId,contentSourceId]);
+      const dependencies = [
+        ...intent.document.contradictsVersionIds.map((id) => ({kind:'version',id})),
+        ...(intent.document.content.kind === 'procedural'
+          ? intent.document.content.supportedBy.map((id) => ({kind:'version',id})) : []),
+        ...(intent.document.expectedHead ? [{kind:'version',id:intent.document.expectedHead}] : []),
+        ...(intent.document.originTaskId ? [{kind:'task',id:intent.document.originTaskId}] : []),
+        ...(intent.document.memoryMode === 'attach' ? [{kind:'memory',id:intent.document.memoryId}] : []),
+      ];
+      for (const dependency of dependencies) await tx.rows(
+        `INSERT INTO threadline_memory.release_dependencies
+         (tenant_id,project_id,resource_kind,resource_id,dependency_project_id,dependency_kind,dependency_id)
+         VALUES ($1,$2,'source',$3,$2,$4,$5) ON CONFLICT DO NOTHING`,
+        [call.scope.tenantId,projectId,contentSourceId,dependency.kind,dependency.id]);
       await insertIntent(tx, call.scope.tenantId, projectId, {
         id: contentSourceId,
         kind: 'source.append',
@@ -617,6 +638,7 @@ export function createMemoryService(deps: MemoryServiceDeps): MemoryService {
 
     async query(call, input): Promise<MemoryQueryResult> {
       requirePermission(call, 'read');
+      const deadline = Date.now() + RELEASE_LIMITS.workMs;
       const parsed = parseContract(memoryQuerySchema, input, 'memory query');
       requireProjectScope(call, parsed.projectId);
       const graph = requireGraph(call);
@@ -630,10 +652,14 @@ export function createMemoryService(deps: MemoryServiceDeps): MemoryService {
             memoryId: null,
             kind: parsed.kind ?? null,
             focus: parsed.focus ?? null,
-            limitPlusOne: limit + 1,
+            limitPlusOne: 65,
           });
+          if (rows.length > 64) throw new ThreadlineError('overloaded', 'Select a narrower memory scope.');
           const grouped = groupHeadRows(rows, parsed.taskId ?? null);
-          const entries = [...grouped.entries()];
+          const entries: Array<[string, MemoryHeadGroup]> = [];
+          for (const entry of [...grouped.entries()]) {
+            if (await release.eligible(call, [{projectId: parsed.projectId,kind:'memory',id:entry[0]}], undefined, deadline)) entries.push(entry);
+          }
           const page = entries.slice(0, limit);
           const details = await loadVersionDetails(graph, page.map(([, row]) => row));
           const memories = page.map(([memoryId, row]) => assembleMemoryView(memoryId, row, details));
@@ -650,6 +676,7 @@ export function createMemoryService(deps: MemoryServiceDeps): MemoryService {
     async view(call, projectId, memoryId): Promise<MemoryView> {
       requirePermission(call, 'read');
       requireProjectScope(call, projectId);
+      if (!await release.eligible(call, [{projectId,kind:'memory',id:memoryId}])) throw new ThreadlineError('not_found', 'The requested resource does not exist.');
       const graph = requireGraph(call);
       return withGraphRead(async () => {
         await requireActiveProjectRoot(graph, call);

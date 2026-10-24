@@ -119,6 +119,8 @@ export function createSqlDatabase(deps: SqlDatabaseDeps): SqlDatabase {
     let discard = false;
     try {
       await client.query('BEGIN');
+      await client.query("SET LOCAL lock_timeout = '2000ms'");
+      await client.query("SET LOCAL statement_timeout = '10000ms'");
       if (tenantId !== undefined) {
         // FORCE ROW LEVEL SECURITY applies to the owner too, so the fence must
         // be established inside every scoped transaction.
@@ -318,9 +320,50 @@ export async function withProjectWriteLock<TResult>(
   work: (tx: TxClient) => Promise<TResult>,
 ): Promise<TResult> {
   return db.withTenantTransaction(tenantId, async (tx) => {
+    await tx.rows("SET LOCAL lock_timeout = '2000ms'");
+    await tx.rows("SET LOCAL statement_timeout = '10000ms'");
     await tx.rows('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [
       projectWriteLockKey(tenantId, projectId),
     ]);
     return work(tx);
   });
+}
+
+/** Common coordination for release, graph writers and later deletion admission.
+ * Session locks survive the short marker/settlement transactions on this pinned
+ * connection. Never release a lock while submitted graph work may still run:
+ * graph writers must first persist an unresolved submission marker.
+ */
+export async function withProjectBarriers<T>(
+  db: SqlDatabase,
+  tenantId: string,
+  projectIds: readonly string[],
+  work: (scopedDb: SqlDatabase) => Promise<T>,
+): Promise<T> {
+  const projects = [...new Set(projectIds)].sort();
+  if (projects.length > 16) throw new ThreadlineError('overloaded', 'The release scope is too broad.');
+  return db.withConnection(async (connection) => {
+    await connection.query("SET lock_timeout = '2000ms'");
+    await connection.query("SET statement_timeout = '10000ms'");
+    // One statement bounds the TOTAL lock wait, rather than multiplying it by
+    // the number of projects. ORDER BY is evaluated before volatile lock calls.
+    await connection.query(`SELECT pg_advisory_lock(hashtextextended(key, 0))
+      FROM (SELECT unnest($1::text[]) AS key ORDER BY key) ordered`,
+    [projects.map((project) => projectWriteLockKey(tenantId, project))]);
+    try { return await work(connection); }
+    finally {
+      // withConnection discards the reserved connection even if unlock fails.
+      await connection.query('SELECT pg_advisory_unlock_all()').catch(() => undefined);
+    }
+  });
+}
+
+/** Transaction variant for a permit or denial admission: COMMIT releases all
+ * barriers without another network round trip after its linearization point. */
+export async function lockProjectBarriers(tx: TxClient, tenantId: string, projectIds: readonly string[]): Promise<void> {
+  const projects = [...new Set(projectIds)].sort();
+  if (projects.length > 16) throw new ThreadlineError('overloaded', 'The release scope is too broad.');
+  await tx.rows(`SELECT pg_advisory_xact_lock(hashtextextended(key, 0))
+    FROM (SELECT unnest($1::text[]) AS key ORDER BY key) ordered`,
+  [projects.map((project) => projectWriteLockKey(tenantId, project))]);
 }

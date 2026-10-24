@@ -768,6 +768,64 @@ const MIGRATION_7_STATEMENTS: readonly string[] = [
        DEFERRABLE INITIALLY DEFERRED`,
 ];
 
+/** Additive release authority resources. Existing evidence is preserved privately;
+ * only separately qualified safe ingress/reprocessing can attest eligibility. */
+const MIGRATION_8_STATEMENTS: readonly string[] = [
+  `ALTER TABLE sources ADD COLUMN release_state text NOT NULL DEFAULT 'quarantined'
+     CHECK (release_state IN ('quarantined','eligible'))`,
+  `CREATE TABLE release_safety (
+     tenant_id uuid NOT NULL, project_id uuid NOT NULL,
+     resource_kind text NOT NULL CHECK (resource_kind IN ('memory','version','task')),
+     resource_id uuid NOT NULL, state text NOT NULL CHECK (state IN ('quarantined','eligible')),
+     PRIMARY KEY (tenant_id,project_id,resource_kind,resource_id),
+     FOREIGN KEY (tenant_id,project_id) REFERENCES projects(tenant_id,id)
+   )`,
+  `CREATE TABLE release_denials (
+     tenant_id uuid NOT NULL, project_id uuid NOT NULL,
+     resource_kind text NOT NULL CHECK (resource_kind IN ('source','memory','version','task','operation','occurrence')),
+     resource_id uuid NOT NULL, generation bigint NOT NULL CHECK (generation >= 0),
+     PRIMARY KEY (tenant_id,project_id,resource_kind,resource_id),
+     FOREIGN KEY (tenant_id,project_id) REFERENCES projects(tenant_id,id)
+   )`,
+  `CREATE TABLE graph_submissions (
+     tenant_id uuid NOT NULL, project_id uuid NOT NULL, operation_id uuid NOT NULL,
+     owner_token uuid NOT NULL, graph_epoch uuid NOT NULL, request_digest text NOT NULL,
+     state text NOT NULL CHECK (state IN ('in_progress','uncertain')),
+     started_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+     PRIMARY KEY (tenant_id,project_id,operation_id),
+     FOREIGN KEY (tenant_id,project_id) REFERENCES projects(tenant_id,id)
+   )`,
+  `INSERT INTO graph_submissions
+     (tenant_id,project_id,operation_id,owner_token,graph_epoch,request_digest,state)
+     SELECT tenant_id,project_id,id,id,graph_epoch,request_digest,'uncertain'
+     FROM operations WHERE state IN ('leased','ambiguous')`,
+  `CREATE TABLE release_dependencies (
+     tenant_id uuid NOT NULL, project_id uuid NOT NULL,
+     resource_kind text NOT NULL, resource_id uuid NOT NULL,
+     dependency_project_id uuid NOT NULL, dependency_kind text NOT NULL,
+     dependency_id uuid NOT NULL,
+     PRIMARY KEY (tenant_id,project_id,resource_kind,resource_id,dependency_project_id,dependency_kind,dependency_id),
+     CHECK (resource_kind IN ('source','memory','version','task','operation','occurrence','project')),
+     CHECK (dependency_kind IN ('source','memory','version','task','operation','occurrence','project')),
+     FOREIGN KEY (tenant_id,project_id) REFERENCES projects(tenant_id,id),
+     FOREIGN KEY (tenant_id,dependency_project_id) REFERENCES projects(tenant_id,id)
+   )`,
+  `CREATE TABLE release_permits (
+     tenant_id uuid NOT NULL, id uuid NOT NULL, token_id uuid NOT NULL, principal_id uuid NOT NULL,
+     project_ids uuid[] NOT NULL CHECK (cardinality(project_ids) <= 16),
+     surface text NOT NULL CHECK (length(surface) BETWEEN 1 AND 200),
+     response_bytes integer NOT NULL CHECK (response_bytes BETWEEN 0 AND 1048576),
+     dependency_count integer NOT NULL CHECK (dependency_count BETWEEN 0 AND 256),
+     committed_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+     PRIMARY KEY (tenant_id,id)
+   )`,
+  COMMON_TENANT_TABLE_FOOTER('release_safety'),
+  COMMON_TENANT_TABLE_FOOTER('release_denials'),
+  COMMON_TENANT_TABLE_FOOTER('graph_submissions'),
+  COMMON_TENANT_TABLE_FOOTER('release_permits'),
+  COMMON_TENANT_TABLE_FOOTER('release_dependencies'),
+];
+
 export const MEMORY_SQL_MIGRATIONS: readonly SqlMigration[] = [
   {
     version: 1,
@@ -792,6 +850,7 @@ export const MEMORY_SQL_MIGRATIONS: readonly SqlMigration[] = [
   { version: 5, name: 'context_retry_metadata', statements: MIGRATION_5_STATEMENTS },
   { version: 6, name: 'project_reader_credentials', statements: MIGRATION_6_STATEMENTS },
   { version: 7, name: 'native_enrollment_access', statements: MIGRATION_7_STATEMENTS },
+  { version: 8, name: 'current_release_authority', statements: MIGRATION_8_STATEMENTS },
 ];
 
 export const LATEST_SQL_SCHEMA_VERSION = MEMORY_SQL_MIGRATIONS.reduce(

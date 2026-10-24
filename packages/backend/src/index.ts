@@ -12,6 +12,7 @@ import { createApiServer, type ApiServerHandle, type ServiceAddress } from './ap
 import { storageConfigured, type ServiceConfig } from './config.js';
 import type { Logger } from './log.js';
 import { silentLogger } from './log.js';
+import { createReleaseService, type ReleaseService } from './service/release.js';
 import { createAccessService, type AccessService } from './service/access.js';
 import { createAuthService, type AuthService } from './service/auth.js';
 import { createNativeAccessService, type NativeAccessService } from './service/nativeAccess.js';
@@ -157,6 +158,7 @@ export interface MemoryService {
   status(): ServiceStatus;
   capabilities(): CapabilityReport;
   /** Durable services. Throws `storage_unavailable` until the stores are ready. */
+  readonly release: ReleaseService;
   readonly auth: AuthService;
   readonly access: AccessService;
   readonly nativeAccess: NativeAccessService;
@@ -195,6 +197,7 @@ export function createMemoryService(deps: MemoryServiceDeps): MemoryService {
     missing: [],
     detail: 'The privileged SQL path has not been checked yet.',
   };
+  let release: ReleaseService | null = null;
   let auth: AuthService | null = null;
   let projects: ProjectService | null = null;
   let access: AccessService | null = null;
@@ -326,16 +329,17 @@ export function createMemoryService(deps: MemoryServiceDeps): MemoryService {
     files ??= createSourceFileStore({ root: deps.config.paths.sourceRoot, logger });
     filesReady = await files.probe();
 
+    release = createReleaseService({db: database, files, ...(graphStore === null ? {} : {graphStore})});
     auth = createAuthService({ db: database, clock, logger });
     access = createAccessService({ db: database });
     nativeAccess = createNativeAccessService({ db: database });
     projects = createProjectService({ db: database, clock, logger });
-    sources = createSourceService({ db: database, files, clock, logger });
+    sources = createSourceService({ db: database, files, release, clock, logger });
     operations = createOperationService({ db: database });
     if (graphStore !== null && sqlReady()) {
-      memories = createSemanticMemoryService({ db: database, files, graphStore, clock, logger });
-      tasks = createTaskService({ db: database, graphStore, clock, logger });
-      context = createContextService({ db: database, graphStore, sources, tasks, clock });
+      memories = createSemanticMemoryService({ db: database, files, graphStore, release, clock, logger });
+      tasks = createTaskService({ db: database, graphStore, release, clock, logger });
+      context = createContextService({ db: database, graphStore, sources, tasks, release, clock });
       worker = createOperationsWorker({
         db: database,
         graphStore,
@@ -508,6 +512,7 @@ export function createMemoryService(deps: MemoryServiceDeps): MemoryService {
       return server?.address ?? null;
     },
 
+    get release() { return requireDurable(release); },
     get auth(): AuthService {
       if (auth === null || !durableReady()) {
         throw new ThreadlineError(
