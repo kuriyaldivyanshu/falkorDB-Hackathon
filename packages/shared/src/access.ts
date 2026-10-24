@@ -1,10 +1,9 @@
 import { z } from 'zod';
 
-import { byteBoundedText, uuidSchema } from './validation.js';
 import { producerTargetV3Schema } from './identity.js';
 import { policyFenceV3Schema } from './policy.js';
 import { CONTRACT_PROTOCOL_VERSION_V3 } from './protocol.js';
-import { compareDecimalStrings, decimalStringSchema, isDecimalString } from './validation.js';
+import { byteBoundedText, compareDecimalStrings, decimalStringSchema, isDecimalString, isoInstantSchema, uuidSchema } from './validation.js';
 
 export const READER_DEFAULT_LIFETIME_SECONDS = 24 * 60 * 60;
 export const READER_MAX_LIFETIME_SECONDS = 7 * 24 * 60 * 60;
@@ -42,7 +41,6 @@ export const listReaderCredentialsResultSchema = z.strictObject({
 });
 export type ListReaderCredentialsResult = z.infer<typeof listReaderCredentialsResultSchema>;
 
-
 /** Selection is a request, never proof of enrollment or workspace ownership.
  * Resolve the selected project's stored enrollment before any content work.
  * Separate private/shared projects may enroll the same workspace. Neither root
@@ -79,8 +77,9 @@ export const projectProjectionV3Schema = z.strictObject({
   committedGraphEvent: decimalStringSchema,
   indexedGraphEvent: decimalStringSchema,
 }).refine((v) => isDecimalString(v.indexedGraphEvent) && isDecimalString(v.committedGraphEvent) &&
-  compareDecimalStrings(v.indexedGraphEvent, v.committedGraphEvent) <= 0,
-  'Indexed project graph events cannot exceed committed events.');
+  isDecimalString(v.graphHead) && compareDecimalStrings(v.indexedGraphEvent, v.committedGraphEvent) <= 0 &&
+  compareDecimalStrings(v.committedGraphEvent, v.graphHead) <= 0,
+  'Project events must satisfy indexed <= committed <= graph head.');
 export type ProjectProjectionV3 = z.infer<typeof projectProjectionV3Schema>;
 
 export const minimumGraphBoundaryV3Schema = z.strictObject({
@@ -101,6 +100,6 @@ export const readReleaseV3Schema = z.strictObject({
   principalId: uuidSchema,
   projection: projectProjectionV3Schema,
   permitId: uuidSchema,
-  checkedAt: z.iso.datetime({ offset: true }),
+  checkedAt: isoInstantSchema,
 });
 export type ReadReleaseV3 = z.infer<typeof readReleaseV3Schema>;

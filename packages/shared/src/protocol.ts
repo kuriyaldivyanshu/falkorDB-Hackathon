@@ -146,3 +146,13 @@ export const V2_TRANSITION_V3 = {
   context: 'unsupported_upgrade_required',
   runtimeImplemented: false,
 } as const;
+
+/** Serialize already schema-parsed data as the exact compact success envelope.
+ * Parse first so defaults and schema field order are fixed. Recall accounting
+ * and transport must use these identical UTF-8 bytes. Formatting or envelope
+ * extensions require an explicit canonical-contract and accounting update; a
+ * different reported byte count alone cannot redefine the unchanged contract.
+ * This formatter does not validate data or qualify token counts. */
+export function serializeSuccessEnvelopeV3<TData>(validatedData: TData): string {
+  return JSON.stringify({ ok: true, data: validatedData });
+}

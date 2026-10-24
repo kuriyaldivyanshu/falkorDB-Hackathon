@@ -1,9 +1,9 @@
 import { z } from 'zod';
 
-import { readReleaseV3Schema, projectProjectionV3Schema } from './access.js';
+import { projectProjectionV3Schema, readReleaseV3Schema } from './access.js';
 import { MEMORY_KINDS_V3, memoryRecordV3Schema, memoryVersionRefV3Schema } from './memory.js';
-import { CONTRACT_PROTOCOL_VERSION_V3 } from './protocol.js';
-import { byteBoundedText, decimalStringSchema, isoInstantSchema, sha256HexSchema, uuidSchema, utf8ByteLength } from './validation.js';
+import { CONTRACT_PROTOCOL_VERSION_V3, serializeSuccessEnvelopeV3 } from './protocol.js';
+import { byteBoundedText, decimalStringSchema, isoInstantSchema, sha256HexSchema, utf8ByteLength, uuidSchema } from './validation.js';
 
 export const EXPLORER_LIMITS_V3 = {
   defaultPage: 25, maxPage: 100, maxNodes: 100, maxEdges: 200,
@@ -142,7 +142,7 @@ export const explorerPageV3Schema = z.strictObject({
     (v.surface === 'history' && v.events.some((e) => e.memory.memoryId !== v.historyMemoryId))) issue('Per-memory history must keep its explicit selection.');
   if ((v.surface === 'list' || v.surface === 'neighborhood') && v.events.length > 0) issue('List and graph pages cannot carry history.');
   if ((v.surface === 'timeline' || v.surface === 'history') && v.memories.length > 0) issue('History pages carry bounded events.');
-  if (utf8ByteLength(JSON.stringify({ ok: true, data: v })) > EXPLORER_LIMITS_V3.maxEnvelopeBytes) issue('Explorer envelope exceeds 64 KiB.');
+  if (utf8ByteLength(serializeSuccessEnvelopeV3(v)) > EXPLORER_LIMITS_V3.maxEnvelopeBytes) issue('Explorer envelope exceeds 64 KiB.');
 });
 export type ExplorerPageV3 = z.infer<typeof explorerPageV3Schema>;
 export const explorerResyncV3Schema = z.strictObject({

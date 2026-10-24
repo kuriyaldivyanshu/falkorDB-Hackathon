@@ -370,7 +370,14 @@ export { contractCapabilityV3Schema, type ContractCapabilityV3 } from './capabil
 
 export { JOURNAL_STAGES_V3, CAPTURE_REFUSALS_V3 } from './capture.js';
 export { CONTRACT_OPERATIONS_V3 } from './capabilities.js';
-export { CONTRACT_PROTOCOL_VERSION_V3, CONTRACT_API_PREFIX_V3, CONTRACT_ROUTES_V3, REQUEST_RETRY_SEMANTICS_V3, V2_TRANSITION_V3 } from './protocol.js';
+export {
+  CONTRACT_PROTOCOL_VERSION_V3,
+  CONTRACT_API_PREFIX_V3,
+  CONTRACT_ROUTES_V3,
+  REQUEST_RETRY_SEMANTICS_V3,
+  V2_TRANSITION_V3,
+  serializeSuccessEnvelopeV3,
+} from './protocol.js';
 
 export {
   releaseVersionV3Schema,
@@ -389,12 +396,15 @@ export {
   type ResolvedProjectSelectionV3,
   type ProjectProjectionV3,
   type MinimumGraphBoundaryV3,
-  type ReadReleaseV3
+  type ReadReleaseV3,
 } from './access.js';
 
 export {
   MEMORY_KINDS_V3,
   MEMORY_METADATA_MAX_ASSOCIATIONS_V3,
+  memoryAssociationInputV3Schema,
+  memoryMetadataInputV3Schema,
+  initialMemoryRecordByteLengthV3,
   memoryAssociationV3Schema,
   memoryMetadataV3Schema,
   preferenceContentV3Schema,
@@ -415,6 +425,8 @@ export {
   requestedHandoffV3Schema,
   memoryContentV3Schema,
   memoryRecordV3Schema,
+  type MemoryAssociationInputV3,
+  type MemoryMetadataInputV3,
   type MemoryAssociationV3,
   type MemoryMetadataV3,
   type PreferenceContentV3,
@@ -434,7 +446,7 @@ export {
   type SharingLineageV3,
   type RequestedHandoffV3,
   type MemoryContentV3,
-  type MemoryRecordV3
+  type MemoryRecordV3,
 } from './memory.js';
 
 export {
@@ -461,7 +473,7 @@ export {
   type RecallResultV3,
   type DeliveryRecordV3,
   type AcknowledgeDeliveryV3,
-  type DeliveryAcknowledgmentBindingV3
+  type DeliveryAcknowledgmentBindingV3,
 } from './context.js';
 
 export {
@@ -489,5 +501,5 @@ export {
   type MemoryHistoryEventV3,
   type MemoryEdgeV3,
   type ExplorerPageV3,
-  type ExplorerResyncV3
+  type ExplorerResyncV3,
 } from './explorer.js';

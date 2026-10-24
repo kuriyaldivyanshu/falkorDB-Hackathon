@@ -1,13 +1,11 @@
 import { z } from 'zod';
 
-import { APPLICABILITY_KEYS, MEMORY_KINDS, applicabilitySchema, observedUnderSchema, taskViewSchema } from './memory.js';
-import { SOURCE_KINDS } from './sources.js';
-import { byteBoundedText, decimalStringSchema, sha256HexSchema, uuidSchema } from './validation.js';
 import { minimumGraphBoundaryV3Schema, projectProjectionV3Schema, readReleaseV3Schema } from './access.js';
 import { memoryFiltersV3Schema } from './explorer.js';
-import { memoryAcceptanceV3Schema, memoryVersionRefV3Schema } from './memory.js';
-import { CONTRACT_PROTOCOL_VERSION_V3 } from './protocol.js';
-import { compareDecimalStrings, isDecimalString, isoInstantSchema, utf8ByteLength } from './validation.js';
+import { APPLICABILITY_KEYS, MEMORY_KINDS, applicabilitySchema, memoryAcceptanceV3Schema, memoryVersionRefV3Schema, observedUnderSchema, taskViewSchema } from './memory.js';
+import { CONTRACT_PROTOCOL_VERSION_V3, serializeSuccessEnvelopeV3 } from './protocol.js';
+import { SOURCE_KINDS } from './sources.js';
+import { byteBoundedText, compareDecimalStrings, decimalStringSchema, isDecimalString, isoInstantSchema, sha256HexSchema, utf8ByteLength, uuidSchema } from './validation.js';
 
 /**
  * Context contracts.
@@ -238,7 +236,6 @@ export const contextResultSchema = z.discriminatedUnion('kind', [
 ]);
 export type ContextResult = z.infer<typeof contextResultSchema>;
 
-
 export const RECALL_LIMITS_V3 = {
   defaultTokens: 2000, followupTokens: 1000, advisoryActiveTokens: 4000,
   maxTokens: 16_000, maxBodyBytes: CONTEXT_MAX_BODY_BYTES,
@@ -335,7 +332,12 @@ export type RecallOmissionV3 = z.infer<typeof recallOmissionV3Schema>;
  * labels, references, reasons, freshness and accounting fields. An estimated
  * count uses UTF-8 bytes as a conservative upper bound; unknown accounting
  * cannot certify a complete content-bearing result. Tokenizer claims still
- * require runtime verification; schema validation does not run a tokenizer. */
+ * require runtime verification; schema validation does not run a tokenizer.
+ * The default 2,000-token UTF-8 fallback can constrain content below the 4 KiB
+ * body ceiling; the 1,000-token follow-up ceiling may fit no content-bearing
+ * result. Defaults are ceilings, not payload guarantees: return a content-free
+ * incomplete/unavailable result that fits, or require a qualified tokenizer,
+ * increased budget or narrower content. Both token and byte ceilings bind. */
 export const recallAccountingV3Schema = z.discriminatedUnion('method', [
   z.strictObject({ method: z.literal('tokenizer'), tokenizer: byteBoundedText(128),
     tokens: z.number().int().nonnegative(), wholeEnvelopeBytes: z.number().int().nonnegative() }),
@@ -362,7 +364,7 @@ export const recallResultV3Schema = z.strictObject({
   accounting: recallAccountingV3Schema,
 }).superRefine((v, ctx) => {
   const issue = (message: string) => ctx.addIssue({ code: 'custom', message });
-  const envelopeBytes = utf8ByteLength(JSON.stringify({ ok: true, data: v }));
+  const envelopeBytes = utf8ByteLength(serializeSuccessEnvelopeV3(v));
   if (envelopeBytes > RECALL_LIMITS_V3.maxEnvelopeBytes ||
     envelopeBytes > v.budget.maxPacketBytes) issue('Whole packet/envelope byte budget exceeded.');
   if (utf8ByteLength(v.body) > v.budget.maxBodyBytes) issue('Body budget exceeded.');

@@ -1,11 +1,9 @@
 import { z } from 'zod';
 
-import { operationStateSchema } from './operations.js';
-import { byteBoundedText, uuidSchema, utf8ByteLength } from './validation.js';
+import { guardedMutationV3Schema, operationStateSchema } from './operations.js';
 import { expectedPolicyV3Schema, policyFenceV3Schema } from './policy.js';
 import { CONTRACT_PROTOCOL_VERSION_V3 } from './protocol.js';
-import { guardedMutationV3Schema } from './operations.js';
-import { isoInstantSchema } from './validation.js';
+import { byteBoundedText, isoInstantSchema, utf8ByteLength, uuidSchema } from './validation.js';
 
 /**
  * Accepted memory contracts.
@@ -641,30 +639,56 @@ export function encodeMemoryDocument(document: MemoryDocument): string {
   });
 }
 
-
 export const MEMORY_KINDS_V3 = [...MEMORY_KINDS, 'preference', 'progress'] as const;
 export const MEMORY_METADATA_MAX_ASSOCIATIONS_V3 = 32;
 
-/** Labels are data, not grants or task assignments. An inferred label cannot
- * encode a confirmed association; confirmation is an explicit guarded edit. */
+const memoryAssociationFieldsV3 = {
+  field: z.enum(['session', 'agent', 'task', 'topic', 'ticket', 'feature', 'tag']),
+  value: byteBoundedText(256),
+};
+const hasValidTaskAssociationV3 = (v: { field: string; value: string }): boolean =>
+  v.field !== 'task' || uuidSchema.safeParse(v.value).success;
+
+/** Caller-authored associations contain no attributed actor or confirmation
+ * fact. Manual provenance requests confirmation under current authorization
+ * and mutation guards; the backend stamps the authenticated actor and result.
+ * Inferred provenance remains unconfirmed and its source reference is checked. */
+export const memoryAssociationInputV3Schema = z.discriminatedUnion('provenance', [
+  z.strictObject({ provenance: z.literal('manual'), ...memoryAssociationFieldsV3 }),
+  z.strictObject({ provenance: z.literal('inferred'), ...memoryAssociationFieldsV3,
+    sourceVersionId: uuidSchema }),
+]).refine(hasValidTaskAssociationV3, 'Task associations require a task UUID.');
+export type MemoryAssociationInputV3 = z.infer<typeof memoryAssociationInputV3Schema>;
+
+/** Stored, server-attributed view only. Labels never grant authority or task
+ * ownership; an inferred association never encodes a confirmed association. */
 export const memoryAssociationV3Schema = z.discriminatedUnion('provenance', [
   z.strictObject({ provenance: z.literal('manual'), confirmed: z.literal(true),
-    field: z.enum(['session', 'agent', 'task', 'topic', 'ticket', 'feature', 'tag']),
-    value: byteBoundedText(256), assertedByPrincipalId: uuidSchema }),
+    ...memoryAssociationFieldsV3, assertedByPrincipalId: uuidSchema }),
   z.strictObject({ provenance: z.literal('inferred'), confirmed: z.literal(false),
-    field: z.enum(['session', 'agent', 'task', 'topic', 'ticket', 'feature', 'tag']),
-    value: byteBoundedText(256), sourceVersionId: uuidSchema }),
-]).refine((v) => v.field !== 'task' || uuidSchema.safeParse(v.value).success,
-  'Task associations require a task UUID.');
+    ...memoryAssociationFieldsV3, sourceVersionId: uuidSchema }),
+]).refine(hasValidTaskAssociationV3, 'Task associations require a task UUID.');
 export type MemoryAssociationV3 = z.infer<typeof memoryAssociationV3Schema>;
 
-export const memoryMetadataV3Schema = z.strictObject({
+const memoryMetadataFieldsV3 = {
   projectId: uuidSchema,
-  associations: z.array(memoryAssociationV3Schema).max(MEMORY_METADATA_MAX_ASSOCIATIONS_V3),
   date: isoInstantSchema.nullable(),
   dateProvenance: z.enum(['manual', 'inferred']).nullable(),
-}).refine((v) => (v.date === null) === (v.dateProvenance === null),
-  'A date and its provenance must be supplied together.');
+};
+const hasDateProvenanceV3 = (v: { date: string | null; dateProvenance: string | null }): boolean =>
+  (v.date === null) === (v.dateProvenance === null);
+export const memoryMetadataInputV3Schema = z.strictObject({
+  ...memoryMetadataFieldsV3,
+  associations: z.array(memoryAssociationInputV3Schema).max(MEMORY_METADATA_MAX_ASSOCIATIONS_V3),
+}).refine(hasDateProvenanceV3, 'A date and its provenance must be supplied together.');
+export type MemoryMetadataInputV3 = z.infer<typeof memoryMetadataInputV3Schema>;
+
+export const memoryMetadataV3Schema = z.strictObject({
+  projectId: memoryMetadataFieldsV3.projectId,
+  associations: z.array(memoryAssociationV3Schema).max(MEMORY_METADATA_MAX_ASSOCIATIONS_V3),
+  date: memoryMetadataFieldsV3.date,
+  dateProvenance: memoryMetadataFieldsV3.dateProvenance,
+}).refine(hasDateProvenanceV3, 'A date and its provenance must be supplied together.');
 export type MemoryMetadataV3 = z.infer<typeof memoryMetadataV3Schema>;
 
 export const preferenceContentV3Schema = z.strictObject({
@@ -697,19 +721,60 @@ export const memoryAuthoringV3Schema = z.union([
   'Memory content exceeds the version byte limit.');
 export type MemoryAuthoringV3 = z.infer<typeof memoryAuthoringV3Schema>;
 
+const initialMemoryAuthoringV3Schema = z.strictObject({
+  projectId: uuidSchema,
+  content: memoryAuthoringV3Schema,
+  metadata: memoryMetadataInputV3Schema,
+  sourceVersionIds: z.array(uuidSchema).max(MEMORY_LIMITS.maxSourceClosure),
+});
+type InitialMemoryAuthoringV3 = z.infer<typeof initialMemoryAuthoringV3Schema>;
+
+/** Exact UTF-8 size of the canonical initial proposed version after backend
+ * attribution and normalization. UUID placeholders reserve only fixed-width
+ * bytes, never identities/authority. The canonical initial record uses an ISO
+ * timestamp from Date.toISOString() (24 bytes), unpinned/unflagged markers,
+ * proposed acceptance and no conflicts. Episodes normalize to authored and
+ * procedures to candidate. This is a representability check, not admission or
+ * authentication; services must still validate their actual final record,
+ * including any later acceptance, marker or conflict transition. */
+export function initialMemoryRecordByteLengthV3(input: InitialMemoryAuthoringV3): number {
+  const uuid = '00000000-0000-4000-8000-000000000000';
+  const content = input.content.kind === 'episodic'
+    ? { ...input.content, evidencePrecision: 'authored' }
+    : input.content.kind === 'procedural'
+      ? { ...input.content, procedureState: 'candidate', reviewRef: null }
+      : input.content;
+  return utf8ByteLength(JSON.stringify({
+    protocolVersion: CONTRACT_PROTOCOL_VERSION_V3,
+    projectId: input.projectId, memoryId: uuid, versionId: uuid,
+    content,
+    metadata: {
+      projectId: input.metadata.projectId,
+      associations: input.metadata.associations.map((association) => association.provenance === 'manual'
+        ? { ...association, confirmed: true, assertedByPrincipalId: uuid }
+        : { ...association, confirmed: false }),
+      date: input.metadata.date, dateProvenance: input.metadata.dateProvenance,
+    },
+    acceptance: { state: 'proposed' }, markers: { pinned: false, stale: { state: 'unflagged' } },
+    sourceVersionIds: input.sourceVersionIds, conflictIds: [], createdAt: '2000-01-01T00:00:00.000Z',
+  }));
+}
+const fitsInitialMemoryRecordV3 = (input: InitialMemoryAuthoringV3): boolean =>
+  initialMemoryRecordByteLengthV3(input) <= MEMORY_LIMITS.maxVersionBytes;
+
 /** Proposal input has no acceptance, visibility or evidence-precision override.
  * Policy acceptance is resolved by the service, never a caller-selected flag. */
-export const proposeMemoryV3Schema = z.strictObject({
+export const proposeMemoryV3Schema = initialMemoryAuthoringV3Schema.extend({
   protocolVersion: z.literal(CONTRACT_PROTOCOL_VERSION_V3),
-  requestId: uuidSchema, projectId: uuidSchema, guard: expectedPolicyV3Schema,
-  content: memoryAuthoringV3Schema, metadata: memoryMetadataV3Schema,
-  sourceVersionIds: z.array(uuidSchema).max(MEMORY_LIMITS.maxSourceClosure),
-}).refine((v) => v.projectId === v.metadata.projectId, 'Metadata must name the selected project.');
+  requestId: uuidSchema, guard: expectedPolicyV3Schema,
+}).refine((v) => v.projectId === v.metadata.projectId, 'Metadata must name the selected project.')
+  .refine(fitsInitialMemoryRecordV3, 'Authoring cannot fit an initial stored memory version.');
 export type ProposeMemoryV3 = z.infer<typeof proposeMemoryV3Schema>;
 export const correctMemoryV3Schema = guardedMutationV3Schema.extend({
-  content: memoryAuthoringV3Schema, metadata: memoryMetadataV3Schema,
-  reason: byteBoundedText(512), sourceVersionIds: z.array(uuidSchema).max(MEMORY_LIMITS.maxSourceClosure),
-}).refine((v) => v.projectId === v.metadata.projectId, 'Correction metadata must keep project scope.');
+  ...initialMemoryAuthoringV3Schema.pick({ content: true, metadata: true, sourceVersionIds: true }).shape,
+  reason: byteBoundedText(512),
+}).refine((v) => v.projectId === v.metadata.projectId, 'Correction metadata must keep project scope.')
+  .refine(fitsInitialMemoryRecordV3, 'Correction cannot fit an initial stored memory version.');
 export type CorrectMemoryV3 = z.infer<typeof correctMemoryV3Schema>;
 
 /** This is an owner-controlled policy view, not model input. Defaults require
@@ -797,7 +862,8 @@ export const sharingLineageV3Schema = z.strictObject({
 export type SharingLineageV3 = z.infer<typeof sharingLineageV3Schema>;
 
 /** Requested knowledge transfer only; no execution/claim transfer or inferred
- * task ownership. Composition uses the recall packet's same whole budget. */
+ * task ownership. This shape serves both stored handoff content and requested
+ * composition; composition additionally uses the recall packet's whole budget. */
 export const requestedHandoffV3Schema = z.strictObject({
   protocolVersion: z.literal(CONTRACT_PROTOCOL_VERSION_V3), projectId: uuidSchema,
   kind: z.literal('handoff'), requestId: uuidSchema, taskId: uuidSchema.nullable(),
