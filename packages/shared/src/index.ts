@@ -353,3 +353,28 @@ export {
   listNativeSessionsResultSchema,
   type IssueEnrollmentResult, type ListEnrollmentsResult, type ListNativeSessionsResult,
 } from './native-access.js';
+
+export { producerAuthorityV3Schema, type ProducerAuthorityV3, producerTargetV3Schema, type ProducerTargetV3, nativeHintsV3Schema, type NativeHintsV3 } from './identity.js';
+
+export { safePayloadV3Schema, type SafePayloadV3, sanitizerResultV3Schema, type SanitizerResultV3, sourceRevisionV3Schema, type SourceRevisionV3 } from './sources.js';
+
+export { policyFenceV3Schema, type PolicyFenceV3, expectedPolicyV3Schema, type ExpectedPolicyV3, ownerPolicyV3Schema, type OwnerPolicyV3, updateOwnerPolicyV3Schema, type UpdateOwnerPolicyV3 } from './policy.js';
+
+export { journalRangeV3Schema, type JournalRangeV3, journalProgressV3Schema, type JournalProgressV3, journalProgressTransitionV3Schema, type JournalProgressTransitionV3, callbackProfileV3Schema, type CallbackProfileV3, captureRequestV3Schema, type CaptureRequestV3, captureResultV3Schema, type CaptureResultV3, checkpointRequestV3Schema, type CheckpointRequestV3, checkpointResultV3Schema, type CheckpointResultV3 } from './capture.js';
+
+export { deletionSelectionV3Schema, type DeletionSelectionV3, deletionEligibilityV3Schema, type DeletionEligibilityV3, deletionRequestV3Schema, type DeletionRequestV3, deletionReceiptV3Schema, type DeletionReceiptV3, deletionResultV3Schema, type DeletionResultV3 } from './privacy.js';
+
+export { operationIdentityV3Schema, type OperationIdentityV3, guardedMutationV3Schema, type GuardedMutationV3, operationReceiptV3Schema, type OperationReceiptV3 } from './operations.js';
+
+export { contractCapabilityV3Schema, type ContractCapabilityV3 } from './capabilities.js';
+
+export { JOURNAL_STAGES_V3, CAPTURE_REFUSALS_V3 } from './capture.js';
+export { CONTRACT_OPERATIONS_V3 } from './capabilities.js';
+export { CONTRACT_PROTOCOL_VERSION_V3, CONTRACT_API_PREFIX_V3, CONTRACT_ROUTES_V3, REQUEST_RETRY_SEMANTICS_V3, V2_TRANSITION_V3 } from './protocol.js';
+
+export {
+  releaseVersionV3Schema,
+  compatibilityHandshakeV3Schema,
+  type ReleaseVersionV3,
+  type CompatibilityHandshakeV3,
+} from './capabilities.js';
