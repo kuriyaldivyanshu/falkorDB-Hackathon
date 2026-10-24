@@ -146,3 +146,37 @@ export const jobListQuerySchema = z.object({
   limit: z.number().int().min(1).max(50).default(20),
 });
 export type JobListQuery = z.infer<typeof jobListQuerySchema>;
+
+/** V3 identities have distinct purposes even though all are opaque UUIDs.
+ * A processing job does not identify a source observation or mutation effect. */
+export const operationIdentityV3Schema = z.strictObject({
+  requestId: uuidSchema,
+  operationId: uuidSchema,
+  processingJobId: uuidSchema.nullable(),
+  memoryMutationId: uuidSchema.nullable(),
+});
+export type OperationIdentityV3 = z.infer<typeof operationIdentityV3Schema>;
+
+export const guardedMutationV3Schema = z.strictObject({
+  protocolVersion: z.literal(3), requestId: uuidSchema, projectId: uuidSchema,
+  memoryId: uuidSchema, expectedVersionId: uuidSchema,
+  expectedPolicyRevision: decimalStringSchema, expectedPrivacyGeneration: decimalStringSchema,
+});
+export type GuardedMutationV3 = z.infer<typeof guardedMutationV3Schema>;
+
+export const operationReceiptV3Schema = z.strictObject({
+  protocolVersion: z.literal(3), identity: operationIdentityV3Schema,
+  projectId: uuidSchema, graphEpoch: uuidSchema,
+  policyRevision: decimalStringSchema, privacyGeneration: decimalStringSchema,
+  canonicalRequestDigest: sha256HexSchema,
+  outcome: z.discriminatedUnion('state', [
+    z.strictObject({ state: z.literal('pending'), intentDurable: z.literal(true) }),
+    z.strictObject({ state: z.literal('reconciling'), intentDurable: z.literal(true) }),
+    z.strictObject({ state: z.literal('committed'), graphReceiptId: uuidSchema,
+      memoryVersionId: uuidSchema.nullable() }),
+    z.strictObject({ state: z.literal('no_effect'), reason: z.enum(['ignored', 'not_indexable']) }),
+    z.strictObject({ state: z.literal('refused'), code: z.enum(['unauthorized', 'policy_changed',
+      'privacy_changed', 'version_conflict', 'idempotency_mismatch', 'sanitizer_rejected']) }),
+  ]),
+});
+export type OperationReceiptV3 = z.infer<typeof operationReceiptV3Schema>;

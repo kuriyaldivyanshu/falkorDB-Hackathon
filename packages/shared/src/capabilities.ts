@@ -97,3 +97,66 @@ export const capabilityReportSchema = z.object({
   adapter: adapterCapabilitySchema,
 });
 export type CapabilityReport = z.infer<typeof capabilityReportSchema>;
+
+/** Contract availability is separate from implemented service capability. */
+export const CONTRACT_OPERATIONS_V3 = ['capture.events', 'checkpoint.create', 'policy.update',
+  'privacy.delete', 'privacy.inspect', 'operation.inspect'] as const;
+export const contractCapabilityV3Schema = z.strictObject({
+  protocolVersion: z.literal(3), contractVersion: z.literal(3),
+  id: z.enum(CONTRACT_OPERATIONS_V3),
+  status: z.literal('unavailable'),
+  reason: z.literal('implementation_required'),
+});
+export type ContractCapabilityV3 = z.infer<typeof contractCapabilityV3Schema>;
+
+import { decimalStringSchema } from './validation.js';
+
+/** Canonical release versions only: exactly three decimal components, without
+ * prerelease/build suffixes. This intentionally does not accept general SemVer. */
+export const releaseVersionV3Schema = byteBoundedText(64).refine(
+  (value) => /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/.test(value),
+  'Expected a canonical three-component release version.',
+);
+export type ReleaseVersionV3 = z.infer<typeof releaseVersionV3Schema>;
+
+const releaseAtLeast = (actual: string, minimum: string): boolean => {
+  // Refinements may run after a malformed field; never throw from safeParse.
+  if (!releaseVersionV3Schema.safeParse(actual).success ||
+      !releaseVersionV3Schema.safeParse(minimum).success) return false;
+  const a = actual.split('.').map(BigInt);
+  const b = minimum.split('.').map(BigInt);
+  for (let i = 0; i < 3; i++) {
+    if (a[i]! !== b[i]!) return a[i]! > b[i]!;
+  }
+  return true;
+};
+
+/** Contract for a future service handshake, not a runtime capability or evidence
+ * that any ledger was read. SQL ledger/contract and graph contract versions are
+ * independent dimensions; never infer one from another or from the package.
+ * Verification/state fields are assertions requiring runtime qualification.
+ * Reader/writer minima name package release versions for the upgraded stores. */
+export const compatibilityHandshakeV3Schema = z.strictObject({
+  contractVersion: z.literal(3),
+  wireProtocolVersion: z.literal(3),
+  sqlLedgerLatest: decimalStringSchema.nullable(),
+  sqlLedgerVerification: z.enum(['unverified', 'verified']),
+  sqlContractVersion: decimalStringSchema,
+  graphContractVersion: decimalStringSchema,
+  serviceVersion: releaseVersionV3Schema,
+  packageVersion: releaseVersionV3Schema,
+  minimumReaderPackageVersion: releaseVersionV3Schema,
+  minimumWriterPackageVersion: releaseVersionV3Schema,
+  transitionState: z.enum(['legacy', 'upgrade_required', 'migrating', 'quarantined', 'ready', 'blocked']),
+}).superRefine((v, ctx) => {
+  if (v.sqlLedgerVerification === 'verified' && v.sqlLedgerLatest === null) {
+    ctx.addIssue({ code: 'custom', message: 'Verified ledger state requires an observed latest version.' });
+  }
+  if (v.transitionState === 'ready' &&
+      (v.sqlLedgerVerification !== 'verified' || v.sqlLedgerLatest === null ||
+       !releaseAtLeast(v.packageVersion, v.minimumReaderPackageVersion) ||
+       !releaseAtLeast(v.packageVersion, v.minimumWriterPackageVersion))) {
+    ctx.addIssue({ code: 'custom', message: 'Ready assertions require a verified ledger and compatible reader/writer package.' });
+  }
+});
+export type CompatibilityHandshakeV3 = z.infer<typeof compatibilityHandshakeV3Schema>;

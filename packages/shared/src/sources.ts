@@ -224,3 +224,33 @@ export const sourceLinkSchema = z.object({
   end: z.number().int().nonnegative().nullable(),
 });
 export type SourceLink = z.infer<typeof sourceLinkSchema>;
+
+/** V3 sanitized representation only. Parsing cannot prove scanning, authority,
+ * integrity or freedom from secrets. Backend scanning remains mandatory. */
+export const safePayloadV3Schema = z.strictObject({
+  text: byteBoundedText(65536),
+  mediaType: z.literal('text/plain'),
+});
+export type SafePayloadV3 = z.infer<typeof safePayloadV3Schema>;
+
+const sanitizerVersionsV3 = {
+  policyRevision: decimalStringSchema,
+  scannerVersion: byteBoundedText(64),
+};
+export const sanitizerResultV3Schema = z.discriminatedUnion('status', [
+  z.strictObject({ status: z.literal('safe'), ...sanitizerVersionsV3,
+    payload: safePayloadV3Schema }),
+  z.strictObject({ status: z.literal('reduced'), ...sanitizerVersionsV3,
+    payload: safePayloadV3Schema,
+    reason: z.enum(['sensitive_fields_removed', 'bounded_excerpt']) }),
+  z.strictObject({ status: z.literal('rejected'), ...sanitizerVersionsV3,
+    reason: z.enum(['sensitive', 'unsupported', 'uncertain', 'scanner_failed', 'policy_denied']),
+    rawRetained: z.literal(false) }),
+]);
+export type SanitizerResultV3 = z.infer<typeof sanitizerResultV3Schema>;
+
+export const sourceRevisionV3Schema = z.strictObject({
+  sourceId: uuidSchema,
+  sourceRevision: decimalStringSchema,
+});
+export type SourceRevisionV3 = z.infer<typeof sourceRevisionV3Schema>;

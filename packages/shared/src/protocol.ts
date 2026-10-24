@@ -95,3 +95,40 @@ export interface ApiSuccessEnvelope<TData> {
   readonly ok: true;
   readonly data: TData;
 }
+
+/** Declarations only: no registration, handler or capability is enabled. V2
+ * stays unchanged here. Future runtime adapters must apply the current release
+ * gate to safe v2 reads and refuse unsafe v2 mutation/context requests. */
+export const CONTRACT_PROTOCOL_VERSION_V3 = 3;
+export const CONTRACT_API_PREFIX_V3 = '/v3';
+export const CONTRACT_ROUTES_V3 = {
+  captureEvents: '/v3/capture/events',
+  checkpoints: '/v3/checkpoints',
+  policy: (projectId: string): string => `/v3/projects/${projectId}/policy`,
+  deletions: '/v3/privacy/deletions',
+  deletion: (id: string): string => `/v3/privacy/deletions/${id}`,
+  operation: (id: string): string => `/v3/operations/${id}`,
+} as const;
+
+/** Equality is over the full validated canonical request plus authenticated
+ * tenant/project/principal and stored enrollment/session/stream binding. Include
+ * visibility, source revision, sanitized outcome/content, hints, policy/privacy
+ * guards, and all relevant metadata. Exclude only transport credentials. Compare
+ * before reusing receipts; changed input refuses idempotency_mismatch. Never
+ * deduplicate distinct observations by text, digest, cwd, hints or timestamps.
+ * Current authorization/privacy gates apply before every replay. */
+export const REQUEST_RETRY_SEMANTICS_V3 = 'scoped_canonical_request_equality' as const;
+export const V2_TRANSITION_V3 = {
+  safeReads: {
+    method: 'GET',
+    routes: ['health', 'projects', 'source', 'sourceRange', 'memory', 'task'],
+    transport: 'validated_owner_socket',
+    requires: ['current_scope_denial_dependency_permit', 'sanitizer_safe_representation', 'response_caps'],
+    unrepresentableOutcome: 'unsupported_upgrade_required',
+  },
+  otherRoutes: 'unsupported_upgrade_required_before_content_work',
+  oldTcpClients: 'transport_upgrade_required',
+  mutations: 'unsupported_upgrade_required',
+  context: 'unsupported_upgrade_required',
+  runtimeImplemented: false,
+} as const;

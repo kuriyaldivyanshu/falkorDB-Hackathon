@@ -183,3 +183,30 @@ export interface AuthorizedScope {
   readonly privacyRevision: string | null;
   readonly nativeSessionId: string | null;
 }
+
+/** V3 server-resolved authority. Validation is not authentication. Generation 1
+ * pins are replaced only by revocation and a fresh enrollment. Never accept this
+ * view as caller-supplied proof; resolve and revalidate it from credentials. */
+export const producerAuthorityV3Schema = z.strictObject({
+  tenantId: uuidSchema,
+  projectId: uuidSchema,
+  principalId: uuidSchema,
+  enrollmentId: uuidSchema,
+  enrollmentGeneration: z.literal(1),
+  backendSessionId: uuidSchema,
+  streamId: uuidSchema,
+  identityPrecision: z.literal('provisional'),
+});
+export type ProducerAuthorityV3 = z.infer<typeof producerAuthorityV3Schema>;
+
+export const nativeHintsV3Schema = z.strictObject({
+  session: byteBoundedText(256).optional(),
+  turn: byteBoundedText(256).optional(),
+});
+export type NativeHintsV3 = z.infer<typeof nativeHintsV3Schema>;
+
+/** Requests select a stored binding; IDs alone confer no authority. */
+export const producerTargetV3Schema = producerAuthorityV3Schema.pick({
+  enrollmentId: true, enrollmentGeneration: true, backendSessionId: true, streamId: true,
+});
+export type ProducerTargetV3 = z.infer<typeof producerTargetV3Schema>;
