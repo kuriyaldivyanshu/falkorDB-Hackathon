@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
-import { byteBoundedText } from './validation.js';
+import { CONTRACT_PROTOCOL_VERSION_V3 } from './protocol.js';
+import { byteBoundedText, decimalStringSchema } from './validation.js';
 
 /**
  * Capability reporting.
@@ -102,14 +103,12 @@ export type CapabilityReport = z.infer<typeof capabilityReportSchema>;
 export const CONTRACT_OPERATIONS_V3 = ['capture.events', 'checkpoint.create', 'policy.update',
   'privacy.delete', 'privacy.inspect', 'operation.inspect'] as const;
 export const contractCapabilityV3Schema = z.strictObject({
-  protocolVersion: z.literal(3), contractVersion: z.literal(3),
+  protocolVersion: z.literal(CONTRACT_PROTOCOL_VERSION_V3), contractVersion: z.literal(3),
   id: z.enum(CONTRACT_OPERATIONS_V3),
   status: z.literal('unavailable'),
   reason: z.literal('implementation_required'),
 });
 export type ContractCapabilityV3 = z.infer<typeof contractCapabilityV3Schema>;
-
-import { decimalStringSchema } from './validation.js';
 
 /** Canonical release versions only: exactly three decimal components, without
  * prerelease/build suffixes. This intentionally does not accept general SemVer. */
@@ -138,7 +137,7 @@ const releaseAtLeast = (actual: string, minimum: string): boolean => {
  * Reader/writer minima name package release versions for the upgraded stores. */
 export const compatibilityHandshakeV3Schema = z.strictObject({
   contractVersion: z.literal(3),
-  wireProtocolVersion: z.literal(3),
+  wireProtocolVersion: z.literal(CONTRACT_PROTOCOL_VERSION_V3),
   sqlLedgerLatest: decimalStringSchema.nullable(),
   sqlLedgerVerification: z.enum(['unverified', 'verified']),
   sqlContractVersion: decimalStringSchema,

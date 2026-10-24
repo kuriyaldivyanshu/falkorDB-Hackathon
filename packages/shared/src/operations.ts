@@ -1,5 +1,6 @@
 import { z } from 'zod';
 
+import { CONTRACT_PROTOCOL_VERSION_V3 } from './protocol.js';
 import { byteBoundedText, decimalStringSchema, sha256HexSchema, uuidSchema } from './validation.js';
 
 /**
@@ -158,14 +159,14 @@ export const operationIdentityV3Schema = z.strictObject({
 export type OperationIdentityV3 = z.infer<typeof operationIdentityV3Schema>;
 
 export const guardedMutationV3Schema = z.strictObject({
-  protocolVersion: z.literal(3), requestId: uuidSchema, projectId: uuidSchema,
+  protocolVersion: z.literal(CONTRACT_PROTOCOL_VERSION_V3), requestId: uuidSchema, projectId: uuidSchema,
   memoryId: uuidSchema, expectedVersionId: uuidSchema,
   expectedPolicyRevision: decimalStringSchema, expectedPrivacyGeneration: decimalStringSchema,
 });
 export type GuardedMutationV3 = z.infer<typeof guardedMutationV3Schema>;
 
 export const operationReceiptV3Schema = z.strictObject({
-  protocolVersion: z.literal(3), identity: operationIdentityV3Schema,
+  protocolVersion: z.literal(CONTRACT_PROTOCOL_VERSION_V3), identity: operationIdentityV3Schema,
   projectId: uuidSchema, graphEpoch: uuidSchema,
   policyRevision: decimalStringSchema, privacyGeneration: decimalStringSchema,
   canonicalRequestDigest: sha256HexSchema,

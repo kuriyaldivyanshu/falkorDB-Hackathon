@@ -1,4 +1,6 @@
 import { z } from 'zod';
+
+import { CONTRACT_PROTOCOL_VERSION_V3 } from './protocol.js';
 import { decimalStringSchema, isDecimalString, sha256HexSchema, uuidSchema } from './validation.js';
 import { expectedPolicyV3Schema, policyFenceV3Schema } from './policy.js';
 
@@ -18,11 +20,11 @@ export const deletionEligibilityV3Schema = z.discriminatedUnion('eligible', [
   z.strictObject({ eligible: z.literal(true), selectionDigest: sha256HexSchema,
     fence: policyFenceV3Schema, dependencyClosure: z.literal('checked') }),
   z.strictObject({ eligible: z.literal(false),
-    code: z.enum(['unauthorized', 'policy_changed', 'dependency_unavailable', 'selection_too_broad']) }),
+    code: z.enum(['unauthorized', 'policy_changed', 'privacy_changed', 'dependency_unavailable', 'selection_too_broad']) }),
 ]);
 export type DeletionEligibilityV3 = z.infer<typeof deletionEligibilityV3Schema>;
 export const deletionRequestV3Schema = z.strictObject({
-  protocolVersion: z.literal(3), requestId: uuidSchema, projectId: uuidSchema,
+  protocolVersion: z.literal(CONTRACT_PROTOCOL_VERSION_V3), requestId: uuidSchema, projectId: uuidSchema,
   guard: expectedPolicyV3Schema, selection: deletionSelectionV3Schema,
 });
 export type DeletionRequestV3 = z.infer<typeof deletionRequestV3Schema>;
@@ -31,7 +33,7 @@ export type DeletionRequestV3 = z.infer<typeof deletionRequestV3Schema>;
  * This receipt contains only safe replay metadata; it never certifies erasure
  * of backups or external deliveries. Reauthorize even duplicate receipt reads. */
 export const deletionReceiptV3Schema = z.strictObject({
-  protocolVersion: z.literal(3), receiptId: uuidSchema, deletionId: uuidSchema,
+  protocolVersion: z.literal(CONTRACT_PROTOCOL_VERSION_V3), receiptId: uuidSchema, deletionId: uuidSchema,
   operationId: uuidSchema, requestId: uuidSchema, projectId: uuidSchema,
   canonicalRequestDigest: sha256HexSchema, selectionDigest: sha256HexSchema,
   fence: policyFenceV3Schema,
@@ -68,7 +70,7 @@ export const deletionReceiptV3Schema = z.strictObject({
 export type DeletionReceiptV3 = z.infer<typeof deletionReceiptV3Schema>;
 export const deletionResultV3Schema = z.discriminatedUnion('status', [
   z.strictObject({ status: z.literal('denial_committed'), receipt: deletionReceiptV3Schema }),
-  z.strictObject({ status: z.literal('refused'), protocolVersion: z.literal(3), requestId: uuidSchema,
+  z.strictObject({ status: z.literal('refused'), protocolVersion: z.literal(CONTRACT_PROTOCOL_VERSION_V3), requestId: uuidSchema,
     code: z.enum(['unauthorized', 'policy_changed', 'privacy_changed', 'idempotency_mismatch',
       'dependency_unavailable', 'selection_too_broad', 'storage_unavailable']) }),
 ]);

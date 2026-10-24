@@ -1,4 +1,6 @@
 import { z } from 'zod';
+
+import { CONTRACT_PROTOCOL_VERSION_V3 } from './protocol.js';
 import { decimalStringSchema, isDecimalString, sha256HexSchema, uuidSchema } from './validation.js';
 import { nativeHintsV3Schema, producerAuthorityV3Schema, producerTargetV3Schema } from './identity.js';
 import { expectedPolicyV3Schema, policyFenceV3Schema } from './policy.js';
@@ -15,9 +17,11 @@ export const JOURNAL_STAGES_V3 = ['captured', 'processed', 'committed', 'indexed
 const pendingRanges = z.array(journalRangeV3Schema).max(64);
 /** Frontiers are contiguous durable outcomes, including explicit no-effects.
  * Pending ranges partition each stage's remaining admitted tail; gaps describe
- * absent native evidence and do not prevent a durable gap outcome advancing. */
+ * absent native evidence and do not prevent a durable gap outcome advancing.
+ * Later-discovered absence may add historical native-coverage annotations; this
+ * never rewrites durable journal outcomes, frontiers or prior receipts. */
 export const journalProgressV3Schema = z.strictObject({
-  protocolVersion: z.literal(3),
+  protocolVersion: z.literal(CONTRACT_PROTOCOL_VERSION_V3),
   authority: producerAuthorityV3Schema,
   fence: policyFenceV3Schema,
   processingGeneration: decimalStringSchema,
@@ -111,7 +115,7 @@ export const callbackProfileV3Schema = z.strictObject({
 });
 export type CallbackProfileV3 = z.infer<typeof callbackProfileV3Schema>;
 const requestFields = {
-  protocolVersion: z.literal(3), requestId: uuidSchema,
+  protocolVersion: z.literal(CONTRACT_PROTOCOL_VERSION_V3), requestId: uuidSchema,
   target: producerTargetV3Schema, guard: expectedPolicyV3Schema,
   nativeHints: nativeHintsV3Schema.optional(),
 };
@@ -133,23 +137,27 @@ export type CaptureRequestV3 = z.infer<typeof captureRequestV3Schema>;
 export const CAPTURE_REFUSALS_V3 = ['unsupported_ingress', 'unsupported_profile', 'unauthorized',
   'policy_changed', 'privacy_changed', 'idempotency_mismatch', 'sanitizer_rejected',
   'boundary_not_captured', 'storage_unavailable'] as const;
+/** A result's own journalSeq may precede snapshot.captured when concurrent
+ * admissions have advanced the journal. Retries retain the original snapshot;
+ * checkpoint receipts instead cap their snapshot at the requested boundary. */
 export const captureResultV3Schema = z.discriminatedUnion('status', [
-  z.strictObject({ protocolVersion: z.literal(3), status: z.literal('admitted'),
+  z.strictObject({ protocolVersion: z.literal(CONTRACT_PROTOCOL_VERSION_V3), status: z.literal('admitted'),
     requestId: uuidSchema, receiptId: uuidSchema, canonicalRequestDigest: sha256HexSchema,
     source: sourceRevisionV3Schema, journalSeq: decimalStringSchema,
     progress: journalProgressV3Schema, durable: z.literal(true),
   }).refine((v) => v.journalSeq !== '0' && !greater(v.journalSeq, v.progress.captured),
     'Admitted position must be inside durable capture.'),
-  z.strictObject({ protocolVersion: z.literal(3), status: z.enum(['ignored', 'gap']),
+  z.strictObject({ protocolVersion: z.literal(CONTRACT_PROTOCOL_VERSION_V3), status: z.enum(['ignored', 'gap']),
     requestId: uuidSchema, receiptId: uuidSchema, canonicalRequestDigest: sha256HexSchema,
     journalSeq: decimalStringSchema, progress: journalProgressV3Schema, durable: z.literal(true),
     reason: z.enum(['no_value', 'sanitizer_rejected', 'unsupported_ingress']),
     rawRetained: z.literal(false),
   }).refine((v) => v.journalSeq !== '0' && !greater(v.journalSeq, v.progress.captured) &&
     (v.status !== 'gap' || v.progress.gaps.some((g) =>
-      !greater(g.range.from, v.journalSeq) && !greater(v.journalSeq, g.range.through))),
-    'Durable outcome must be captured and gap outcomes must preserve their gap.'),
-  z.strictObject({ protocolVersion: z.literal(3), status: z.literal('refused'),
+      g.reason === v.reason && !greater(g.range.from, v.journalSeq) &&
+      !greater(v.journalSeq, g.range.through))),
+    'Durable outcome must be captured and gap outcomes must match their containing gap reason.'),
+  z.strictObject({ protocolVersion: z.literal(CONTRACT_PROTOCOL_VERSION_V3), status: z.literal('refused'),
     requestId: uuidSchema, code: z.enum(CAPTURE_REFUSALS_V3), rawRetained: z.literal(false),
   }),
 ]);
@@ -169,13 +177,13 @@ export type CheckpointRequestV3 = z.infer<typeof checkpointRequestV3Schema>;
  * admitted newer events. Those newer events belong to another checkpoint.
  * An unavailable requested boundary returns refusal, never durable success. */
 export const checkpointResultV3Schema = z.discriminatedUnion('status', [
-  z.strictObject({ protocolVersion: z.literal(3), status: z.literal('persisted'),
+  z.strictObject({ protocolVersion: z.literal(CONTRACT_PROTOCOL_VERSION_V3), status: z.literal('persisted'),
     requestId: uuidSchema, receiptId: uuidSchema, canonicalRequestDigest: sha256HexSchema,
     throughJournalSeq: decimalStringSchema,
     capturedDurable: z.literal(true), progress: journalProgressV3Schema,
   }).refine((v) => v.throughJournalSeq === v.progress.captured,
     'Checkpoint snapshot must end at the acknowledged durable boundary.'),
-  z.strictObject({ protocolVersion: z.literal(3), status: z.literal('refused'),
+  z.strictObject({ protocolVersion: z.literal(CONTRACT_PROTOCOL_VERSION_V3), status: z.literal('refused'),
     requestId: uuidSchema, code: z.enum(CAPTURE_REFUSALS_V3), capturedDurable: z.literal(false),
   }),
 ]);

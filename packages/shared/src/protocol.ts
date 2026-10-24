@@ -102,12 +102,12 @@ export interface ApiSuccessEnvelope<TData> {
 export const CONTRACT_PROTOCOL_VERSION_V3 = 3;
 export const CONTRACT_API_PREFIX_V3 = '/v3';
 export const CONTRACT_ROUTES_V3 = {
-  captureEvents: '/v3/capture/events',
-  checkpoints: '/v3/checkpoints',
-  policy: (projectId: string): string => `/v3/projects/${projectId}/policy`,
-  deletions: '/v3/privacy/deletions',
-  deletion: (id: string): string => `/v3/privacy/deletions/${id}`,
-  operation: (id: string): string => `/v3/operations/${id}`,
+  captureEvents: `${CONTRACT_API_PREFIX_V3}/capture/events`,
+  checkpoints: `${CONTRACT_API_PREFIX_V3}/checkpoints`,
+  policy: (projectId: string): string => `${CONTRACT_API_PREFIX_V3}/projects/${projectId}/policy`,
+  deletions: `${CONTRACT_API_PREFIX_V3}/privacy/deletions`,
+  deletion: (id: string): string => `${CONTRACT_API_PREFIX_V3}/privacy/deletions/${id}`,
+  operation: (id: string): string => `${CONTRACT_API_PREFIX_V3}/operations/${id}`,
 } as const;
 
 /** Equality is over the full validated canonical request plus authenticated
@@ -121,7 +121,7 @@ export const REQUEST_RETRY_SEMANTICS_V3 = 'scoped_canonical_request_equality' as
 export const V2_TRANSITION_V3 = {
   safeReads: {
     method: 'GET',
-    routes: ['health', 'projects', 'source', 'sourceRange', 'memory', 'task'],
+    routes: ['health', 'projects', 'source', 'sourceRange', 'memory', 'task'] satisfies readonly (keyof typeof ROUTES)[],
     transport: 'validated_owner_socket',
     requires: ['current_scope_denial_dependency_permit', 'sanitizer_safe_representation', 'response_caps'],
     unrepresentableOutcome: 'unsupported_upgrade_required',
