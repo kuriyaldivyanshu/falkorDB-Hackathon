@@ -159,30 +159,45 @@ export function createSqlDatabase(deps: SqlDatabaseDeps): SqlDatabase {
       assertOpen(closed);
       const client = await acquire(pool);
       let released = false;
+      let connectionError: Error | undefined;
+      const onConnectionError = (error: Error): void => { connectionError = error; };
+      // Checked-out pg clients require an error listener while graph I/O awaits.
+      // Preserve the durable marker and reject further SQL after ownership loss.
+      client.on('error', onConnectionError);
       const scoped: SqlDatabase = {
         ...database,
         async query(text, values = []) {
           assertOpen(closed || released);
+          if (connectionError) throw toStorageError(connectionError, 'postgres_connection');
           try { return (await client.query(text, values as unknown[])).rows; }
           catch (error) { throw toStorageError(error, 'postgres_query'); }
         },
         withTenantTransaction(tenantId, work) {
           assertOpen(closed || released);
+          if (connectionError) throw toStorageError(connectionError, 'postgres_connection');
           return withTransaction(work, tenantId, client);
         },
         withTransaction(work) {
           assertOpen(closed || released);
+          if (connectionError) throw toStorageError(connectionError, 'postgres_connection');
           return withTransaction(work, undefined, client);
         },
         async withConnection(work) { assertOpen(closed || released); return work(scoped); },
         async ping() { await scoped.query('SELECT 1'); },
         async close() { throw new ThreadlineError('internal_error', 'Cannot close a reserved connection.'); },
       };
-      try { return await work(scoped); }
-      finally {
+      let clean = false;
+      try {
+        const result = await work(scoped);
+        await client.query('ROLLBACK');
+        await client.query('SELECT pg_advisory_unlock_all()');
+        await client.query('RESET ALL');
+        clean = true;
+        return result;
+      } finally {
         released = true;
-        // Discard releases session locks even after a failed SQL acknowledgement.
-        client.release(true);
+        client.release(!clean || connectionError !== undefined);
+        client.removeListener('error', onConnectionError);
       }
     },
 
@@ -360,10 +375,10 @@ export async function withProjectBarriers<T>(
 
 /** Transaction variant for a permit or denial admission: COMMIT releases all
  * barriers without another network round trip after its linearization point. */
-export async function lockProjectBarriers(tx: TxClient, tenantId: string, projectIds: readonly string[]): Promise<void> {
+export async function lockProjectBarriers(tx: TxClient, tenantId: string, projectIds: readonly string[], mode: 'exclusive' | 'shared' = 'exclusive'): Promise<void> {
   const projects = [...new Set(projectIds)].sort();
   if (projects.length > 16) throw new ThreadlineError('overloaded', 'The release scope is too broad.');
-  await tx.rows(`SELECT pg_advisory_xact_lock(hashtextextended(key, 0))
+  await tx.rows(`SELECT ${mode === 'shared' ? 'pg_advisory_xact_lock_shared' : 'pg_advisory_xact_lock'}(hashtextextended(key, 0))
     FROM (SELECT unnest($1::text[]) AS key ORDER BY key) ordered`,
   [projects.map((project) => projectWriteLockKey(tenantId, project))]);
 }

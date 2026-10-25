@@ -4,12 +4,15 @@ import {
   API_PREFIX,
   ROUTES,
   ThreadlineError,
-  errorPayload,
+  errorPayload, parseContract, sourceAppendResultSchema, sourceHistoryPageSchema, sourceViewSchema,
+  memoryOperationResultSchema, memoryQueryResultSchema, memoryViewSchema, taskOperationResultSchema,
+  taskViewSchema, taskRequirementsViewSchema, operationViewSchema, contextResultSchema, contextOccurrenceSchema,
+  projectViewSchema, projectJoinResultSchema,
   type ThreadlineErrorCode,
 } from '@threadline/shared';
 
 import type { AuthenticatedCall, AuthenticateTarget } from '../service/auth.js';
-import type { ReleaseTicket, ReleaseResource } from '../service/release.js';
+import type { ReleaseTicket, ReleaseResource, ReleaseSelection } from '../service/release.js';
 import { requirePermission } from '../service/permissions.js';
 import { unsupportedOperation } from '../capabilities.js';
 import type { ServiceConfig } from '../config.js';
@@ -133,27 +136,28 @@ function buildApp(deps: ApiServerDeps): FastifyInstance {
     ] as const) {
       if (params?.[field]) seeds.push({projectId: call.scope.projectId, kind, id: params[field]});
     }
-    tickets.set(request, await service.release.begin(call, surface, seeds, /\/(sources|history|memories|tasks|operations|context)(\/|$)/.test(request.routeOptions.url ?? '')));
+    if (surface === `GET ${ROUTES.memories}` && call.scope.projectId !== null) {
+      const taskId = (request.query as Record<string, unknown>)?.taskId;
+      if (typeof taskId === 'string') seeds.push({ projectId: call.scope.projectId, kind: 'task', id: taskId });
+    }
+    const graphRead = graphSurfaces.has(surface);
+    if (!knownSurfaces.has(surface)) throw new ThreadlineError('unsupported','This response has no release contract.');
+    // Mutation acknowledgements do not include content read through path IDs.
+    tickets.set(request, await service.release.begin(call, surface, request.method === 'GET' ? seeds : [], graphRead));
     return call;
   };
   app.addHook('onSend', async (request, reply, payload) => {
     if (reply.statusCode >= 400) return payload;
     const ticket = tickets.get(request);
     // Liveness is the only unauthenticated successful route. New authenticated
-    // routes cannot accidentally bypass the final gate by forgetting a helper.
+    // routes require an explicit response release contract.
     if (!ticket) {
       if (request.routeOptions.url === ROUTES.health) return payload;
       throw new ThreadlineError('scope_denied', 'This release is not authorized.');
     }
     if (typeof payload !== 'string') throw new ThreadlineError('invalid_request', 'Only bounded JSON responses can be released.');
-    let current = ticket;
-    if (request.method === 'POST' && request.routeOptions.url === ROUTES.nativeSessions) {
-      // Registration intentionally changes the caller's stored pin. Obtain a
-      // fresh metadata ticket under the newly authenticated binding.
-      const call = await service.auth.authenticate(authorizationOf(request));
-      current = await service.release.begin(call, ticket.surface, [], false);
-    }
-    await service.release.permit(current, payload);
+    const envelope = JSON.parse(payload) as {data:unknown};
+    await service.release.permit(ticket, payload, releaseSelection(ticket.surface,envelope.data,ticket.call));
     return payload;
   });
 
@@ -207,7 +211,12 @@ function buildApp(deps: ApiServerDeps): FastifyInstance {
   app.get(ROUTES.projects, async (request, reply) => {
     const call = await authenticate(request, { allowTenantLevel: true });
     requirePermission(call, 'read');
-    return ok(reply, await service.projects.list(call));
+    const query=readObject(request.query??{},'project page');
+    const page=await service.projects.listPage(call,{limit:readIntegerField(query,'limit',16,1,16),
+      ...(readOptionalString(query,'cursor')?{cursor:readOptionalString(query,'cursor')} : {}),
+      ...(readOptionalString(query,'projectId')?{projectId:readOptionalString(query,'projectId')} : {})});
+    if(page.nextCursor)reply.header('X-Threadline-Next-Cursor',page.nextCursor);
+    return ok(reply,page.entries);
   });
 
   app.post(ROUTES.projects, async (request, reply) => {
@@ -220,7 +229,11 @@ function buildApp(deps: ApiServerDeps): FastifyInstance {
     const projectId = request.params.projectId;
     const call = await authenticate(request, { projectId });
     requirePermission(call, 'project.admin');
-    return ok(reply, await service.projects.listGrants(call, projectId));
+    const query=readObject(request.query??{},'grant page');
+    const page=await service.projects.grantsPage(call,projectId,{limit:readIntegerField(query,'limit',100,1,100),
+      ...(readOptionalString(query,'cursor')?{cursor:readOptionalString(query,'cursor')}: {})});
+    if(page.nextCursor)reply.header('X-Threadline-Next-Cursor',page.nextCursor);
+    return ok(reply,page.entries);
   });
 
   app.post<{ Params: { projectId: string } }>(ROUTES.readerCredentials(':projectId'), async (request, reply) => {
@@ -283,7 +296,10 @@ function buildApp(deps: ApiServerDeps): FastifyInstance {
   app.post(ROUTES.nativeSessions, async (request, reply) => {
     reply.header('Cache-Control', 'no-store');
     const call = await authenticate(request);
-    return ok(reply, await service.nativeAccess.register(call, request.body));
+    const result = await service.nativeAccess.register(call, request.body);
+    const refreshed = await service.auth.authenticate(authorizationOf(request));
+    tickets.set(request,await service.release.begin(refreshed,`${request.method} ${request.routeOptions.url}`,[],false));
+    return ok(reply,result);
   });
   app.get<{ Params: { projectId: string } }>(ROUTES.projectSessions(':projectId'), async (request, reply) => {
     reply.header('Cache-Control', 'no-store');
@@ -356,6 +372,7 @@ function buildApp(deps: ApiServerDeps): FastifyInstance {
       await service.memories.query(call, {
         projectId,
         limit,
+        ...(readOptionalString(query,'cursor') ? {cursor:readOptionalString(query,'cursor')} : {}),
         ...(taskId === undefined ? {} : { taskId }),
         ...(kind === undefined ? {} : { kind }),
         ...(focus === undefined ? {} : { focus }),
@@ -480,9 +497,31 @@ interface SafeError {
   readonly payload: ReturnType<typeof errorPayload>;
 }
 
+const SAFE_INPUT_FIELDS = new Set([
+  'projectId', 'taskId', 'memoryId', 'versionId', 'sourceId', 'operationId',
+  'content', 'records', 'applicability', 'observedUnder', 'reason', 'title', 'family',
+  'limit', 'cursor', 'discoveryCursor', 'offset', 'maxBytes', 'focus', 'kind', 'kinds',
+  'idempotencyKey', 'expectedCurrentVersionId', 'expectedTaskRevision', 'sourceIds',
+  'nativeSessionId', 'joinProjectId', 'root', 'label',
+]);
+
 /** Reduces any thrown value to the shared payload; driver messages never escape. */
 function toSafeError(error: unknown): SafeError {
   if (error instanceof ThreadlineError) {
+    if (error.code === 'invalid_request') {
+      const details = error.details;
+      const candidate = typeof details?.field === 'string' ? details.field
+        : typeof details?.path === 'string' ? details.path.split('.')[0] : undefined;
+      // Only request field names qualify for detailed validation diagnostics.
+      // Stored sizes, resource identities and arbitrary details never escape.
+      const field = candidate && SAFE_INPUT_FIELDS.has(candidate) ? candidate : undefined;
+      return { code: error.code, payload: field
+        ? errorPayload(error.code, error.message, { field }) : errorPayload(error.code) };
+    }
+    if (error.code === 'unsupported' && typeof error.details?.operation === 'string'
+      && ['claim.status', 'job.import'].includes(error.details.operation)) {
+      return { code: error.code, payload: errorPayload(error.code, error.message, { operation: error.details.operation }) };
+    }
     return { code: error.code, payload: errorPayload(error.code) };
   }
   if (isFastifyBodyError(error)) {
@@ -573,4 +612,53 @@ function readStringList(value: Record<string, unknown>, field: string): string[]
     return raw as string[];
   }
   throw new ThreadlineError('invalid_request', `The "${field}" filter must be a list of names.`, { field });
+}
+
+const id = ':projectId';
+const metadataSurfaces = [
+  `GET ${ROUTES.status}`,`GET ${ROUTES.capabilities}`,`GET ${ROUTES.projects}`,`POST ${ROUTES.projects}`,
+  `GET ${ROUTES.projectGrants(id)}`,
+  ...['GET','POST'].flatMap(method=>[`${method} ${ROUTES.readerCredentials(id)}`,`${method} ${ROUTES.enrollments(id)}`]),
+  `POST ${ROUTES.readerCredentialRevocation(id,':credentialId')}`,`GET ${ROUTES.enrollment(id,':enrollmentId')}`,
+  `POST ${ROUTES.enrollmentRevocation(id,':enrollmentId')}`,`POST ${ROUTES.nativeSessions}`,`GET ${ROUTES.projectSessions(id)}`,
+];
+const admissionKinds = new Map([
+  [`POST ${ROUTES.appendSources}`,'source.append'],[`POST ${ROUTES.memoryProposals}`,'memory.propose'],
+  [`POST ${ROUTES.memoryEpisodes}`,'memory.episode.record'],[`POST ${ROUTES.memoryAccept(':memoryId')}`,'memory.accept'],
+  [`POST ${ROUTES.memoryCorrections(':memoryId')}`,'memory.correct'],[`POST ${ROUTES.tasks}`,'task.create'],
+  [`POST ${ROUTES.taskRequirements(':taskId')}`,'task.require'],
+]);
+const graphSurfaces = new Set([
+  `GET ${ROUTES.memories}`,`GET ${ROUTES.memory(':memoryId')}`,`GET ${ROUTES.task(':taskId')}`,
+  `GET ${ROUTES.taskRequirements(':taskId')}`,`POST ${ROUTES.context}`,`POST ${ROUTES.contextOccurrences}`,
+]);
+const knownSurfaces = new Set([...metadataSurfaces,...admissionKinds.keys(),...graphSurfaces,
+  `GET ${ROUTES.history}`,`GET ${ROUTES.source(':sourceId')}`,`GET ${ROUTES.sourceRange(':sourceId')}`,`GET ${ROUTES.operation(':operationId')}`]);
+function releaseSelection(surface:string,data:unknown,call:AuthenticatedCall):ReleaseSelection {
+  const resources: ReleaseResource[]=[];
+  const add=(kind:ReleaseResource['kind'],id:string,projectId=call.scope.projectId):void=>{
+    if(projectId===null)throw new ThreadlineError('scope_denied','Project release scope is required.');
+    resources.push({kind,id,projectId});
+  };
+  const admissionKind=admissionKinds.get(surface);
+  if(admissionKind) {
+    if(admissionKind==='source.append') {
+      const result=parseContract(sourceAppendResultSchema,data,'source acknowledgement');
+      return {resources,admission:{kind:admissionKind,sourceIds:result.outcomes.flatMap(o=>o.status==='rejected'?[]:[o.sourceId])}};
+    }
+    const result=admissionKind.startsWith('task.')?parseContract(taskOperationResultSchema,data,'task acknowledgement'):parseContract(memoryOperationResultSchema,data,'memory acknowledgement');
+    return {resources,admission:{kind:admissionKind,operationIds:[result.operationId]}};
+  }
+  if(surface===`GET ${ROUTES.projects}`)for(const row of data as unknown[]) {const project=parseContract(projectViewSchema,row,'project');add('project',project.projectId,project.projectId);}
+  else if(surface===`POST ${ROUTES.projects}`){const project=parseContract(projectJoinResultSchema,data,'project association').project;add('project',project.projectId,project.projectId);}
+  else if(surface===`GET ${ROUTES.history}`)for(const source of parseContract(sourceHistoryPageSchema,data,'history').entries)add('source',source.sourceId);
+  else if(surface===`GET ${ROUTES.source(':sourceId')}`)add('source',parseContract(sourceViewSchema,data,'source').sourceId);
+  else if(surface===`GET ${ROUTES.memories}`)for(const memory of parseContract(memoryQueryResultSchema,data,'memory page').memories)add('memory',memory.memoryId);
+  else if(surface===`GET ${ROUTES.memory(':memoryId')}`)add('memory',parseContract(memoryViewSchema,data,'memory').memoryId);
+  else if(surface===`GET ${ROUTES.task(':taskId')}`)add('task',parseContract(taskViewSchema,data,'task').taskId);
+  else if(surface===`GET ${ROUTES.taskRequirements(':taskId')}`)add('task',parseContract(taskRequirementsViewSchema,data,'requirements').taskId);
+  else if(surface===`GET ${ROUTES.operation(':operationId')}`)add('operation',parseContract(operationViewSchema,data,'operation').operationId);
+  else if(surface===`POST ${ROUTES.context}`){const result=parseContract(contextResultSchema,data,'context');if(result.kind==='packet')add('occurrence',result.packet.occurrenceId);}
+  else if(surface===`POST ${ROUTES.contextOccurrences}`)add('occurrence',parseContract(contextOccurrenceSchema,data,'occurrence').occurrenceId);
+  return {resources};
 }

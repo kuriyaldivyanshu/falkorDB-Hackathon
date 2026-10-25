@@ -11,6 +11,7 @@ import {
   unlinkSync,
   writeSync,
 } from 'node:fs';
+import { open as openAsync } from 'node:fs/promises';
 import { dirname, resolve, sep } from 'node:path';
 
 import { ThreadlineError } from '@threadline/shared';
@@ -164,7 +165,7 @@ export function createSourceFileStore(deps: SourceFileStoreDeps): SourceFileStor
     },
 
     async read(input: ReadSourceBytesInput): Promise<Buffer> {
-      const bytes = readVerified(absolutePathFor(input.storageKey), input.digest, input.byteSize);
+      const bytes = await readVerifiedAsync(absolutePathFor(input.storageKey), input.digest, input.byteSize);
       if (bytes === null || bytes.byteLength > input.maxBytes) {
         throw new ThreadlineError('source_unavailable', 'The stored source bytes are unavailable or mismatched.', {
           reason: bytes === null ? 'source_bytes_mismatch' : 'source_bytes_oversized',
@@ -190,7 +191,7 @@ export function createSourceFileStore(deps: SourceFileStoreDeps): SourceFileStor
       }
       // The very buffer that was verified is sliced: a second read could observe
       // a replacement between verification and delivery.
-      const bytes = readVerified(absolutePathFor(input.storageKey), input.digest, input.byteSize);
+      const bytes = await readVerifiedAsync(absolutePathFor(input.storageKey), input.digest, input.byteSize);
       if (bytes === null || bytes.byteLength > input.maxBytes) {
         throw new ThreadlineError('source_unavailable', 'The stored source bytes are unavailable or mismatched.', {
           reason: 'source_bytes_mismatch',
@@ -300,5 +301,21 @@ function fileExists(path: string): boolean {
     // A symlink or a permission problem is treated as "something is there";
     // publish must not overwrite an object it cannot verify.
     return true;
+  }
+}
+
+/** Async per-request verification; no cross-request cache can outlive denial. */
+async function readVerifiedAsync(path: string, digest: string, expectedSize: number): Promise<Buffer | null> {
+  try {
+    const file = await openAsync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+    try {
+      const stat = await file.stat();
+      if (!stat.isFile() || stat.size !== expectedSize) return null;
+      const bytes = await file.readFile();
+      return bytes.length === stat.size && createHash('sha256').update(bytes).digest('hex') === digest ? bytes : null;
+    } finally { await file.close(); }
+  } catch(error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw new ThreadlineError('storage_unavailable','Could not verify source bytes.');
   }
 }

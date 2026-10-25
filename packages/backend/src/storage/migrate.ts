@@ -57,6 +57,11 @@ export async function ensureMemorySchema(deps: EnsureSchemaDeps): Promise<Schema
     );
   }
 
+  const migrationRoles = await deps.migrationDb.query<{rolsuper:boolean;rolbypassrls:boolean}>(
+    'SELECT rolsuper,rolbypassrls FROM pg_roles WHERE rolname=current_user');
+  if (!migrationRoles[0] || (!migrationRoles[0].rolsuper && !migrationRoles[0].rolbypassrls)) {
+    throw new ThreadlineError('storage_unavailable','The migration role must be a superuser or have BYPASSRLS before cross-tenant reconciliation.');
+  }
   await ensureApplicationRole(deps.migrationDb, deps.postgres, applicationRole, logger);
 
   await deps.migrationDb.withConnection(async (connection) => {

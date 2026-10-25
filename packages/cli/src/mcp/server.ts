@@ -111,7 +111,7 @@ class RequestGate {
  * call with an authorization failure.
  */
 export async function verifyProjectBinding(client: ApiClient, projectId: string): Promise<ProjectView> {
-  const payload = await client.get(ROUTES.projects);
+  const payload = await client.get(ROUTES.projects,{projectId});
   const projects = Array.isArray(payload) ? (payload as ProjectView[]) : [];
   const found = projects.find((project) => project.projectId === projectId);
   if (found === undefined) {
@@ -137,6 +137,7 @@ const memoryQueryInput = z.strictObject({
     .optional()
     .describe('Bounded free-text focus over task title and memory statement. Never a query language.'),
   limit: z.number().int().min(1).max(50).optional().describe('Maximum memories to return (1-50).'),
+  cursor: z.string().max(2048).optional().describe('Opaque continuation from a previous memory page.'),
 });
 
 const memoryInspectInput = z.strictObject({

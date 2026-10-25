@@ -5,6 +5,7 @@ import type { Graph } from 'falkordb';
 
 import {
   OBSERVED_EVIDENCE_SOURCE_KINDS,
+  SANITIZER_VERSION_V3,
   ThreadlineError,
   memoryContentFits,
   memoryDocumentSchema,
@@ -34,6 +35,8 @@ import {
   countMemoryVersions,
   countSourceAnchors,
   ensureProjectRoot,
+  fenceProjectWrites,
+  fenceLegacyProjectWrites,
   eventIdPrefixFor,
   projectRootIdFor,
   readMemoryState,
@@ -54,6 +57,8 @@ import {
   graphTransactionDatabase,
   markGraphSubmissionUncertain,
   readGraphSubmissions,
+  reserveRecoveryPrivacyRevision,
+  settleRecoveryPrivacyRevision,
   type GraphSubmission,
 } from './graphSubmission.js';
 import { requirePermission } from './permissions.js';
@@ -88,7 +93,8 @@ import {
  *    next claim to reconcile.
  *
  * A failed graph write retains its durable marker, including after lease expiry.
- * Recovery requires an exact receipt; an absent receipt never permits resubmission.
+ * Recovery requires an exact receipt or acknowledged graph-generation fencing
+ * followed by receipt reconciliation; receipt absence alone never permits resubmission.
  * Read-only failures can retry after confirmed graph responses. Deterministic
  * guard refusals settle as `rejected` with an explicit code; nothing here waits
  * for FalcorDB to merely answer a ping before settling.
@@ -174,6 +180,10 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
     row: ClaimedOperationRow,
     work: (tx: TxClient) => Promise<{ id: string }[]>,
   ): Promise<{ id: string }[]> => workerDb().withTenantTransaction(row.tenant_id, async (tx) => {
+    const beforeSettlement = execution.getStore();
+    if (beforeSettlement?.submission && !beforeSettlement.uncertain) {
+      await settleRecoveryPrivacyRevision(tx, beforeSettlement.submission);
+    }
     const updated = await work(tx);
     if (updated.length !== 1) {
       const current = execution.getStore();
@@ -376,18 +386,76 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
             const markers = await readGraphSubmissions(db, row.tenant_id, row.project_id, row.id);
             const own = markers.find((entry) => entry.operationId === row.id);
             if (own) {
-              // Recovery is read-only until an exact receipt proves this submission completed.
+              const current = execution.getStore()!;
+              current.submission = own;
+              current.uncertain = true;
               const graph = deps.graphStore.graph(await resolveGraphKey(row));
               const receipt = await readOperationReceipt(graph, receiptIdFor(own.graphEpoch, row.id));
               if (own.graphEpoch !== row.graph_epoch || own.requestDigest !== row.request_digest ||
-                  !exactReceipt(row, receipt)) {
+                  (receipt !== null && !exactReceipt(row, receipt))) {
                 await retry(row, operation.leaseToken, 'graph_submission_unresolved', 'ambiguous',
-                  'An earlier graph submission remains unresolved; no graph request was repeated.');
+                  'The durable operation and graph receipt do not match; submission remains blocked.');
                 return;
               }
-              execution.getStore()!.submission = own;
-              await settleCommitted(row, operation.leaseToken, receipt.eventSeq,
-                receipt.outcome, receipt.committedAtMs);
+              if (exactReceipt(row, receipt) && own.recoveryPrivacyRevision === null) {
+                current.uncertain = false;
+                await settleCommitted(row, operation.leaseToken, receipt.eventSeq,
+                  receipt.outcome, receipt.committedAtMs);
+                return;
+              }
+              // Keep the old marker durable while the fence may be executing.
+              // Fencing carries no content and requires no revoked actor authority.
+              await db.query('SELECT 1');
+              const projects = await db.withTenantTransaction(row.tenant_id, (tx) => tx.rows<ProjectFactRow>(
+                `SELECT state, graph_key, graph_epoch, privacy_revision::text AS privacy_revision
+                   FROM threadline_memory.projects WHERE tenant_id = $1 AND id = $2`,
+                [row.tenant_id, row.project_id]));
+              const project = projects[0];
+              if (!project || project.graph_epoch !== own.graphEpoch) {
+                throw new ThreadlineError('authority_unavailable', 'Graph fence project identity is unavailable.');
+              }
+              let fenced: ProjectRootView;
+              if (own.writeGeneration === null) {
+                const target = own.recoveryPrivacyRevision ?? (BigInt(project.privacy_revision) + 1n).toString();
+                if (BigInt(target) > 9223372036854775807n) {
+                  throw new ThreadlineError('authority_unavailable', 'The legacy graph fence counter is exhausted.');
+                }
+                current.submission = await reserveRecoveryPrivacyRevision(db, own, target);
+                fenced = await fenceLegacyProjectWrites(graph, {
+                  projectRootId: projectRootIdFor(row.project_id), tenantId: row.tenant_id,
+                  projectId: row.project_id, graphEpoch: own.graphEpoch, writeGeneration: '0',
+                  expectedPrivacyRevision: (BigInt(target) - 1n).toString(), privacyRevision: target,
+                  graphSchemaVersion: MEMORY_GRAPH_SCHEMA_VERSION, nowMs: clock().getTime(),
+                });
+                if (fenced.graphEpoch !== own.graphEpoch || fenced.privacyRevision !== target) {
+                  throw new ThreadlineError('authority_unavailable', 'Legacy graph fencing was not established.');
+                }
+              } else {
+                fenced = await fenceProjectWrites(graph, {
+                  projectRootId: projectRootIdFor(row.project_id), tenantId: row.tenant_id,
+                  projectId: row.project_id, graphEpoch: own.graphEpoch,
+                  writeGeneration: own.writeGeneration, privacyRevision: project.privacy_revision,
+                  graphSchemaVersion: MEMORY_GRAPH_SCHEMA_VERSION, nowMs: clock().getTime(),
+                });
+                if (fenced.graphEpoch !== own.graphEpoch || fenced.writeGeneration === null ||
+                    BigInt(fenced.writeGeneration) <= BigInt(own.writeGeneration)) {
+                  throw new ThreadlineError('authority_unavailable', 'Graph fencing was not established.');
+                }
+              }
+              // An old mutation may have committed before the fence. Re-read only
+              // after its acknowledged advancement before deciding no effect.
+              const afterFence = await readOperationReceipt(graph, receiptIdFor(own.graphEpoch, row.id));
+              if (afterFence !== null && !exactReceipt(row, afterFence)) {
+                throw new ThreadlineError('authority_unavailable', 'The fenced graph receipt does not match its operation.');
+              }
+              current.uncertain = false;
+              if (exactReceipt(row, afterFence)) {
+                await settleCommitted(row, operation.leaseToken, afterFence.eventSeq,
+                  afterFence.outcome, afterFence.committedAtMs);
+              } else {
+                await retry(row, operation.leaseToken, 'graph_submission_fenced', 'pending',
+                  'Earlier graph execution was fenced; retry the same operation under current authority.');
+              }
               return;
             }
             if (markers.length > 0) {
@@ -397,9 +465,16 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
             }
             if (!(await renewLease(row, operation.leaseToken))) return;
             const current = execution.getStore()!;
+            const graph = deps.graphStore.graph(await resolveGraphKey(row));
+            const before = await readProjectRoot(graph, projectRootIdFor(row.project_id));
+            const writeGeneration = before === null ? '0' : before.writeGeneration;
+            if (writeGeneration === null) {
+              throw new ThreadlineError('authority_unavailable', 'The graph write generation is unreadable.');
+            }
             current.submission = await beginGraphSubmission(db, {
               tenantId: row.tenant_id, projectId: row.project_id, operationId: row.id,
               ownerToken: operation.leaseToken, graphEpoch: row.graph_epoch, requestDigest: row.request_digest,
+              writeGeneration, recoveryPrivacyRevision: null,
             });
             await db.withTenantTransaction(row.tenant_id, async (tx) => {
               const authorityDb = graphTransactionDatabase(db, tx, row.tenant_id);
@@ -510,6 +585,7 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
         tenantId: row.tenant_id,
         projectId: row.project_id,
         graphEpoch: project.graph_epoch,
+        writeGeneration: current.submission!.writeGeneration!,
         privacyRevision: project.privacy_revision,
         nowMs,
         graphSchemaVersion: MEMORY_GRAPH_SCHEMA_VERSION,
@@ -585,6 +661,7 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
     const context: CommitTimeContext = {
       projectRootId,
       graphEpoch,
+      writeGeneration: current.submission!.writeGeneration!,
       privacyRevision,
       receiptId,
       eventIdPrefix: eventIdPrefixFor(graphEpoch),
@@ -1317,6 +1394,7 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
             projectRootId: context.projectRootId,
             graphEpoch: context.graphEpoch,
             privacyRevision: context.privacyRevision,
+            writeGeneration: context.writeGeneration,
             receiptId: context.receiptId,
             eventIdPrefix: context.eventIdPrefix,
             operationId: context.operationId,
@@ -1376,6 +1454,7 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
             projectRootId: context.projectRootId,
             graphEpoch: context.graphEpoch,
             privacyRevision: context.privacyRevision,
+            writeGeneration: context.writeGeneration,
             receiptId: context.receiptId,
             eventIdPrefix: context.eventIdPrefix,
             operationId: context.operationId,
@@ -1509,6 +1588,7 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
             projectRootId: context.projectRootId,
             graphEpoch: context.graphEpoch,
             privacyRevision: context.privacyRevision,
+            writeGeneration: context.writeGeneration,
             receiptId: context.receiptId,
             eventIdPrefix: context.eventIdPrefix,
             operationId: context.operationId,
@@ -1690,6 +1770,7 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
             projectRootId: context.projectRootId,
             graphEpoch: context.graphEpoch,
             privacyRevision: context.privacyRevision,
+            writeGeneration: context.writeGeneration,
             receiptId: context.receiptId,
             eventIdPrefix: context.eventIdPrefix,
             operationId: context.operationId,
@@ -1840,6 +1921,7 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
             projectRootId: context.projectRootId,
             graphEpoch: context.graphEpoch,
             privacyRevision: context.privacyRevision,
+            writeGeneration: context.writeGeneration,
             receiptId: context.receiptId,
             eventIdPrefix: context.eventIdPrefix,
             operationId: context.operationId,
@@ -2011,6 +2093,7 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
             projectRootId: context.projectRootId,
             graphEpoch: context.graphEpoch,
             privacyRevision: context.privacyRevision,
+            writeGeneration: context.writeGeneration,
             receiptId: context.receiptId,
             eventIdPrefix: context.eventIdPrefix,
             operationId: context.operationId,
@@ -2156,6 +2239,7 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
             projectRootId: context.projectRootId,
             graphEpoch: context.graphEpoch,
             privacyRevision: context.privacyRevision,
+            writeGeneration: context.writeGeneration,
             receiptId: context.receiptId,
             eventIdPrefix: context.eventIdPrefix,
             operationId: context.operationId,
@@ -2236,6 +2320,35 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
     return updated.length > 0;
   };
 
+  /** Only server-attested safe creations become releasable; acceptance never
+   * upgrades the provenance of an old memory identity or version. */
+  const qualifySafeCreation = async (tx: TxClient, row: ClaimedOperationRow): Promise<void> => {
+    if (!['memory.propose', 'memory.correct', 'memory.episode.record', 'task.create'].includes(row.kind)) return;
+    await tx.rows(
+      `INSERT INTO threadline_memory.release_safety
+         (tenant_id, project_id, resource_kind, resource_id, state, sanitizer_version)
+       SELECT o.tenant_id, o.project_id, resources.kind, resources.id, 'eligible', $4
+         FROM threadline_memory.operations o
+         LEFT JOIN threadline_memory.sources s
+           ON s.tenant_id = o.tenant_id AND s.project_id = o.project_id AND s.id = o.intent_source_id
+         CROSS JOIN LATERAL (
+           SELECT 'version'::text AS kind, o.intent_version_id AS id
+             WHERE o.kind IN ('memory.propose', 'memory.correct', 'memory.episode.record')
+           UNION ALL
+           SELECT 'memory'::text, o.intent_memory_id
+             WHERE o.kind IN ('memory.propose', 'memory.episode.record') AND o.payload->>'memoryMode' = 'create'
+           UNION ALL
+           SELECT 'task'::text, o.intent_task_id
+             WHERE o.kind = 'task.create'
+         ) resources
+        WHERE o.tenant_id = $1 AND o.project_id = $2 AND o.id = $3 AND o.state = 'committed'
+          AND resources.id IS NOT NULL
+          AND ((o.kind = 'task.create' AND o.payload->>'serverSafeIngress' = $4)
+            OR (o.kind <> 'task.create' AND s.release_state = 'eligible' AND s.sanitizer_version = $4))
+       ON CONFLICT (tenant_id, project_id, resource_kind, resource_id) DO NOTHING`,
+      [row.tenant_id, row.project_id, row.id, SANITIZER_VERSION_V3]);
+  };
+
   const settleCommitted = async (
     row: ClaimedOperationRow,
     leaseToken: string,
@@ -2243,8 +2356,8 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
     outcome: string,
     committedAtMs: number,
   ): Promise<void> => {
-    const updated = await settlementTransaction(row, (tx) =>
-      tx.rows<{ id: string }>(
+    const updated = await settlementTransaction(row, async (tx) => {
+      const settled = await tx.rows<{ id: string }>(
         `UPDATE threadline_memory.operations
             SET state = 'committed',
                 receipt_graph_epoch = $4,
@@ -2267,8 +2380,10 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
           new Date(committedAtMs),
           leaseToken,
         ],
-      ),
-    );
+      );
+      if (settled.length === 1) await qualifySafeCreation(tx, row);
+      return settled;
+    });
     lastSettledAtMs = clock().getTime();
     if (updated.length === 0) {
       // The graph receipt exists; the operation record will be settled by
@@ -2663,6 +2778,7 @@ type PlanOutcome = PlanOutcomeRefuse | PlanOutcomeRetry;
 interface CommitTimeContext {
   readonly projectRootId: string;
   readonly graphEpoch: string;
+  readonly writeGeneration: DecimalString;
   readonly privacyRevision: string;
   readonly receiptId: string;
   readonly eventIdPrefix: string;

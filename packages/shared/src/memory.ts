@@ -467,6 +467,7 @@ export const recordEpisodeInputSchema = z.object({
 export type RecordEpisodeInput = z.infer<typeof recordEpisodeInputSchema>;
 
 export const memoryQuerySchema = z.object({
+  cursor: z.string().min(1).max(2048).optional(),
   projectId: uuidSchema,
   taskId: uuidSchema.nullable().optional(),
   kind: z.enum(MEMORY_KINDS).optional(),
@@ -534,6 +535,7 @@ export type MemoryOperationResult = z.infer<typeof memoryOperationResultSchema>;
 
 /** A bounded page of memory views, newest identity first. */
 export const memoryQueryResultSchema = z.object({
+  nextCursor: z.string().max(2048).nullable().optional(),
   memories: z.array(memoryViewSchema).max(50),
   /** True when the bounded scan stopped before this project/task set was exhausted. */
   hasMore: z.boolean(),

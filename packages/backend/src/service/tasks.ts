@@ -26,6 +26,7 @@ import {
 import type { SqlDatabase } from '../storage/pg.js';
 import { withProjectWriteLock } from '../storage/pg.js';
 import type { AuthenticatedCall } from './auth.js';
+import { requireSafeManualText, MANUAL_SCANNER_VERSION } from './ingress.js';
 import type { ReleaseService } from './release.js';
 import { requirePermission } from './permissions.js';
 import {
@@ -136,6 +137,8 @@ export function createTaskService(deps: TaskServiceDeps): TaskService {
       const parsed = parseContract(createTaskInputSchema, input, 'task creation input');
       requireProjectScope(call, parsed.projectId);
       requireWriteRole(call);
+      requireSafeManualText(parsed.title);
+      if (parsed.taskFamily) requireSafeManualText(parsed.taskFamily);
       const taskFamily = parsed.taskFamily ?? null;
       return admitTaskIntent(call, parsed.projectId, {
         kind: 'task.create',
@@ -146,7 +149,7 @@ export function createTaskService(deps: TaskServiceDeps): TaskService {
           title: parsed.title,
           taskFamily,
         }),
-        payload: { title: parsed.title, taskFamily },
+        payload: { title: parsed.title, taskFamily,serverSafeIngress:MANUAL_SCANNER_VERSION },
         operationId: randomUUID(),
         intentTaskId: randomUUID(),
       });

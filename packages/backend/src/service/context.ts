@@ -1,3 +1,4 @@
+import { encodePageCursor, decodePageCursor } from './cursors.js';
 import { randomUUID } from 'node:crypto';
 
 import {
@@ -188,7 +189,11 @@ export function createContextService(deps: ContextServiceDeps): ContextService {
     await checkItemSources(tx, call, items);
     await checkTask(call, manifest);
     if (canonicalDigest(before) !== canonicalDigest(await rootFor(call))) throw new ContextRefusal('stale_snapshot');
-    return packet(manifest, row.manifest_source_id, row.id, items, body, clock().getTime());
+    const candidates = await withGraphRead(() => readContextCandidates(graphFor(call), projectRootIdFor(parsed.projectId), 257,
+      decodePageCursor(call, `context:${parsed.taskId ?? ''}:${parsed.focus ?? ''}`, parsed.discoveryCursor, '')));
+    const discoveryCursor = candidates.length > 256
+      ? encodePageCursor(call, `context:${parsed.taskId ?? ''}:${parsed.focus ?? ''}`, candidates[255]!) : null;
+    return packet(manifest, row.manifest_source_id, row.id, items, body, clock().getTime(), discoveryCursor);
   };
 
   return {
@@ -239,13 +244,15 @@ export function createContextService(deps: ContextServiceDeps): ContextService {
             }
             if (sourceIds(items).length > CONTEXT_MAX_SOURCE_REFS) throw new ContextRefusal('incomplete_provenance');
             if (Buffer.byteLength(render(items)) > parsed.maxBodyBytes) throw new ContextRefusal('mandatory_overflow');
-            const candidates = await withGraphRead(() => readContextCandidates(graphFor(call), projectRootIdFor(parsed.projectId), CONTEXT_CANDIDATE_LIMIT + 1));
-            if (candidates.length > CONTEXT_CANDIDATE_LIMIT) throw new ThreadlineError('overloaded', 'Select a narrower context scope.');
+            const candidates = await withGraphRead(() => readContextCandidates(graphFor(call), projectRootIdFor(parsed.projectId), 257,decodePageCursor(call,`context:${parsed.taskId??''}:${parsed.focus??''}`,parsed.discoveryCursor,'')));
+            const scan = candidates.slice(0,256);
+            const discoveryCursor = candidates.length>256 ? encodePageCursor(call,`context:${parsed.taskId??''}:${parsed.focus??''}`,scan.at(-1)!) : null;
+            const eligible = await deps.release.eligibleMany(call, scan.map(id=>[{projectId:parsed.projectId,kind:'memory' as const,id}]),tx);
             const ranked: MemoryVersion[] = [];
-            for (const id of candidates) {
+            for (const [index,id] of scan.entries()) {
               if (task?.requiredMemoryIds.includes(id)) continue;
               try {
-                if (!await deps.release.eligible(call, [{projectId: parsed.projectId,kind:'memory',id}], tx)) continue;
+                if (!eligible[index]) continue;
                 const v = await version(call, id);
                 if (v.content.kind === 'semantic' && v.content.subtype === 'requirement') continue;
                 if (!applicable(v, parsed, task)) { omit(v.content.kind, 'not_applicable'); continue; }
@@ -255,6 +262,10 @@ export function createContextService(deps: ContextServiceDeps): ContextService {
                 throw error;
               }
             }
+            // Truncation concerns eligible/applicable candidates only. Do not
+            // publish private skipped counts. A fixed count-free coverage marker
+            // describes the bounded discovery policy on every packet.
+            omissions.push({kind:'orientation',reason:'candidate_limit',count:0});
             ranked.sort((a, b) => priority(a) - priority(b) || focusScore(b, parsed.focus) - focusScore(a, parsed.focus)
               || b.createdAtMs - a.createdAtMs || a.memoryId.localeCompare(b.memoryId));
             for (const v of ranked) {
@@ -314,7 +325,7 @@ export function createContextService(deps: ContextServiceDeps): ContextService {
             await checkItemSources(tx, call, items);
             await checkTask(call, manifest);
             if (canonicalDigest(before) !== canonicalDigest(await rootFor(call))) throw new ContextRefusal('stale_snapshot');
-            const result = packet(manifest, outcome.sourceId, id, items, body, clock().getTime());
+            const result = packet(manifest, outcome.sourceId, id, items, body, clock().getTime(),discoveryCursor);
             // Last asynchronous work before commit/release, including time spent
             // reading graph state and validating the complete released packet.
             await releaseScope(tx, call);
@@ -442,9 +453,9 @@ function render(items: readonly ContextItem[]): string {
     `## ${item.priority} ${item.kind} (${item.representation}) ${item.memoryId}@${item.versionId}\n${item.text ?? ''}\nApplicability (current selection predicates; caller hints are not verified facts): ${JSON.stringify(item.applicability)}\nObserved under (historical conditions, not current applicability): ${JSON.stringify(item.observedUnder)}\nSources:\n${item.sourceRefs.map((ref) => `${ref.sourceId} ${ref.kind} sha256:${ref.digest}`).join('\n')}`,
   )].join('\n\n');
 }
-function packet(manifest: ContextManifest, sourceId: string, occurrenceId: string, items: ContextItem[], body: string, releasedAtMs: number): ContextResult {
+function packet(manifest: ContextManifest, sourceId: string, occurrenceId: string, items: ContextItem[], body: string, releasedAtMs: number, discoveryCursor: string|null = null): ContextResult {
   return parseContract(contextResultSchema, { kind: 'packet', packet: {
-    manifest, manifestSourceId: sourceId, manifestOperationId: sourceId, occurrenceId, items, body, releasedAtMs,
+    manifest, manifestSourceId: sourceId, manifestOperationId: sourceId, occurrenceId, items, body, releasedAtMs,discoveryCursor,
   } }, 'context result');
 }
 interface OccurrenceRow {

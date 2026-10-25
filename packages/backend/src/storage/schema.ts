@@ -851,6 +851,13 @@ export const MEMORY_SQL_MIGRATIONS: readonly SqlMigration[] = [
   { version: 6, name: 'project_reader_credentials', statements: MIGRATION_6_STATEMENTS },
   { version: 7, name: 'native_enrollment_access', statements: MIGRATION_7_STATEMENTS },
   { version: 8, name: 'current_release_authority', statements: MIGRATION_8_STATEMENTS },
+  { version: 9, name: 'release_recovery_and_safe_manual_admission', statements: [
+    `ALTER TABLE graph_submissions ADD COLUMN write_generation bigint CHECK (write_generation >= 0),
+       ADD COLUMN recovery_privacy_revision bigint CHECK (recovery_privacy_revision >= 0)`,
+    `ALTER TABLE sources ADD COLUMN sanitizer_version text`,
+    `ALTER TABLE release_safety ADD COLUMN sanitizer_version text`,
+    `CREATE INDEX release_permits_credential_retention ON release_permits (tenant_id,token_id,committed_at DESC,id DESC)`,
+  ] },
 ];
 
 export const LATEST_SQL_SCHEMA_VERSION = MEMORY_SQL_MIGRATIONS.reduce(

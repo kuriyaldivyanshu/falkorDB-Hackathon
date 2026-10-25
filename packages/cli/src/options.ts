@@ -279,9 +279,9 @@ Memory:
   memory:inspect --project <id> <memoryId>
                        Read one memory: its current version plus remaining candidates.
   memory:query --project <id> [--task <id>] [--kind <kind>] [--focus <text>]
-               [--limit <n>]
-                       Bounded current-memory read. hasMore is reported when the
-                       bounded scan stopped early.
+               [--limit <n>] [--cursor <c>]
+                       Bounded current-memory read. Reuse the returned opaque cursor
+                       with the same selectors to continue the scan.
 
 Context-only Codex hooks (explicit configuration, no capture):
   codex-hook SessionStart|UserPromptSubmit --home <absolute-dir> --project <uuid>
