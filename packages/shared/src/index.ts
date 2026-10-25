@@ -512,6 +512,7 @@ export {
   sanitizationPolicyV3Schema,
   sanitizationInputV3Schema,
   sanitizeContentV3,
+  isSensitiveContentKeyV3,
   type SanitizationFieldV3,
   type SanitizationPolicyV3,
   type SanitizationInputV3,

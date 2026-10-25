@@ -1,3 +1,5 @@
+import { hasOperationAdmission } from '../admission.js';
+export { hasOperationAdmission } from '../admission.js';
 import { randomUUID } from 'node:crypto';
 
 import { ThreadlineError } from '@threadline/shared';
@@ -197,6 +199,7 @@ export function createReleaseService(deps: { db: SqlDatabase; graphStore?: Graph
           facts.push({ resource, row, links });
           for (const link of links) add('source', link.parent_source_id);
         } else if (resource.kind === 'operation') {
+          if (!await hasOperationAdmission(tx, call.scope.tenantId, resource.projectId, resource.id)) deny();
           const rows = await tx.rows<{ intent_source_id: string | null; intent_memory_id: string | null;
             intent_version_id: string | null; intent_task_id: string | null; state: string;
             kind: string; memory_mode: string | null; expected_head_token: string | null }>(
@@ -352,14 +355,15 @@ export function createReleaseService(deps: { db: SqlDatabase; graphStore?: Graph
           await lockProjectBarriers(tx,call.scope.tenantId,[call.scope.projectId], 'shared');
           compareAuthority(call,await lockReleaseAuthority(tx,identityOf(call)));
           for (const id of selection.admission!.sourceIds ?? []) {
-            const rows = await tx.rows(`SELECT s.id FROM threadline_memory.sources s
+            const rows = await tx.rows<{ id: string; operation_id: string }>(`SELECT s.id,o.id AS operation_id FROM threadline_memory.sources s
               JOIN threadline_memory.operations o ON o.tenant_id=s.tenant_id AND o.project_id=s.project_id AND o.intent_source_id=s.id AND o.kind='source.append'
               WHERE s.tenant_id=$1 AND s.project_id=$2 AND s.id=$3 AND o.actor_token_id=$4 AND o.actor_principal_id=$5`,
               [call.scope.tenantId,call.scope.projectId,id,call.tokenId,call.scope.principalId]);
-            if (rows.length !== 1) deny();
+            if (rows.length !== 1 || !await hasOperationAdmission(tx, call.scope.tenantId, call.scope.projectId, rows[0]!.operation_id)) deny();
             if ((await tx.rows(`SELECT resource_id FROM threadline_memory.release_denials WHERE tenant_id=$1 AND project_id=$2 AND resource_kind='source' AND resource_id=$3`,[call.scope.tenantId,call.scope.projectId,id])).length) deny();
           }
           for (const id of selection.admission!.operationIds ?? []) {
+            if (!await hasOperationAdmission(tx, call.scope.tenantId, call.scope.projectId, id)) deny();
             const rows=await tx.rows<{intent_source_id:string|null;intent_memory_id:string|null;intent_version_id:string|null;intent_task_id:string|null}>(
               `SELECT intent_source_id,intent_memory_id,intent_version_id,intent_task_id FROM threadline_memory.operations
                WHERE tenant_id=$1 AND project_id=$2 AND id=$3 AND actor_token_id=$4 AND actor_principal_id=$5 AND kind=$6`,

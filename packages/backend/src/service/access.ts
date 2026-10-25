@@ -11,6 +11,7 @@ import { canonicalDigest, sha256Hex } from '../storage/digest.js';
 import type { SqlDatabase, TxClient } from '../storage/pg.js';
 import { generateClientToken, hashClientToken, type AuthenticatedCall } from './auth.js';
 import { requirePermission } from './permissions.js';
+import type { AdmissionService } from './admission.js';
 import { requireProjectScope } from './semanticSupport.js';
 
 export interface AccessService {
@@ -63,7 +64,7 @@ export async function authorizeProjectOwner(tx: TxClient, call: AuthenticatedCal
   if (rows.length !== 1) throw new ThreadlineError('scope_denied', 'Current human project owner authority is required.');
 }
 
-export function createAccessService(deps: { db: SqlDatabase }): AccessService {
+export function createAccessService(deps: { db: SqlDatabase; admission: AdmissionService }): AccessService {
   const read = async (tx: TxClient, tenantId: string, projectId: string, id: string) => {
     const rows = await tx.rows<CredentialRow>(`${SELECT_METADATA}
       WHERE r.tenant_id=$1 AND r.project_id=$2 AND r.credential_id=$3`, [tenantId, projectId, id]);
@@ -74,10 +75,13 @@ export function createAccessService(deps: { db: SqlDatabase }): AccessService {
     async issue(call, projectId, input) {
       parseContract(uuidSchema, projectId, 'project identity');
       requirePermission(call, 'access.admin');
+      requireProjectScope(call, projectId);
       const parsed = parseContract(issueReaderCredentialInputSchema, input, 'reader credential issuance');
+      const ticket = await deps.admission.check(call, 'reader.issue', parsed);
       const keyDigest = sha256Hex(parsed.idempotencyKey);
       const digest = canonicalDigest({ label: parsed.label, lifetimeSeconds: parsed.lifetimeSeconds });
       return withProjectWriteLock(deps.db, call.scope.tenantId, projectId, async (tx) => {
+        await deps.admission.revalidate(ticket, tx);
         await tx.rows('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',
           [`reader-issuance:${call.scope.tenantId}:${projectId}:${call.scope.principalId}:${keyDigest}`]);
         await authorizeProjectOwner(tx, call, projectId);

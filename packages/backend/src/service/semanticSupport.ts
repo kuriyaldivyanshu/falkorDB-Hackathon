@@ -228,7 +228,7 @@ export function episodeDocumentRequestFacts(projectId: string, document: MemoryD
  * context. The semantic statement itself is already bounded much tighter; this
  * is the whole-document ceiling the byte store and the worker share.
  */
-export const MEMORY_DOCUMENT_MAX_BYTES = 128 * 1024;
+export { MEMORY_DOCUMENT_MAX_BYTES } from '../admission.js';
 
 /**
  * Renders one stored version row as the wire contract, refusing broken JSON.

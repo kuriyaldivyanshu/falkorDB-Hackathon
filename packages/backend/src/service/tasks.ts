@@ -1,3 +1,4 @@
+import { type AdmissionService, type AdmissionTicket } from './admission.js';
 import { randomUUID } from 'node:crypto';
 
 import {
@@ -26,7 +27,7 @@ import {
 import type { SqlDatabase } from '../storage/pg.js';
 import { withProjectWriteLock } from '../storage/pg.js';
 import type { AuthenticatedCall } from './auth.js';
-import { requireSafeManualText, MANUAL_SCANNER_VERSION } from './ingress.js';
+import { assertSafeText, ADMISSION_SCANNER_VERSION } from './admission.js';
 import type { ReleaseService } from './release.js';
 import { requirePermission } from './permissions.js';
 import {
@@ -64,6 +65,7 @@ export interface TaskService {
 
 export interface TaskServiceDeps {
   readonly db: SqlDatabase;
+  readonly admission: AdmissionService;
   readonly graphStore: GraphStore;
   readonly release: ReleaseService;
   readonly clock?: () => Date;
@@ -85,6 +87,7 @@ export function createTaskService(deps: TaskServiceDeps): TaskService {
   const admitTaskIntent = async (
     call: AuthenticatedCall,
     projectId: string,
+    ticket: AdmissionTicket,
     intent: {
       readonly kind: 'task.create' | 'task.require';
       readonly idempotencyKey: string;
@@ -98,6 +101,7 @@ export function createTaskService(deps: TaskServiceDeps): TaskService {
   ): Promise<TaskOperationResult> => {
     const operationKey = intentKeyFor(intent.kind, intent.idempotencyKey);
     const record = await withProjectWriteLock(deps.db, call.scope.tenantId, projectId, async (tx) => {
+      await deps.admission.revalidate(ticket, tx);
       const existing = await findIntentByKey(tx, call.scope.tenantId, projectId, operationKey);
       if (existing !== null) {
         return classifyDedupe(existing, call.scope.principalId, intent.requestDigest);
@@ -137,10 +141,11 @@ export function createTaskService(deps: TaskServiceDeps): TaskService {
       const parsed = parseContract(createTaskInputSchema, input, 'task creation input');
       requireProjectScope(call, parsed.projectId);
       requireWriteRole(call);
-      requireSafeManualText(parsed.title);
-      if (parsed.taskFamily) requireSafeManualText(parsed.taskFamily);
+      const ticket = await deps.admission.check(call, 'task.create', parsed);
+      assertSafeText(parsed.title);
+      if (parsed.taskFamily) assertSafeText(parsed.taskFamily);
       const taskFamily = parsed.taskFamily ?? null;
-      return admitTaskIntent(call, parsed.projectId, {
+      return admitTaskIntent(call, parsed.projectId, ticket, {
         kind: 'task.create',
         idempotencyKey: parsed.idempotencyKey,
         requestDigest: canonicalDigest({
@@ -149,7 +154,7 @@ export function createTaskService(deps: TaskServiceDeps): TaskService {
           title: parsed.title,
           taskFamily,
         }),
-        payload: { title: parsed.title, taskFamily,serverSafeIngress:MANUAL_SCANNER_VERSION },
+        payload: { title: parsed.title, taskFamily,serverSafeIngress:ADMISSION_SCANNER_VERSION },
         operationId: randomUUID(),
         intentTaskId: randomUUID(),
       });
@@ -187,7 +192,8 @@ export function createTaskService(deps: TaskServiceDeps): TaskService {
       const parsed = parseContract(requireMemoryInputSchema, input, 'task requirement input');
       requireProjectScope(call, parsed.projectId);
       requireWriteRole(call);
-      return admitTaskIntent(call, parsed.projectId, {
+      const ticket = await deps.admission.check(call, 'task.require', parsed);
+      return admitTaskIntent(call, parsed.projectId, ticket, {
         kind: 'task.require',
         idempotencyKey: parsed.idempotencyKey,
         requestDigest: canonicalDigest({

@@ -1,3 +1,4 @@
+import { assertSafeAdmissionInput } from '@threadline/backend';
 import {
   AUTHORIZATION_HEADER,
   CLIENT_KIND_HEADER,
@@ -116,7 +117,8 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
       }
       throw new ThreadlineError('overloaded','The listing exceeds the client page budget. Select a project or resume with a cursor.');
     },
-    post(path, body) {
+    async post(path, body) {
+      assertSafeAdmissionInput(body);
       return request(path, { method: 'POST', body: JSON.stringify(body) });
     },
   };

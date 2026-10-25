@@ -1,3 +1,4 @@
+import { type AdmissionService } from './admission.js';
 import { encodePageCursor, decodePageCursor } from './cursors.js';
 import { randomUUID } from 'node:crypto';
 
@@ -33,6 +34,7 @@ export interface ContextService {
 }
 export interface ContextServiceDeps {
   readonly db: SqlDatabase;
+  readonly admission: AdmissionService;
   readonly graphStore: GraphStore;
   readonly sources: SourceService;
   readonly tasks: TaskService;
@@ -202,12 +204,14 @@ export function createContextService(deps: ContextServiceDeps): ContextService {
       const parsed = parseContract(prepareContextInputSchema, input, 'context preparation');
       requireProjectScope(call, parsed.projectId);
       validateHints(parsed);
+      const ticket = await deps.admission.check(call, 'context.prepare', parsed);
       const nonce = canonicalDigest({ principalId: call.scope.principalId, key: parsed.idempotencyKey });
       const { idempotencyKey: _key, ...request } = parsed;
       const requestDigest = canonicalDigest(request);
       for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
         try {
           return await withContextLock(deps.db, call, async (tx) => {
+            await deps.admission.revalidate(ticket, tx);
             // A bounded database lock wait; no indefinite release barrier.
             await releaseScope(tx, call);
             await requireNativeSession(tx, call, parsed.nativeSessionId ?? null);
@@ -347,10 +351,12 @@ export function createContextService(deps: ContextServiceDeps): ContextService {
       requireProjectScope(call, parsed.projectId);
       if (parsed.state === 'native_observed') throw new ThreadlineError('unsupported', 'Native context observation requires qualified evidence and is unavailable.');
       if (!['emitted', 'unknown', 'refused'].includes(parsed.state)) throw new ThreadlineError('invalid_request', 'An occurrence can only leave prepared for a reported terminal state.');
+      const ticket = await deps.admission.check(call, 'context.occurrence', parsed);
       const key = sha256Hex(parsed.idempotencyKey);
       const { idempotencyKey: _key, ...request } = parsed;
       const digest = canonicalDigest(request);
       return withContextLock(deps.db, call, async (tx) => {
+        await deps.admission.revalidate(ticket, tx);
         await releaseScope(tx, call);
         const rows = await tx.rows<OccurrenceRow>(
           `SELECT * FROM threadline_memory.context_occurrences

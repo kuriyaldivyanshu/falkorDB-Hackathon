@@ -7,6 +7,7 @@ import { ThreadlineError } from '@threadline/shared';
 import type { Logger } from '../log.js';
 import { silentLogger } from '../log.js';
 import type { SqlDatabase } from '../storage/pg.js';
+import { assertSafeText } from './admission.js';
 import {
   createAuthService,
   generateClientToken,
@@ -115,6 +116,7 @@ export async function bootstrapLocalOwner(deps: BootstrapDeps): Promise<Bootstra
     }
   }
 
+  assertSafeText(deps.ownerLabel);
   const tenantId = randomUUID();
   const principalId = randomUUID();
   const token = generateClientToken();
