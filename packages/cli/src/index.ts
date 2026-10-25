@@ -28,6 +28,7 @@ import {
 } from '@threadline/shared';
 import {
   createJsonLogger,
+  assertSafeAdmissionInput,
   createMemoryService,
   initializeInstallation,
   installationPaths,
@@ -781,6 +782,7 @@ async function showCapabilities(client: ApiClient, invocation: CliInvocation): P
 
 async function addProject(client: ApiClient, invocation: CliInvocation): Promise<number> {
   const root = resolve(invocation.root ?? '');
+  assertSafeAdmissionInput({ root, label: invocation.label, joinProjectId: invocation.joinProjectId });
   const result = (await client.post(ROUTES.projects, {
     root,
     ...(invocation.label === null ? {} : { label: invocation.label }),
@@ -836,7 +838,10 @@ async function appendSource(client: ApiClient, invocation: CliInvocation): Promi
     throw new UsageError(`--kind must be one of: ${SOURCE_KINDS.join(', ')}.`);
   }
   const filePath = resolve(invocation.file ?? '');
+  assertSafeAdmissionInput({ sourcePath: filePath, origin: invocation.origin, revision: invocation.revision,
+    deliveryId: invocation.delivery, mediaType: invocation.mediaType, visibility: invocation.visibility });
   const bytes = readFileSync(filePath);
+  assertSafeAdmissionInput({ bytesBase64: bytes.toString('base64') });
   const digest = createHash('sha256').update(bytes).digest('hex');
   const record = {
     // Content-derived by default: repeating the same file is an idempotent

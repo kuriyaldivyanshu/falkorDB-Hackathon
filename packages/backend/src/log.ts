@@ -1,3 +1,5 @@
+import { sanitizeContentV3 } from '@threadline/shared';
+
 /**
  * Minimal structured logger for the memory service.
  *
@@ -6,7 +8,7 @@
  * module never reads the environment and never accepts a secret-bearing field
  * name.
  *
- * Source text never reaches a log record. Callers log identifiers, digests,
+ * Source text never reaches a log record. Callers log identifiers,
  * counts, statuses and timings; a transcript body, tool result or rendered
  * context packet would be private content even when it is perfectly ordinary.
  */
@@ -36,7 +38,7 @@ export interface Logger {
 }
 
 /** Field names that must never appear in a record, whatever the caller passes. */
-const FORBIDDEN_FIELD_PATTERN = /(secret|token|password|authorization|api[_-]?key|credential)/i;
+const FORBIDDEN_FIELD_PATTERN = /(secret|token|password|authorization|api[_-]?key|credential|digest|errorMessage|content|payload|body)/i;
 
 /**
  * The one sanctioned exception: a boolean whose name ends in `Configured` or
@@ -46,8 +48,8 @@ const FORBIDDEN_FIELD_PATTERN = /(secret|token|password|authorization|api[_-]?ke
 const SAFE_METADATA_SUFFIX = /(?:Configured|Present)$/;
 
 export class RedactedLogFieldError extends Error {
-  constructor(field: string) {
-    super(`Refusing to log a field whose name looks sensitive: "${field}".`);
+  constructor(_field: string) {
+    super('Refusing to log a sensitive field.');
     this.name = 'RedactedLogFieldError';
   }
 }
@@ -59,6 +61,7 @@ function assertLoggable(
   fields: Readonly<Record<string, LogFieldValue>> | undefined,
   depth = 0,
 ): void {
+  assertSafeLogText(message);
   if (message.trim().length === 0) {
     throw new TypeError('Log message must not be empty.');
   }
@@ -75,6 +78,7 @@ function assertLoggable(
       throw new RedactedLogFieldError(name);
     }
     if (value === null || typeof value !== 'object') {
+      if (typeof value === 'string') assertSafeLogText(value);
       continue;
     }
     if (Array.isArray(value)) {
@@ -82,6 +86,14 @@ function assertLoggable(
     }
     assertLoggable(`${name}.`, value as { readonly [key: string]: LogFieldValue }, depth + 1);
   }
+}
+
+function assertSafeLogText(text: string): void {
+  if (!text.length) return;
+  const scanned = sanitizeContentV3({ format: 'text', text }, {
+    policyRevision: '0', maxInputBytes: 4096, maxOutputBytes: 4096,
+  });
+  if (scanned.status !== 'safe' || scanned.payload.text !== text) throw new RedactedLogFieldError('redacted');
 }
 
 export function createJsonLogger(boundFields: Readonly<Record<string, LogFieldValue>> = {}) {

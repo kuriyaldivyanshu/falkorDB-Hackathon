@@ -1,3 +1,4 @@
+import { assertSafeText } from './service/admission.js';
 import { chmodSync, closeSync, mkdirSync, openSync, readFileSync, writeSync } from 'node:fs';
 
 import { ConfigurationError, ThreadlineError, type ConfigurationIssue } from '@threadline/shared';
@@ -269,6 +270,7 @@ export async function initializeInstallation(deps: InitDeps = {}): Promise<InitR
   const paths = installationPaths(home);
 
   const loaded = loadServiceConfig(home, env);
+  assertSafeText(loaded.config.ownerLabel);
   const issues: ConfigurationIssue[] = [];
   if (!storageConfigured(loaded.config)) {
     issues.push({

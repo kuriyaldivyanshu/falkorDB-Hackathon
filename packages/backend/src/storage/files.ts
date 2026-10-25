@@ -1,3 +1,4 @@
+import { assertSafeText } from '../service/admission.js';
 import { createHash, randomUUID } from 'node:crypto';
 import {
   closeSync,
@@ -114,6 +115,10 @@ export function createSourceFileStore(deps: SourceFileStoreDeps): SourceFileStor
     },
 
     async publish(input: PublishSourceBytesInput): Promise<StoredSourceBytes> {
+      let admitted: string;
+      try { admitted = new TextDecoder('utf-8', { fatal: true }).decode(input.bytes); }
+      catch { throw new ThreadlineError('invalid_request', 'Source bytes must be supported UTF-8 content.'); }
+      assertSafeText(admitted);
       if (!/^[0-9a-f]{64}$/.test(input.digest)) {
         throw new ThreadlineError('internal_error', 'A source digest must be a SHA-256 hex value.');
       }
@@ -159,7 +164,7 @@ export function createSourceFileStore(deps: SourceFileStoreDeps): SourceFileStor
       logger.log({
         level: 'info',
         message: 'Published immutable source bytes.',
-        fields: { digest: input.digest, byteSize: input.bytes.byteLength },
+        fields: { byteSize: input.bytes.byteLength },
       });
       return { storageKey, digest: input.digest, byteSize: input.bytes.byteLength };
     },

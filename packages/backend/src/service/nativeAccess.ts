@@ -15,6 +15,7 @@ import { authorizeProjectOwner } from './access.js';
 import { generateClientToken, hashClientToken, type AuthenticatedCall } from './auth.js';
 import { requireProducerAuthority } from './nativeAuthority.js';
 import { requirePermission } from './permissions.js';
+import type { AdmissionService } from './admission.js';
 import { requireProjectScope } from './semanticSupport.js';
 
 export interface NativeAccessService {
@@ -77,7 +78,7 @@ function checkLimit(limit: number): void {
     throw new ThreadlineError('invalid_request', 'Native metadata limit must be 1 through 100.');
   }
 }
-export function createNativeAccessService(deps: { db: SqlDatabase }): NativeAccessService {
+export function createNativeAccessService(deps: { db: SqlDatabase; admission: AdmissionService }): NativeAccessService {
   const read = async (tx: TxClient, call: AuthenticatedCall, projectId: string, id: string) => {
     const rows = await tx.rows<EnrollmentRow>(`${ENROLLMENT_SELECT}
       WHERE e.tenant_id=$1 AND e.project_id=$2 AND e.id=$3`, [call.scope.tenantId, projectId, id]);
@@ -88,10 +89,13 @@ export function createNativeAccessService(deps: { db: SqlDatabase }): NativeAcce
     async issue(call, projectId, input) {
       parseContract(uuidSchema, projectId, 'project identity');
       requirePermission(call, 'access.admin');
+      requireProjectScope(call, projectId);
       const parsed = parseContract(issueEnrollmentInputSchema, input, 'native enrollment issuance');
+      const ticket = await deps.admission.check(call, 'native.issue', parsed);
       const key = sha256Hex(parsed.idempotencyKey);
       const digest = canonicalDigest({ bindingId: parsed.bindingId, label: parsed.label, lifetimeSeconds: parsed.lifetimeSeconds });
       return withProjectWriteLock(deps.db, call.scope.tenantId, projectId, async (tx) => {
+        await deps.admission.revalidate(ticket, tx);
         await tx.rows('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',
           [`native-issuance:${call.scope.tenantId}:${projectId}:${call.scope.principalId}:${key}`]);
         await authorizeProjectOwner(tx, call, projectId);
@@ -177,12 +181,15 @@ export function createNativeAccessService(deps: { db: SqlDatabase }): NativeAcce
       requirePermission(call, 'native.register');
       const parsed = parseContract(nativeSessionRegisterInputSchema, input, 'native session registration');
       const projectId = call.scope.projectId!;
+      requireProjectScope(call, projectId);
+      const ticket = await deps.admission.check(call, 'native.register', parsed);
       const key = sha256Hex(parsed.idempotencyKey);
       const { idempotencyKey: _key, adapterInstanceNonce, ...hints } = parsed;
       const fingerprint = canonicalDigest({ tenantId: call.scope.tenantId, projectId,
         enrollmentId: call.enrollmentId, generation: parsed.expectedBindingGeneration, nonce: adapterInstanceNonce });
       const digest = canonicalDigest({ ...hints, instanceFingerprint: fingerprint });
       return withProjectWriteLock(deps.db, call.scope.tenantId, call.scope.projectId!, async (tx) => {
+        await deps.admission.revalidate(ticket, tx);
         // Enrollment row is the serialization point for both pin and revocation.
         const rows = await tx.rows<{ native_session_id: string | null; binding_id: string; binding_generation: number }>(
           `SELECT native_session_id,binding_id,binding_generation FROM threadline_memory.native_enrollments

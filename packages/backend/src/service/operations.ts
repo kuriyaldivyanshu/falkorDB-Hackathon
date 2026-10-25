@@ -1,3 +1,4 @@
+import { assertSafeAdmissionInput, ADMISSION_POLICY_REVISION, ADMISSION_SCANNER_VERSION, type AdmissionService } from './admission.js';
 import { randomUUID } from 'node:crypto';
 import { AsyncLocalStorage } from 'node:async_hooks';
 
@@ -62,7 +63,7 @@ import {
   type GraphSubmission,
 } from './graphSubmission.js';
 import { requirePermission } from './permissions.js';
-import { lockReleaseAuthority } from './release.js';
+import { hasOperationAdmission, lockReleaseAuthority } from './release.js';
 import {
   MEMORY_DOCUMENT_MAX_BYTES,
   episodeDocumentRequestFacts,
@@ -144,6 +145,7 @@ export interface OperationWorkerStatus {
 
 export interface OperationsWorkerDeps {
   readonly db: SqlDatabase;
+  readonly admission: AdmissionService;
   readonly graphStore: GraphStore;
   readonly files: SourceFileStore;
   readonly limits: ServiceLimits;
@@ -171,6 +173,7 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
     if (!current?.submission) throw new ThreadlineError('authority_unavailable', 'Graph submission has no durable reservation.');
     await current.db.query('SELECT 1');
     await current.revalidateAuthority?.();
+    deps.admission.requireCurrentPolicy();
     current.uncertain = true;
     const result = await work();
     current.uncertain = false;
@@ -461,6 +464,29 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
             if (markers.length > 0) {
               await retry(row, operation.leaseToken, 'graph_submission_unresolved', 'pending',
                 'Another unresolved graph submission blocks project writes.');
+              return;
+            }
+            // Receipt reconciliation/fencing above always runs first. No
+            // historical unqualified intent is replayed as a fresh graph write.
+            const admissions = await db.withTenantTransaction(row.tenant_id, tx => tx.rows<{ id: string; payload: unknown }>(
+              `SELECT a.id,o.payload FROM threadline_memory.operations o
+                JOIN threadline_memory.ingress_admissions a ON a.tenant_id=o.tenant_id AND a.id=o.admission_id
+               WHERE o.tenant_id=$1 AND o.project_id=$2 AND o.id=$3 AND a.state='accepted'
+                 AND a.principal_id=o.actor_principal_id AND a.token_id=o.actor_token_id
+                 AND (a.project_id=o.project_id OR (a.project_id IS NULL AND o.kind='project.initialize'))
+                 AND a.policy_revision=$4 AND a.sanitizer_version=$5`,
+              [row.tenant_id,row.project_id,row.id,ADMISSION_POLICY_REVISION,ADMISSION_SCANNER_VERSION]));
+            if (admissions.length !== 1) {
+              await settleRefused(row, operation.leaseToken, 'admission_unqualified',
+                'Historical intent requires explicit safe migration before graph delivery.');
+              return;
+            }
+            try {
+              deps.admission.requireCurrentPolicy();
+              assertSafeAdmissionInput(admissions[0]!.payload);
+            } catch {
+              await settleRefused(row, operation.leaseToken, 'admission_refused',
+                'Current content policy does not permit this queued intent.');
               return;
             }
             if (!(await renewLease(row, operation.leaseToken))) return;
@@ -2329,6 +2355,9 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
          (tenant_id, project_id, resource_kind, resource_id, state, sanitizer_version)
        SELECT o.tenant_id, o.project_id, resources.kind, resources.id, 'eligible', $4
          FROM threadline_memory.operations o
+         JOIN threadline_memory.ingress_admissions a
+           ON a.tenant_id=o.tenant_id AND a.id=o.admission_id AND a.state='accepted'
+           AND a.sanitizer_version=$4 AND a.policy_revision=0
          LEFT JOIN threadline_memory.sources s
            ON s.tenant_id = o.tenant_id AND s.project_id = o.project_id AND s.id = o.intent_source_id
          CROSS JOIN LATERAL (
@@ -2492,7 +2521,6 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
       fields: {
         scope,
         errorName: error instanceof Error ? error.name : typeof error,
-        errorMessage: (error instanceof Error ? error.message : String(error)).slice(0, 200),
         ...fields,
       },
     });
@@ -2589,19 +2617,22 @@ export function createOperationService(deps: { readonly db: SqlDatabase }): Oper
     async inspect(call, projectId, operationId): Promise<OperationView> {
       requirePermission(call, 'read');
       if (call.scope.projectId !== projectId) throw new ThreadlineError('scope_denied', 'The credential is not scoped to that project.');
-      const rows = await deps.db.withTenantTransaction(call.scope.tenantId, (tx) =>
-        tx.rows<OperationInspectRow>(
+      const rows = await deps.db.withTenantTransaction(call.scope.tenantId, async (tx) => {
+        if (!await hasOperationAdmission(tx, call.scope.tenantId, projectId, operationId)) {
+          throw new ThreadlineError('not_found', 'The requested resource does not exist.');
+        }
+        return tx.rows<OperationInspectRow>(
           `SELECT id, project_id, kind, state, request_digest, attempts,
                   created_at, settled_at, error_code,
                   receipt_graph_epoch, receipt_event_seq, receipt_outcome, receipt_committed_at
              FROM threadline_memory.operations
             WHERE tenant_id = $1 AND project_id = $2 AND id = $3`,
           [call.scope.tenantId, projectId, operationId],
-        ),
-      );
+        );
+      });
       const row = rows[0];
       if (row === undefined) {
-        throw new ThreadlineError('not_found', 'No such operation in this project.', { operationId });
+        throw new ThreadlineError('not_found', 'The requested resource does not exist.');
       }
       const view: OperationView = {
         operationId: row.id,

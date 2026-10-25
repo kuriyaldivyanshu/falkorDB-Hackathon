@@ -21,6 +21,7 @@ import { silentLogger } from '../log.js';
 import { canonicalDigest, sha256Hex } from '../storage/digest.js';
 import type { SqlDatabase, TxClient } from '../storage/pg.js';
 import type { AuthenticatedCall } from './auth.js';
+import type { AdmissionService } from './admission.js';
 import { encodePageCursor, decodePageCursor } from './cursors.js';
 import { requirePermission } from './permissions.js';
 
@@ -43,6 +44,7 @@ export interface ProjectService {
 
 export interface ProjectServiceDeps {
   readonly db: SqlDatabase;
+  readonly admission: AdmissionService;
   readonly clock?: () => Date;
   readonly logger?: Logger;
 }
@@ -114,10 +116,13 @@ export function createProjectService(deps: ProjectServiceDeps): ProjectService {
           field: 'root',
         });
       }
+      const label = parsed.label ?? basename(canonicalRoot);
+      const ticket = await deps.admission.check(call, 'project.add', { ...parsed, canonicalRoot, label });
       const rootKind = detectRootKind(canonicalRoot);
       const rootFingerprint = sha256Hex(canonicalDigest({ canonicalRoot, rootKind }));
 
       const result = await deps.db.withTenantTransaction(call.scope.tenantId, async (tx) => {
+        await deps.admission.revalidate(ticket, tx);
         const existing = await tx.rows<{
           id: string;
           project_id: string;
@@ -162,7 +167,7 @@ export function createProjectService(deps: ProjectServiceDeps): ProjectService {
             [
               call.scope.tenantId,
               projectId,
-              parsed.label ?? basename(canonicalRoot),
+              label,
               graphKey,
               randomUUID(),
               clock(),

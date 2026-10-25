@@ -858,6 +858,25 @@ export const MEMORY_SQL_MIGRATIONS: readonly SqlMigration[] = [
     `ALTER TABLE release_safety ADD COLUMN sanitizer_version text`,
     `CREATE INDEX release_permits_credential_retention ON release_permits (tenant_id,token_id,committed_at DESC,id DESC)`,
   ] },
+  { version: 10, name: 'current_safe_admission', statements: [
+    `CREATE TABLE ingress_admissions (
+       tenant_id uuid NOT NULL, id uuid NOT NULL, principal_id uuid NOT NULL, token_id uuid NOT NULL,
+       project_id uuid, surface text NOT NULL CHECK (length(surface) <= 64),
+       policy_revision bigint NOT NULL CHECK (policy_revision >= 0), sanitizer_version text NOT NULL,
+       state text NOT NULL CHECK (state IN ('accepted','refused')), created_at timestamptz NOT NULL DEFAULT now(),
+       PRIMARY KEY (tenant_id,id)
+     )`,
+    COMMON_TENANT_TABLE_FOOTER('ingress_admissions'),
+    `ALTER TABLE sources ADD COLUMN admission_id uuid DEFAULT nullif(current_setting('threadline.admission_id',true),'')::uuid,
+       ADD FOREIGN KEY (tenant_id,admission_id) REFERENCES ingress_admissions(tenant_id,id)`,
+    `ALTER TABLE operations ADD COLUMN admission_id uuid DEFAULT nullif(current_setting('threadline.admission_id',true),'')::uuid,
+       ADD FOREIGN KEY (tenant_id,admission_id) REFERENCES ingress_admissions(tenant_id,id)`,
+    // Historical bytes/receipts remain intact; an old scanner tag does not
+    // attest that metadata and pre-hash admission used the current protocol.
+    `UPDATE sources SET release_state='quarantined' WHERE release_state='eligible'`,
+    `UPDATE release_safety SET state='quarantined' WHERE state='eligible'`,
+    `CREATE INDEX ingress_admissions_retention ON ingress_admissions(tenant_id,created_at,id)`,
+  ] },
 ];
 
 export const LATEST_SQL_SCHEMA_VERSION = MEMORY_SQL_MIGRATIONS.reduce(

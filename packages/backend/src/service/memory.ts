@@ -1,3 +1,4 @@
+import { type AdmissionService, type AdmissionTicket } from './admission.js';
 import { randomUUID } from 'node:crypto';
 
 import type { Graph } from 'falkordb';
@@ -40,7 +41,7 @@ import {
 import type { SqlDatabase } from '../storage/pg.js';
 import { withProjectWriteLock } from '../storage/pg.js';
 import type { AuthenticatedCall } from './auth.js';
-import { requireSafeManualJson, requireSafeManualText, MANUAL_SCANNER_VERSION } from './ingress.js';
+import { assertSafeJson, assertSafeText, ADMISSION_SCANNER_VERSION } from './admission.js';
 import { encodePageCursor, decodePageCursor } from './cursors.js';
 import { createReleaseService, RELEASE_LIMITS, type ReleaseService } from './release.js';
 import { requirePermission } from './permissions.js';
@@ -100,6 +101,7 @@ export interface MemoryService {
 
 export interface MemoryServiceDeps {
   readonly db: SqlDatabase;
+  readonly admission: AdmissionService;
   readonly files: SourceFileStore;
   readonly graphStore: GraphStore;
   readonly release?: ReleaseService;
@@ -192,6 +194,7 @@ export function createMemoryService(deps: MemoryServiceDeps): MemoryService {
   const admitDocumentIntent = async (
     call: AuthenticatedCall,
     projectId: string,
+    ticket: AdmissionTicket,
     intent: {
       readonly kind: 'memory.propose' | 'memory.correct' | 'memory.episode.record';
       readonly idempotencyKey: string;
@@ -200,16 +203,17 @@ export function createMemoryService(deps: MemoryServiceDeps): MemoryService {
     },
   ): Promise<MemoryOperationResult> => {
     const now = clock();
-    requireSafeManualJson(intent.document.content);
-    requireSafeManualJson(intent.document.applicability, 'applicability');
-    requireSafeManualJson(intent.document.observedUnder, 'observed_under');
-    if (intent.document.reason) requireSafeManualText(intent.document.reason);
+    assertSafeJson(intent.document.content);
+    assertSafeJson(intent.document.applicability, 'applicability');
+    assertSafeJson(intent.document.observedUnder, 'observed_under');
+    if (intent.document.reason) assertSafeText(intent.document.reason);
     const documentBytes = Buffer.from(encodeMemoryDocument(intent.document), 'utf8');
     if (documentBytes.byteLength > MEMORY_DOCUMENT_MAX_BYTES) {
       throw new ThreadlineError('invalid_request', 'The memory intent document exceeds the admitted byte bound.');
     }
     const operationKey = intentKeyFor(intent.kind, intent.idempotencyKey);
     const known = await withProjectWriteLock(deps.db, call.scope.tenantId, projectId, async (tx) => {
+      await deps.admission.revalidate(ticket, tx);
       const existing = await findIntentByKey(tx, call.scope.tenantId, projectId, operationKey);
       return existing === null ? null : classifyDedupe(existing, call.scope.principalId, intent.requestDigest);
     });
@@ -229,6 +233,7 @@ export function createMemoryService(deps: MemoryServiceDeps): MemoryService {
     const anchorKey = `source.append:${operationKey}`;
 
     const record = await withProjectWriteLock(deps.db, call.scope.tenantId, projectId, async (tx) => {
+      await deps.admission.revalidate(ticket, tx);
       const existing = await findIntentByKey(tx, call.scope.tenantId, projectId, operationKey);
       if (existing !== null) {
         return classifyDedupe(existing, call.scope.principalId, intent.requestDigest);
@@ -272,7 +277,7 @@ export function createMemoryService(deps: MemoryServiceDeps): MemoryService {
         ],
       );
       await tx.rows(`UPDATE threadline_memory.sources SET release_state='eligible',sanitizer_version=$4
-        WHERE tenant_id=$1 AND project_id=$2 AND id=$3`, [call.scope.tenantId,projectId,contentSourceId,MANUAL_SCANNER_VERSION]);
+        WHERE tenant_id=$1 AND project_id=$2 AND id=$3`, [call.scope.tenantId,projectId,contentSourceId,ADMISSION_SCANNER_VERSION]);
       for (const sourceId of intent.document.sourceIds) await tx.rows(
         `INSERT INTO threadline_memory.source_links
          (tenant_id,project_id,parent_source_id,child_source_id,relation)
@@ -350,6 +355,7 @@ export function createMemoryService(deps: MemoryServiceDeps): MemoryService {
   const admitPlainIntent = async (
     call: AuthenticatedCall,
     projectId: string,
+    ticket: AdmissionTicket,
     intent: {
       readonly kind: 'memory.accept' | 'task.create' | 'task.require';
       readonly idempotencyKey: string;
@@ -365,6 +371,7 @@ export function createMemoryService(deps: MemoryServiceDeps): MemoryService {
   ): Promise<IntentRecord> => {
     const operationKey = intentKeyFor(intent.kind, intent.idempotencyKey);
     const record = await withProjectWriteLock(deps.db, call.scope.tenantId, projectId, async (tx) => {
+      await deps.admission.revalidate(ticket, tx);
       const existing = await findIntentByKey(tx, call.scope.tenantId, projectId, operationKey);
       if (existing !== null) {
         return classifyDedupe(existing, call.scope.principalId, intent.requestDigest);
@@ -409,6 +416,7 @@ export function createMemoryService(deps: MemoryServiceDeps): MemoryService {
       const parsed = parseContract(proposeMemoryInputSchema, input, 'memory proposal input');
       requireProjectScope(call, parsed.projectId);
       requireWriteRole(call);
+      const ticket = await deps.admission.check(call, 'memory.propose', parsed);
       requireAdmissibleContent(parsed.content);
       const memoryMode = parsed.memoryId === undefined || parsed.memoryId === null ? 'create' : 'attach';
       const memoryId = parsed.memoryId ?? randomUUID();
@@ -458,7 +466,7 @@ export function createMemoryService(deps: MemoryServiceDeps): MemoryService {
         reason: null,
         requestedEvidencePrecision: null,
       });
-      return admitDocumentIntent(call, parsed.projectId, {
+      return admitDocumentIntent(call, parsed.projectId, ticket, {
         kind: 'memory.propose',
         idempotencyKey: parsed.idempotencyKey,
         requestDigest,
@@ -484,6 +492,7 @@ export function createMemoryService(deps: MemoryServiceDeps): MemoryService {
       const parsed = parseContract(recordEpisodeInputSchema, input, 'episode recording input');
       requireProjectScope(call, parsed.projectId);
       requireWriteRole(call);
+      const ticket = await deps.admission.check(call, 'memory.recordEpisode', parsed);
       const uncertainty = parsed.uncertainty ?? null;
       if (parsed.outcome === 'unknown' && uncertainty === null) {
         throw new ThreadlineError(
@@ -556,7 +565,7 @@ export function createMemoryService(deps: MemoryServiceDeps): MemoryService {
           evidenceClass: classification.class,
         },
       });
-      return admitDocumentIntent(call, parsed.projectId, {
+      return admitDocumentIntent(call, parsed.projectId, ticket, {
         kind: 'memory.episode.record',
         idempotencyKey: parsed.idempotencyKey,
         requestDigest,
@@ -569,8 +578,9 @@ export function createMemoryService(deps: MemoryServiceDeps): MemoryService {
       requireProjectScope(call, parsed.projectId);
       requireHumanAuthority(call, 'Explicit memory acceptance');
       requireWriteRole(call);
+      const ticket = await deps.admission.check(call, 'memory.accept', parsed);
       const reason = parsed.reason ?? null;
-      if (reason !== null) requireSafeManualText(reason);
+      if (reason !== null) assertSafeText(reason);
       const requestDigest = canonicalDigest({
         kind: 'memory.accept',
         projectId: parsed.projectId,
@@ -579,7 +589,7 @@ export function createMemoryService(deps: MemoryServiceDeps): MemoryService {
         expectedCurrentVersionId: parsed.expectedCurrentVersionId,
         reason,
       });
-      const record = await admitPlainIntent(call, parsed.projectId, {
+      const record = await admitPlainIntent(call, parsed.projectId, ticket, {
         kind: 'memory.accept',
         idempotencyKey: parsed.idempotencyKey,
         requestDigest,
@@ -598,6 +608,7 @@ export function createMemoryService(deps: MemoryServiceDeps): MemoryService {
       requireProjectScope(call, parsed.projectId);
       requireHumanAuthority(call, 'Memory correction');
       requireWriteRole(call);
+      const ticket = await deps.admission.check(call, 'memory.correct', parsed);
       requireAdmissibleContent(parsed.content);
       const sourceIds = normalizedUuidList(parsed.sourceIds);
       const contradictsVersionIds = normalizedUuidList(parsed.contradictsVersionIds ?? []);
@@ -637,7 +648,7 @@ export function createMemoryService(deps: MemoryServiceDeps): MemoryService {
         reason: parsed.reason,
         requestedEvidencePrecision: null,
       });
-      return admitDocumentIntent(call, parsed.projectId, {
+      return admitDocumentIntent(call, parsed.projectId, ticket, {
         kind: 'memory.correct',
         idempotencyKey: parsed.idempotencyKey,
         requestDigest,

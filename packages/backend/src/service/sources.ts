@@ -1,3 +1,4 @@
+import { type AdmissionService } from './admission.js';
 import { createHash, randomUUID } from 'node:crypto';
 
 import {
@@ -28,7 +29,7 @@ import type { SqlDatabase, TxClient } from '../storage/pg.js';
 import { withProjectWriteLock } from '../storage/pg.js';
 import type { AuthenticatedCall } from './auth.js';
 import { requirePermission } from './permissions.js';
-import { requireSafeManualText, MANUAL_SCANNER_VERSION } from './ingress.js';
+import { ADMISSION_SCANNER_VERSION } from './admission.js';
 import { encodePageCursor, decodePageCursor } from './cursors.js';
 import { requireNativeSession } from './nativeAuthority.js';
 import { createReleaseService, RELEASE_LIMITS, type ReleaseService } from './release.js';
@@ -57,6 +58,7 @@ export interface SourceService {
 
 export interface SourceServiceDeps {
   readonly db: SqlDatabase;
+  readonly admission: AdmissionService;
   readonly files: SourceFileStore;
   readonly release?: ReleaseService;
   readonly clock?: () => Date;
@@ -199,6 +201,7 @@ export function createSourceService(deps: SourceServiceDeps): SourceService {
 
     // Bound first: normalize and limit every record before anything durable
     // is written, so an oversized batch fails without a partial publication.
+    const ticket = await deps.admission.check(call, 'source.append', parsed);
     const prepared: PreparedRecord[] = [];
     let batchBytes = 0;
     for (const record of parsed.records) {
@@ -221,16 +224,6 @@ export function createSourceService(deps: SourceServiceDeps): SourceService {
           field: 'gapReason',
         });
       }
-      if (record.kind !== 'context_manifest') {
-        let text: string;
-        try { text = new TextDecoder('utf-8', {fatal:true}).decode(bytes); }
-        catch { throw new ThreadlineError('invalid_request','Manual source content must be supported UTF-8 text.'); }
-        if (text.includes('\0')) throw new ThreadlineError('invalid_request','Manual source content must be supported UTF-8 text.');
-        requireSafeManualText(text);
-        for (const [field,value] of Object.entries(record)) {
-          if (field !== 'bytesBase64' && typeof value === 'string') requireSafeManualText(value);
-        }
-      }
       prepared.push({ record, bytes, digest: createHash('sha256').update(bytes).digest('hex') });
     }
 
@@ -248,6 +241,7 @@ export function createSourceService(deps: SourceServiceDeps): SourceService {
     }
 
     const catalog = async (tx: TxClient): Promise<SourceAppendOutcome[]> => {
+      await deps.admission.revalidate(ticket, tx);
       const results: SourceAppendOutcome[] = [];
       for (const item of prepared) {
         results.push(await appendOne(tx, call, projectId, item, stored.get(item.record.deliveryId), clock()));
@@ -535,7 +529,7 @@ async function appendOne(
 
   {
     await tx.rows(`UPDATE threadline_memory.sources SET release_state='eligible',sanitizer_version=$4
-      WHERE tenant_id=$1 AND project_id=$2 AND id=$3`, [call.scope.tenantId, projectId, sourceId,MANUAL_SCANNER_VERSION]);
+      WHERE tenant_id=$1 AND project_id=$2 AND id=$3`, [call.scope.tenantId, projectId, sourceId,ADMISSION_SCANNER_VERSION]);
   }
 
   if (parentOriginKey !== null) {

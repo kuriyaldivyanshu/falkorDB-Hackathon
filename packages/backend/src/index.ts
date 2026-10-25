@@ -12,6 +12,7 @@ import { createApiServer, type ApiServerHandle, type ServiceAddress } from './ap
 import { storageConfigured, type ServiceConfig } from './config.js';
 import type { Logger } from './log.js';
 import { silentLogger } from './log.js';
+import { createAdmissionService } from './service/admission.js';
 import { createReleaseService, type ReleaseService } from './service/release.js';
 import { createAccessService, type AccessService } from './service/access.js';
 import { createAuthService, type AuthService } from './service/auth.js';
@@ -330,18 +331,20 @@ export function createMemoryService(deps: MemoryServiceDeps): MemoryService {
     filesReady = await files.probe();
 
     release = createReleaseService({db: database, files, ...(graphStore === null ? {} : {graphStore})});
+    const admission = createAdmissionService({ db: database, policyHome: deps.config.paths.home });
     auth = createAuthService({ db: database, clock, logger });
-    access = createAccessService({ db: database });
-    nativeAccess = createNativeAccessService({ db: database });
-    projects = createProjectService({ db: database, clock, logger });
-    sources = createSourceService({ db: database, files, release, clock, logger });
+    access = createAccessService({ db: database, admission });
+    nativeAccess = createNativeAccessService({ db: database, admission });
+    projects = createProjectService({ db: database, admission, clock, logger });
+    sources = createSourceService({ db: database, admission, files, release, clock, logger });
     operations = createOperationService({ db: database });
     if (graphStore !== null && sqlReady()) {
-      memories = createSemanticMemoryService({ db: database, files, graphStore, release, clock, logger });
-      tasks = createTaskService({ db: database, graphStore, release, clock, logger });
-      context = createContextService({ db: database, graphStore, sources, tasks, release, clock });
+      memories = createSemanticMemoryService({ db: database, admission, files, graphStore, release, clock, logger });
+      tasks = createTaskService({ db: database, admission, graphStore, release, clock, logger });
+      context = createContextService({ db: database, admission, graphStore, sources, tasks, release, clock });
       worker = createOperationsWorker({
         db: database,
+        admission,
         graphStore,
         files,
         limits: deps.config.limits,
@@ -635,3 +638,6 @@ export function createMemoryService(deps: MemoryServiceDeps): MemoryService {
 
 export { MAX_POLICY_BYTES, loadProductPolicy, loadProjectPreferences, parseProductPolicy, parseProjectPreferences } from './policy.js';
 export type { ProductPolicySettings, ProjectPreferences, LoadedProductPolicy, LoadedProjectPreferences } from './policy.js';
+
+export { createAdmissionService, assertSafeText, assertSafeAdmissionInput } from './service/admission.js';
+export type { AdmissionService, AdmissionTicket } from './service/admission.js';
