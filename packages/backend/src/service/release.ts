@@ -1,6 +1,8 @@
+import { hasOperationAdmission } from '../admission.js';
+export { hasOperationAdmission } from '../admission.js';
 import { randomUUID } from 'node:crypto';
 
-import { SANITIZER_VERSION_V3, ThreadlineError } from '@threadline/shared';
+import { ThreadlineError } from '@threadline/shared';
 
 import { canonicalDigest } from '../storage/digest.js';
 import type { SourceFileStore } from '../storage/files.js';
@@ -86,18 +88,6 @@ async function currentAuthority(tx: TxClient, identity: ReleaseIdentity, lock: b
     graphKey: project?.graph_key ?? null, graphEpoch: project?.graph_epoch ?? null,
     privacyRevision: project?.privacy_revision ?? null, nativeSessionId: token.native_session_id,
     enrollmentId: token.enrollment_id, bindingGeneration: token.binding_generation };
-}
-
-/** Historical operation identities and raw-derived request digests are private
- * until explicit safe migration; worker refusal alone does not guard reads. */
-export async function hasOperationAdmission(tx: TxClient, tenantId: string, projectId: string, operationId: string): Promise<boolean> {
-  const rows = await tx.rows(`SELECT o.id FROM threadline_memory.operations o
-    JOIN threadline_memory.ingress_admissions a ON a.tenant_id=o.tenant_id AND a.id=o.admission_id
-    WHERE o.tenant_id=$1 AND o.project_id=$2 AND o.id=$3 AND a.project_id=o.project_id
-      AND a.principal_id=o.actor_principal_id AND a.token_id=o.actor_token_id
-      AND a.state='accepted' AND a.sanitizer_version=$4`,
-    [tenantId, projectId, operationId, SANITIZER_VERSION_V3]);
-  return rows.length === 1;
 }
 
 export interface AdmissionSelection { readonly kind: string; readonly sourceIds?: readonly string[]; readonly operationIds?: readonly string[] }

@@ -583,7 +583,6 @@ export function createMemoryService(deps: MemoryServiceDeps): MemoryService {
           host: deps.config.host,
           port: deps.config.port,
           database: deps.config.postgres.database,
-          ownerLabel: deps.config.ownerLabel,
         },
       });
       server = createApiServer({
@@ -639,5 +638,6 @@ export function createMemoryService(deps: MemoryServiceDeps): MemoryService {
 export { MAX_POLICY_BYTES, loadProductPolicy, loadProjectPreferences, parseProductPolicy, parseProjectPreferences } from './policy.js';
 export type { ProductPolicySettings, ProjectPreferences, LoadedProductPolicy, LoadedProjectPreferences } from './policy.js';
 
-export { createAdmissionService, assertSafeText, assertSafeAdmissionInput } from './service/admission.js';
+export { createAdmissionService } from './service/admission.js';
+export { ADMISSION_LIMITS, assertSafeText, assertSafeAdmissionInput } from './admission.js';
 export type { AdmissionService, AdmissionTicket } from './service/admission.js';

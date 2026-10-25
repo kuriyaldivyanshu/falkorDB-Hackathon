@@ -201,7 +201,7 @@ export function createSourceService(deps: SourceServiceDeps): SourceService {
 
     // Bound first: normalize and limit every record before anything durable
     // is written, so an oversized batch fails without a partial publication.
-    const ticket = await deps.admission.check(call, 'source.append', parsed);
+    const ticket = await deps.admission.check(call, 'source.append', parsed, transaction);
     const prepared: PreparedRecord[] = [];
     let batchBytes = 0;
     for (const record of parsed.records) {

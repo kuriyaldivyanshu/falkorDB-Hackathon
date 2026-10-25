@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { createHash } from 'node:crypto';
-import { closeSync, openSync, readFileSync, readSync, statSync } from 'node:fs';
+import { closeSync, constants, fstatSync, openSync, readFileSync, readSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -29,6 +29,7 @@ import {
 import {
   createJsonLogger,
   assertSafeAdmissionInput,
+  ADMISSION_LIMITS,
   createMemoryService,
   initializeInstallation,
   installationPaths,
@@ -840,7 +841,22 @@ async function appendSource(client: ApiClient, invocation: CliInvocation): Promi
   const filePath = resolve(invocation.file ?? '');
   assertSafeAdmissionInput({ sourcePath: filePath, origin: invocation.origin, revision: invocation.revision,
     deliveryId: invocation.delivery, mediaType: invocation.mediaType, visibility: invocation.visibility });
-  const bytes = readFileSync(filePath);
+  let fd: number | undefined;
+  let bytes: Buffer;
+  try {
+    fd = openSync(filePath, constants.O_RDONLY | constants.O_NONBLOCK);
+    const stat = fstatSync(fd);
+    if (!stat.isFile() || stat.size > ADMISSION_LIMITS.textBytes) throw new UsageError('Source must be a regular file of at most 65536 bytes.');
+    const buffer = Buffer.alloc(ADMISSION_LIMITS.textBytes + 1);
+    let used = 0;
+    while (used < buffer.length) {
+      const count = readSync(fd, buffer, used, buffer.length - used, null);
+      if (count === 0) break;
+      used += count;
+    }
+    if (used > ADMISSION_LIMITS.textBytes) throw new UsageError('Source exceeds the 65536-byte admission limit.');
+    bytes = buffer.subarray(0, used);
+  } finally { if (fd !== undefined) closeSync(fd); }
   assertSafeAdmissionInput({ bytesBase64: bytes.toString('base64') });
   const digest = createHash('sha256').update(bytes).digest('hex');
   const record = {

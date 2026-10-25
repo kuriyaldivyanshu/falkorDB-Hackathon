@@ -227,6 +227,7 @@ export function createMemoryService(deps: MemoryServiceDeps): MemoryService {
       digest: documentDigest,
       bytes: documentBytes,
       maxBytes: MEMORY_DOCUMENT_MAX_BYTES,
+      kind: 'memory_document',
     });
     const contentSourceId = randomUUID();
     const operationId = randomUUID();

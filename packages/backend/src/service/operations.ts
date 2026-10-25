@@ -1,4 +1,5 @@
-import { assertSafeAdmissionInput, ADMISSION_POLICY_REVISION, ADMISSION_SCANNER_VERSION, type AdmissionService } from './admission.js';
+import { assertSafeAdmissionInput, CURRENT_ADMISSION_PARAMETERS, CURRENT_OPERATION_ADMISSION_SQL, hasOperationAdmission } from '../admission.js';
+import type { AdmissionService } from './admission.js';
 import { randomUUID } from 'node:crypto';
 import { AsyncLocalStorage } from 'node:async_hooks';
 
@@ -6,7 +7,6 @@ import type { Graph } from 'falkordb';
 
 import {
   OBSERVED_EVIDENCE_SOURCE_KINDS,
-  SANITIZER_VERSION_V3,
   ThreadlineError,
   memoryContentFits,
   memoryDocumentSchema,
@@ -63,7 +63,7 @@ import {
   type GraphSubmission,
 } from './graphSubmission.js';
 import { requirePermission } from './permissions.js';
-import { hasOperationAdmission, lockReleaseAuthority } from './release.js';
+import { lockReleaseAuthority } from './release.js';
 import {
   MEMORY_DOCUMENT_MAX_BYTES,
   episodeDocumentRequestFacts,
@@ -470,12 +470,9 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
             // historical unqualified intent is replayed as a fresh graph write.
             const admissions = await db.withTenantTransaction(row.tenant_id, tx => tx.rows<{ id: string; payload: unknown }>(
               `SELECT a.id,o.payload FROM threadline_memory.operations o
-                JOIN threadline_memory.ingress_admissions a ON a.tenant_id=o.tenant_id AND a.id=o.admission_id
-               WHERE o.tenant_id=$1 AND o.project_id=$2 AND o.id=$3 AND a.state='accepted'
-                 AND a.principal_id=o.actor_principal_id AND a.token_id=o.actor_token_id
-                 AND (a.project_id=o.project_id OR (a.project_id IS NULL AND o.kind='project.initialize'))
-                 AND a.policy_revision=$4 AND a.sanitizer_version=$5`,
-              [row.tenant_id,row.project_id,row.id,ADMISSION_POLICY_REVISION,ADMISSION_SCANNER_VERSION]));
+                JOIN threadline_memory.ingress_admissions a ON ${CURRENT_OPERATION_ADMISSION_SQL}
+               WHERE o.tenant_id=$1 AND o.project_id=$2 AND o.id=$3`,
+              [row.tenant_id,row.project_id,row.id,...CURRENT_ADMISSION_PARAMETERS]));
             if (admissions.length !== 1) {
               await settleRefused(row, operation.leaseToken, 'admission_unqualified',
                 'Historical intent requires explicit safe migration before graph delivery.');
@@ -483,6 +480,12 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
             }
             try {
               deps.admission.requireCurrentPolicy();
+            } catch {
+              await retry(row, operation.leaseToken, 'policy_unavailable', 'pending',
+                'Current content policy is unavailable; the operation will be retried.');
+              return;
+            }
+            try {
               assertSafeAdmissionInput(admissions[0]!.payload);
             } catch {
               await settleRefused(row, operation.leaseToken, 'admission_refused',
@@ -544,7 +547,16 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
                   }
                   throw error;
                 }
-                await deliverOperation(operation);
+                try { await deliverOperation(operation); }
+                catch (error) {
+                  if (error instanceof ThreadlineError && error.code === 'authority_unavailable'
+                    && error.details?.['reason'] === 'policy_unavailable' && !execution.getStore()?.uncertain) {
+                    await retry(row, operation.leaseToken, 'policy_unavailable', 'pending',
+                      'Current content policy is unavailable; the operation will be retried.');
+                    return;
+                  }
+                  throw error;
+                }
               });
             });
           } catch (error) {
@@ -817,6 +829,12 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
   };
 
   const retryAfterGraphFailure = async (operation: ClaimedOperation, error: unknown): Promise<void> => {
+    if (error instanceof ThreadlineError && error.code === 'authority_unavailable'
+      && error.details?.['reason'] === 'policy_unavailable' && !execution.getStore()?.uncertain) {
+      await retry(operation.row, operation.leaseToken, 'policy_unavailable', 'pending',
+        'Current content policy is unavailable; the operation will be retried.');
+      return;
+    }
     const { row, leaseToken } = operation;
     const classification = execution.getStore()?.uncertain ? 'ambiguous' : classifyGraphFailure(error);
     logger.log({
@@ -2353,11 +2371,10 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
     await tx.rows(
       `INSERT INTO threadline_memory.release_safety
          (tenant_id, project_id, resource_kind, resource_id, state, sanitizer_version)
-       SELECT o.tenant_id, o.project_id, resources.kind, resources.id, 'eligible', $4
+       SELECT o.tenant_id, o.project_id, resources.kind, resources.id, 'eligible', $5
          FROM threadline_memory.operations o
          JOIN threadline_memory.ingress_admissions a
-           ON a.tenant_id=o.tenant_id AND a.id=o.admission_id AND a.state='accepted'
-           AND a.sanitizer_version=$4 AND a.policy_revision=0
+           ON ${CURRENT_OPERATION_ADMISSION_SQL}
          LEFT JOIN threadline_memory.sources s
            ON s.tenant_id = o.tenant_id AND s.project_id = o.project_id AND s.id = o.intent_source_id
          CROSS JOIN LATERAL (
@@ -2372,10 +2389,10 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
          ) resources
         WHERE o.tenant_id = $1 AND o.project_id = $2 AND o.id = $3 AND o.state = 'committed'
           AND resources.id IS NOT NULL
-          AND ((o.kind = 'task.create' AND o.payload->>'serverSafeIngress' = $4)
-            OR (o.kind <> 'task.create' AND s.release_state = 'eligible' AND s.sanitizer_version = $4))
+          AND ((o.kind = 'task.create' AND o.payload->>'serverSafeIngress' = $5)
+            OR (o.kind <> 'task.create' AND s.release_state = 'eligible' AND s.sanitizer_version = $5))
        ON CONFLICT (tenant_id, project_id, resource_kind, resource_id) DO NOTHING`,
-      [row.tenant_id, row.project_id, row.id, SANITIZER_VERSION_V3]);
+      [row.tenant_id, row.project_id, row.id, ...CURRENT_ADMISSION_PARAMETERS]);
   };
 
   const settleCommitted = async (

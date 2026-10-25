@@ -1,4 +1,4 @@
-import { assertSafeText } from '../service/admission.js';
+import { ADMISSION_LIMITS, assertSafePublication } from '../admission.js';
 import { createHash, randomUUID } from 'node:crypto';
 import {
   closeSync,
@@ -48,6 +48,7 @@ export interface PublishSourceBytesInput {
   readonly digest: string;
   readonly bytes: Buffer;
   readonly maxBytes: number;
+  readonly kind?: 'memory_document';
 }
 
 export interface StoredSourceBytes {
@@ -115,10 +116,6 @@ export function createSourceFileStore(deps: SourceFileStoreDeps): SourceFileStor
     },
 
     async publish(input: PublishSourceBytesInput): Promise<StoredSourceBytes> {
-      let admitted: string;
-      try { admitted = new TextDecoder('utf-8', { fatal: true }).decode(input.bytes); }
-      catch { throw new ThreadlineError('invalid_request', 'Source bytes must be supported UTF-8 content.'); }
-      assertSafeText(admitted);
       if (!/^[0-9a-f]{64}$/.test(input.digest)) {
         throw new ThreadlineError('internal_error', 'A source digest must be a SHA-256 hex value.');
       }
@@ -131,6 +128,12 @@ export function createSourceFileStore(deps: SourceFileStoreDeps): SourceFileStor
           received: input.bytes.byteLength,
         });
       }
+      const publicationLimit = input.kind === 'memory_document' ? ADMISSION_LIMITS.memoryDocumentBytes : ADMISSION_LIMITS.textBytes;
+      if (input.bytes.byteLength > publicationLimit) throw new ThreadlineError('invalid_request', 'Source exceeds its bounded admission limit.', { limit: publicationLimit });
+      let admitted: string;
+      try { admitted = new TextDecoder('utf-8', { fatal: true }).decode(input.bytes); }
+      catch { throw new ThreadlineError('invalid_request', 'Source bytes must be supported UTF-8 content.'); }
+      assertSafePublication(admitted, input.kind ?? 'text');
       // The digest is recomputed here rather than trusted from the caller: the
       // catalog row and the stored bytes must describe the same object.
       const actual = createHash('sha256').update(input.bytes).digest('hex');

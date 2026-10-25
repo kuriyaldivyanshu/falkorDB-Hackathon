@@ -129,6 +129,10 @@ function sensitiveKey(key: string, additional: ReadonlySet<string>): boolean {
     /^(?:pass|pwd|pin|auth)(?:key|id|value|code|s)*$/.test(normalized) ||
     /^(?:client|user|db|database|service|http|proxy)(?:pass|pwd|pin|auth)(?:key|id|value|code|s)*$/.test(normalized);
 }
+/** Built-in key exclusion used by all structured admission envelopes. */
+export function isSensitiveContentKeyV3(key: string): boolean {
+  return sensitiveKey(decoded(key), new Set());
+}
 const credentialPatterns = [
   /-----BEGIN [A-Z0-9 ]{0,64}PRIVATE KEY-----/i,
   /\b(?:sk-(?:proj-|svcacct-)?[A-Za-z0-9_-]{12}|gh[pousr]_[A-Za-z0-9]{16}|github_pat_[A-Za-z0-9_]{20}|(?:AKIA|ASIA)[A-Z0-9]{16})/,
