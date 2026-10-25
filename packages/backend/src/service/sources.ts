@@ -5,7 +5,6 @@ import {
   parseContract,
   sourceAppendInputSchema,
   sourceAppendResultSchema,
-  sourceHistoryCursorSchema,
   sourceHistoryPageSchema,
   sourceHistoryQuerySchema,
   sourceRangeSchema,
@@ -29,7 +28,10 @@ import type { SqlDatabase, TxClient } from '../storage/pg.js';
 import { withProjectWriteLock } from '../storage/pg.js';
 import type { AuthenticatedCall } from './auth.js';
 import { requirePermission } from './permissions.js';
+import { requireSafeManualText, MANUAL_SCANNER_VERSION } from './ingress.js';
+import { encodePageCursor, decodePageCursor } from './cursors.js';
 import { requireNativeSession } from './nativeAuthority.js';
+import { createReleaseService, RELEASE_LIMITS, type ReleaseService } from './release.js';
 
 /**
  * Source capture and history.
@@ -56,6 +58,7 @@ export interface SourceService {
 export interface SourceServiceDeps {
   readonly db: SqlDatabase;
   readonly files: SourceFileStore;
+  readonly release?: ReleaseService;
   readonly clock?: () => Date;
   readonly logger?: Logger;
 }
@@ -126,6 +129,7 @@ const SOURCE_SELECT = `
     FROM threadline_memory.sources s`;
 
 export function createSourceService(deps: SourceServiceDeps): SourceService {
+  const release = deps.release ?? createReleaseService({ db: deps.db, files: deps.files });
   const logger = deps.logger ?? silentLogger;
   const clock = deps.clock ?? (() => new Date());
 
@@ -147,6 +151,9 @@ export function createSourceService(deps: SourceServiceDeps): SourceService {
     const row = rows[0];
     if (row === undefined) {
       throw new ThreadlineError('not_found', 'No such source exists in this project scope.');
+    }
+    if (!await release.eligible(call, [{projectId, kind: 'source', id: sourceId}], transaction)) {
+      throw new ThreadlineError('not_found', 'The requested resource does not exist.');
     }
     return row;
   };
@@ -214,6 +221,16 @@ export function createSourceService(deps: SourceServiceDeps): SourceService {
           field: 'gapReason',
         });
       }
+      if (record.kind !== 'context_manifest') {
+        let text: string;
+        try { text = new TextDecoder('utf-8', {fatal:true}).decode(bytes); }
+        catch { throw new ThreadlineError('invalid_request','Manual source content must be supported UTF-8 text.'); }
+        if (text.includes('\0')) throw new ThreadlineError('invalid_request','Manual source content must be supported UTF-8 text.');
+        requireSafeManualText(text);
+        for (const [field,value] of Object.entries(record)) {
+          if (field !== 'bytesBase64' && typeof value === 'string') requireSafeManualText(value);
+        }
+      }
       prepared.push({ record, bytes, digest: createHash('sha256').update(bytes).digest('hex') });
     }
 
@@ -266,6 +283,10 @@ export function createSourceService(deps: SourceServiceDeps): SourceService {
   return {
     async append(call, input, transaction) {
       requirePermission(call, 'knowledge.write');
+      const parsed = parseContract(sourceAppendInputSchema, input, 'source append');
+      if (parsed.records.some((record) => record.kind === 'context_manifest')) {
+        throw new ThreadlineError('scope_denied', 'Context manifests require the trusted audit path.');
+      }
       return appendStored(call, input, transaction);
     },
     async appendContextManifest(call, input, nonce, transaction) {
@@ -326,6 +347,7 @@ export function createSourceService(deps: SourceServiceDeps): SourceService {
     },
 
     async history(call: AuthenticatedCall, query: unknown): Promise<SourceHistoryPage> {
+      const deadline = Date.now() + RELEASE_LIMITS.workMs;
       const parsed = parseContract(sourceHistoryQuerySchema, query, 'history query');
       requireProject(call, parsed.projectId);
 
@@ -337,16 +359,7 @@ export function createSourceService(deps: SourceServiceDeps): SourceService {
         }),
       );
 
-      let afterSeq = '0';
-      if (parsed.cursor !== undefined) {
-        const cursor = decodeCursor(parsed.cursor);
-        if (cursor.filterDigest !== filterDigest) {
-          throw new ThreadlineError('invalid_request', 'The cursor belongs to a different history filter.', {
-            field: 'cursor',
-          });
-        }
-        afterSeq = cursor.projectSeq;
-      }
+      const afterSeq = decodePageCursor(call, filterDigest, parsed.cursor, '0');
 
       const limit = parsed.limit;
       const conditions: string[] = [
@@ -364,7 +377,7 @@ export function createSourceService(deps: SourceServiceDeps): SourceService {
         values.push(parsed.nativeSessionId);
         conditions.push(`s.producer_session_id = $${String(values.length)}::uuid`);
       }
-      values.push(limit + 1);
+      values.push(65);
       const rows = await deps.db.withTenantTransaction(call.scope.tenantId, (tx) =>
         tx.rows<SourceRow>(
           `${SOURCE_SELECT}
@@ -375,34 +388,19 @@ export function createSourceService(deps: SourceServiceDeps): SourceService {
         ),
       );
 
-      // The fetch asks for one row beyond the page: if it arrives, a further page
-      // exists. Available rows fill the page up to the limit; unavailable ones
-      // are counted and skipped, and the cursor still advances across them so a
-      // later page can never stick on the same hole.
+      const scan = rows.slice(0,64);
+      const eligible = await release.eligibleMany(call, scan.map((row) => [{projectId:parsed.projectId,kind:'source' as const,id:row.id}]), undefined, deadline);
       const entries: SourceView[] = [];
-      let unavailableCount = 0;
-      let hasMore = false;
-      let cursorRow: SourceRow | null = null;
-      for (const row of rows) {
-        if (row.availability !== 'available') {
-          unavailableCount += 1;
-          cursorRow = row;
-          continue;
-        }
-        if (entries.length === limit) {
-          hasMore = true;
-          break;
-        }
-        entries.push(toView(row));
-        cursorRow = row;
+      let lastScanned = afterSeq;
+      let hasMore = rows.length > scan.length;
+      for (let index=0; index<scan.length; index++) {
+        const row = scan[index]!;
+        if (entries.length === limit) { hasMore = true; break; }
+        lastScanned = row.project_seq;
+        if (eligible[index]) entries.push(toView(row));
       }
-      if (!hasMore) {
-        hasMore = rows.length > limit;
-      }
-      const nextCursor =
-        hasMore && cursorRow !== null
-          ? encodeCursor({ v: 1, projectSeq: cursorRow.project_seq, filterDigest })
-          : null;
+      const nextCursor = hasMore ? encodePageCursor(call,filterDigest,lastScanned) : null;
+      const unavailableCount = 0; // hidden resource counts are deliberately not disclosed
 
       return parseContract(
         sourceHistoryPageSchema,
@@ -535,6 +533,11 @@ async function appendOne(
     ],
   );
 
+  {
+    await tx.rows(`UPDATE threadline_memory.sources SET release_state='eligible',sanitizer_version=$4
+      WHERE tenant_id=$1 AND project_id=$2 AND id=$3`, [call.scope.tenantId, projectId, sourceId,MANUAL_SCANNER_VERSION]);
+  }
+
   if (parentOriginKey !== null) {
     await tx.rows(
       `INSERT INTO threadline_memory.source_links
@@ -605,21 +608,4 @@ function decodeBase64(value: string): Buffer {
     });
   }
   return Buffer.from(trimmed, 'base64');
-}
-
-function encodeCursor(cursor: { v: 1; projectSeq: string; filterDigest: string }): string {
-  return Buffer.from(JSON.stringify(cursor), 'utf8').toString('base64url');
-}
-
-function decodeCursor(value: string): { v: 1; projectSeq: string; filterDigest: string } {
-  try {
-    const parsed: unknown = JSON.parse(Buffer.from(value, 'base64url').toString('utf8'));
-    const cursor = parseContract(sourceHistoryCursorSchema, parsed, 'history cursor');
-    return { v: cursor.v, projectSeq: cursor.projectSeq, filterDigest: cursor.filterDigest };
-  } catch (error) {
-    if (error instanceof ThreadlineError && error.code === 'invalid_request') {
-      throw error;
-    }
-    throw new ThreadlineError('invalid_request', 'The history cursor is not valid.', { field: 'cursor' });
-  }
 }

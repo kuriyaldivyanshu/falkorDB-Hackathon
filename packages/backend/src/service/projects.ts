@@ -21,6 +21,7 @@ import { silentLogger } from '../log.js';
 import { canonicalDigest, sha256Hex } from '../storage/digest.js';
 import type { SqlDatabase, TxClient } from '../storage/pg.js';
 import type { AuthenticatedCall } from './auth.js';
+import { encodePageCursor, decodePageCursor } from './cursors.js';
 import { requirePermission } from './permissions.js';
 
 /**
@@ -34,8 +35,10 @@ import { requirePermission } from './permissions.js';
 
 export interface ProjectService {
   add(call: AuthenticatedCall, input: unknown): Promise<ProjectJoinResult>;
-  list(call: AuthenticatedCall): Promise<ProjectView[]>;
-  listGrants(call: AuthenticatedCall, projectId: string): Promise<ProjectGrantView[]>;
+  list(call: AuthenticatedCall, page?: {cursor?:string;limit?:number;projectId?:string}): Promise<ProjectView[]>;
+  listPage(call: AuthenticatedCall,page?:{cursor?:string;limit?:number;projectId?:string}): Promise<{entries:ProjectView[];nextCursor:string|null}>;
+  listGrants(call: AuthenticatedCall, projectId: string, page?: {cursor?:string;limit?:number}): Promise<ProjectGrantView[]>;
+  grantsPage(call: AuthenticatedCall,projectId:string,page?:{cursor?:string;limit?:number}): Promise<{entries:ProjectGrantView[];nextCursor:string|null}>;
 }
 
 export interface ProjectServiceDeps {
@@ -224,7 +227,11 @@ export function createProjectService(deps: ProjectServiceDeps): ProjectService {
       );
     },
 
-    async list(call: AuthenticatedCall): Promise<ProjectView[]> {
+    async list(call, page) { return (await this.listPage(call,page)).entries; },
+    async listPage(call, page = {}) {
+      const limit = Math.min(page.limit ?? 16,16);
+      const filter = `projects:${page.projectId ?? ''}`;
+      const after = decodePageCursor(call,filter,page.cursor,'');
       requirePermission(call, 'read');
       const rows = await deps.db.withTenantTransaction(call.scope.tenantId, (tx) =>
         tx.rows<ProjectRow>(
@@ -235,12 +242,12 @@ export function createProjectService(deps: ProjectServiceDeps): ProjectService {
                ON p.tenant_id = g.tenant_id AND p.id = g.project_id
             WHERE g.tenant_id = $1 AND g.principal_id = $2
               AND g.state = 'active' AND p.state = 'active'
-              AND ($3::uuid IS NULL OR p.id=$3)
-            ORDER BY p.created_at ASC, p.id ASC`,
-          [call.scope.tenantId, call.scope.principalId, call.scope.projectId],
+              AND ($3::uuid IS NULL OR p.id=$3) AND p.id::text > $4
+            ORDER BY p.id ASC LIMIT $5`,
+          [call.scope.tenantId, call.scope.principalId, page.projectId ?? call.scope.projectId, after,limit+1],
         ),
       );
-      return rows.map((row) =>
+      const entries = rows.slice(0,limit).map((row) =>
         parseContract(
           projectViewSchema,
           {
@@ -255,9 +262,14 @@ export function createProjectService(deps: ProjectServiceDeps): ProjectService {
           'project view',
         ),
       );
+      return {entries,nextCursor:rows.length>limit ? encodePageCursor(call,filter,entries.at(-1)!.projectId) : null};
     },
 
-    async listGrants(call: AuthenticatedCall, projectId: string): Promise<ProjectGrantView[]> {
+    async listGrants(call,projectId,page) { return (await this.grantsPage(call,projectId,page)).entries; },
+    async grantsPage(call,projectId,page={}) {
+      const limit=Math.min(page.limit??100,100);
+      const filter=`grants:${projectId}`;
+      const after=decodePageCursor(call,filter,page.cursor,'');
       requirePermission(call, 'project.admin');
       // Authorization first: the caller must hold an active grant themselves.
       await projectView(call, projectId);
@@ -271,12 +283,12 @@ export function createProjectService(deps: ProjectServiceDeps): ProjectService {
         }>(
           `SELECT project_id, principal_id, role, state, grant_revision::text AS grant_revision
              FROM threadline_memory.project_grants
-            WHERE tenant_id = $1 AND project_id = $2
-            ORDER BY issued_at ASC`,
-          [call.scope.tenantId, projectId],
+            WHERE tenant_id = $1 AND project_id = $2 AND principal_id::text > $3
+            ORDER BY principal_id ASC LIMIT $4`,
+          [call.scope.tenantId, projectId,after,limit+1],
         ),
       );
-      return rows.map((row) =>
+      const entries = rows.slice(0,limit).map((row) =>
         parseContract(
           projectGrantViewSchema,
           {
@@ -289,6 +301,7 @@ export function createProjectService(deps: ProjectServiceDeps): ProjectService {
           'project grant view',
         ),
       );
+      return {entries,nextCursor:rows.length>limit ? encodePageCursor(call,filter,entries.at(-1)!.principalId) : null};
     },
   };
 }

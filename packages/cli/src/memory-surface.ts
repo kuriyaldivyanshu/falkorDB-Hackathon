@@ -112,6 +112,7 @@ export function createMemorySurface(client: ApiClient): MemorySurface {
         ...(parsed.taskId == null ? {} : { taskId: parsed.taskId }),
         ...(parsed.kind === undefined ? {} : { kind: parsed.kind }),
         ...(parsed.focus === undefined ? {} : { focus: parsed.focus }),
+        ...(parsed.cursor === undefined ? {} : { cursor: parsed.cursor }),
       });
       return parseContract(memoryQueryResultSchema, payload, 'memory query result');
     },

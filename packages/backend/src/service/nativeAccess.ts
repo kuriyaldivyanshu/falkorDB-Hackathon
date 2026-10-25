@@ -10,6 +10,7 @@ import {
 
 import { canonicalDigest, sha256Hex } from '../storage/digest.js';
 import type { SqlDatabase, TxClient } from '../storage/pg.js';
+import { withProjectWriteLock } from '../storage/pg.js';
 import { authorizeProjectOwner } from './access.js';
 import { generateClientToken, hashClientToken, type AuthenticatedCall } from './auth.js';
 import { requireProducerAuthority } from './nativeAuthority.js';
@@ -90,7 +91,7 @@ export function createNativeAccessService(deps: { db: SqlDatabase }): NativeAcce
       const parsed = parseContract(issueEnrollmentInputSchema, input, 'native enrollment issuance');
       const key = sha256Hex(parsed.idempotencyKey);
       const digest = canonicalDigest({ bindingId: parsed.bindingId, label: parsed.label, lifetimeSeconds: parsed.lifetimeSeconds });
-      return deps.db.withTenantTransaction(call.scope.tenantId, async (tx) => {
+      return withProjectWriteLock(deps.db, call.scope.tenantId, projectId, async (tx) => {
         await tx.rows('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',
           [`native-issuance:${call.scope.tenantId}:${projectId}:${call.scope.principalId}:${key}`]);
         await authorizeProjectOwner(tx, call, projectId);
@@ -129,7 +130,7 @@ export function createNativeAccessService(deps: { db: SqlDatabase }): NativeAcce
       parseContract(uuidSchema, projectId, 'project identity');
       requirePermission(call, 'access.admin');
       checkLimit(limit);
-      return deps.db.withTenantTransaction(call.scope.tenantId, async (tx) => {
+      return withProjectWriteLock(deps.db, call.scope.tenantId, projectId, async (tx) => {
         await authorizeProjectOwner(tx, call, projectId);
         const rows = await tx.rows<EnrollmentRow>(`${ENROLLMENT_SELECT}
           WHERE e.tenant_id=$1 AND e.project_id=$2 ORDER BY e.created_at DESC,e.id DESC LIMIT $3`,
@@ -142,7 +143,7 @@ export function createNativeAccessService(deps: { db: SqlDatabase }): NativeAcce
       parseContract(uuidSchema, id, 'enrollment identity');
       requireProjectScope(call, projectId);
       requirePermission(call, 'native.inspect');
-      return deps.db.withTenantTransaction(call.scope.tenantId, async (tx) => {
+      return withProjectWriteLock(deps.db, call.scope.tenantId, projectId, async (tx) => {
         if (call.scope.tokenKind === 'producer') {
           if (call.enrollmentId !== id) throw new ThreadlineError('scope_denied', 'A producer may inspect only its own enrollment.');
           await requireProducerAuthority(tx, call);
@@ -154,7 +155,7 @@ export function createNativeAccessService(deps: { db: SqlDatabase }): NativeAcce
       parseContract(uuidSchema, projectId, 'project identity');
       parseContract(uuidSchema, id, 'enrollment identity');
       requirePermission(call, 'access.admin');
-      return deps.db.withTenantTransaction(call.scope.tenantId, async (tx) => {
+      return withProjectWriteLock(deps.db, call.scope.tenantId, projectId, async (tx) => {
         await authorizeProjectOwner(tx, call, projectId);
         await tx.rows(`SELECT id FROM threadline_memory.native_enrollments
           WHERE tenant_id=$1 AND project_id=$2 AND id=$3 FOR UPDATE`, [call.scope.tenantId, projectId, id]);
@@ -181,7 +182,7 @@ export function createNativeAccessService(deps: { db: SqlDatabase }): NativeAcce
       const fingerprint = canonicalDigest({ tenantId: call.scope.tenantId, projectId,
         enrollmentId: call.enrollmentId, generation: parsed.expectedBindingGeneration, nonce: adapterInstanceNonce });
       const digest = canonicalDigest({ ...hints, instanceFingerprint: fingerprint });
-      return deps.db.withTenantTransaction(call.scope.tenantId, async (tx) => {
+      return withProjectWriteLock(deps.db, call.scope.tenantId, call.scope.projectId!, async (tx) => {
         // Enrollment row is the serialization point for both pin and revocation.
         const rows = await tx.rows<{ native_session_id: string | null; binding_id: string; binding_generation: number }>(
           `SELECT native_session_id,binding_id,binding_generation FROM threadline_memory.native_enrollments
@@ -231,7 +232,7 @@ export function createNativeAccessService(deps: { db: SqlDatabase }): NativeAcce
       requireProjectScope(call, projectId);
       requirePermission(call, 'native.sessions');
       checkLimit(limit);
-      return deps.db.withTenantTransaction(call.scope.tenantId, async (tx) => {
+      return withProjectWriteLock(deps.db, call.scope.tenantId, projectId, async (tx) => {
         if (call.scope.tokenKind === 'producer') await requireProducerAuthority(tx, call);
         else await authorizeProjectOwner(tx, call, projectId);
         const rows = await tx.rows<SessionRow>(`SELECT * FROM threadline_memory.native_sessions

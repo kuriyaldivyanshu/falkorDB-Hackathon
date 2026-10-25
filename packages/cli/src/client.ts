@@ -3,6 +3,7 @@ import {
   CLIENT_KIND_HEADER,
   isThreadlineErrorPayload,
   ThreadlineError,
+  ROUTES,
 } from '@threadline/shared';
 
 /**
@@ -31,7 +32,7 @@ export interface ApiClient {
 export function createApiClient(options: ApiClientOptions): ApiClient {
   const baseUrl = options.baseUrl.replace(/\/+$/, '');
 
-  const request = async (path: string, init: RequestInit): Promise<unknown> => {
+  const request = async (path: string, init: RequestInit, continuation?: (cursor:string|null)=>void): Promise<unknown> => {
     const headers: Record<string, string> = {
       accept: 'application/json',
       [CLIENT_KIND_HEADER]: 'cli',
@@ -54,6 +55,7 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
       });
     }
 
+    continuation?.(response.headers.get('x-threadline-next-cursor'));
     let payload: unknown;
     let text: string;
     if (options.maxResponseBytes === undefined) {
@@ -99,15 +101,20 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
 
   return {
     baseUrl,
-    get(path, query) {
+    async get(path, query) {
       const search = new URLSearchParams();
-      for (const [key, value] of Object.entries(query ?? {})) {
-        if (value !== undefined) {
-          search.set(key, String(value));
-        }
+      for (const [key,value] of Object.entries(query??{})) if(value!==undefined)search.set(key,String(value));
+      const autoPage = query?.cursor === undefined && (path===ROUTES.projects || /^\/v2\/projects\/[^/]+\/grants$/.test(path));
+      const entries: unknown[]=[];
+      for(let page=0;page<256;page++) {
+        let next:string|null=null;
+        const data=await request(`${path}${search.size?'?'+search.toString():''}`,{method:'GET'},cursor=>{next=cursor;});
+        if(!autoPage || !Array.isArray(data))return data;
+        entries.push(...data);
+        if(!next)return entries;
+        search.set('cursor',next);
       }
-      const suffix = search.size === 0 ? '' : `?${search.toString()}`;
-      return request(`${path}${suffix}`, { method: 'GET' });
+      throw new ThreadlineError('overloaded','The listing exceeds the client page budget. Select a project or resume with a cursor.');
     },
     post(path, body) {
       return request(path, { method: 'POST', body: JSON.stringify(body) });

@@ -412,6 +412,7 @@ async function runMemoryCommand(client: ApiClient, invocation: CliInvocation): P
         ...(invocation.taskId === null ? {} : { taskId: invocation.taskId }),
         ...(invocation.kind === null ? {} : { kind: invocation.kind as MemoryKind }),
         ...(invocation.focus === null ? {} : { focus: invocation.focus }),
+        ...(invocation.cursor === null ? {} : { cursor: invocation.cursor }),
       });
       if (invocation.json) {
         writeJson(result);
@@ -426,7 +427,7 @@ async function runMemoryCommand(client: ApiClient, invocation: CliInvocation): P
       if (result.memories.length === 0) {
         write('  (nothing accepted yet — proposals do not appear as current memory)');
       }
-      note(result.hasMore ? 'hasMore: the bounded scan stopped early; raise --limit or narrow --focus.' : 'This set is complete for the query.');
+      note(result.nextCursor ? `Continue with --cursor ${result.nextCursor} and the same selectors.` : 'This set is complete for the query.');
       return EXIT_OK;
     }
     case 'operation:inspect': {

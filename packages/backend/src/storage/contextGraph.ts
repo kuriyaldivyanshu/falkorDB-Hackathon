@@ -1,13 +1,13 @@
 import type { Graph } from 'falkordb';
 
 /** Bound identities before traversing versions; never scan all versions into Node. */
-export async function readContextCandidates(graph: Graph, root: string, limit: number): Promise<string[]> {
+export async function readContextCandidates(graph: Graph, root: string, limit: number, afterMemoryId = ''): Promise<string[]> {
   const reply = await graph.roQuery<{ memory_id: string }>(
     `MATCH (:Entity:ProjectRoot {id: $root})-[:HAS_MEMORY]->(m:Entity:Memory)
-     WHERE m.kind IN ['semantic', 'episodic']
-     WITH m ORDER BY m.created_at_ms DESC, m.id ASC LIMIT $limit
+     WHERE m.kind IN ['semantic', 'episodic'] AND m.id > $afterMemoryId
+     WITH m ORDER BY m.id ASC LIMIT $limit
      RETURN m.id AS memory_id`,
-    { params: { root, limit } },
+    { params: { root, limit, afterMemoryId } },
   );
   return (reply.data ?? []).map((row) => row.memory_id);
 }

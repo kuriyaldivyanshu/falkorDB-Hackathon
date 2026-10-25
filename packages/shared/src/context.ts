@@ -173,6 +173,7 @@ export const contextConditionsSchema = z.strictObject({
 export type ContextConditions = z.infer<typeof contextConditionsSchema>;
 
 export const prepareContextInputSchema = z.strictObject({
+  discoveryCursor: z.string().max(2048).optional(),
   projectId: uuidSchema,
   idempotencyKey: byteBoundedText(200),
   taskId: uuidSchema.nullable().optional(),
@@ -184,6 +185,7 @@ export const prepareContextInputSchema = z.strictObject({
 export type PrepareContextInput = z.infer<typeof prepareContextInputSchema>;
 
 export const contextPacketSchema = z.object({
+  discoveryCursor: z.string().max(2048).nullable().optional(),
   manifest: contextManifestSchema,
   manifestSourceId: uuidSchema,
   occurrenceId: uuidSchema,

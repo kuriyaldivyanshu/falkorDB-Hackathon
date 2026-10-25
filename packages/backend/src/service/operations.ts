@@ -1,9 +1,11 @@
 import { randomUUID } from 'node:crypto';
+import { AsyncLocalStorage } from 'node:async_hooks';
 
 import type { Graph } from 'falkordb';
 
 import {
   OBSERVED_EVIDENCE_SOURCE_KINDS,
+  SANITIZER_VERSION_V3,
   ThreadlineError,
   memoryContentFits,
   memoryDocumentSchema,
@@ -33,6 +35,8 @@ import {
   countMemoryVersions,
   countSourceAnchors,
   ensureProjectRoot,
+  fenceProjectWrites,
+  fenceLegacyProjectWrites,
   eventIdPrefixFor,
   projectRootIdFor,
   readMemoryState,
@@ -44,10 +48,21 @@ import {
   type OperationReceiptView,
   type ProjectRootView,
 } from '../storage/memoryGraph.js';
-import type { SqlDatabase } from '../storage/pg.js';
+import { withProjectBarriers, type SqlDatabase, type TxClient } from '../storage/pg.js';
 import { MEMORY_GRAPH_SCHEMA_VERSION } from '../version.js';
 import type { AuthenticatedCall } from './auth.js';
+import {
+  beginGraphSubmission,
+  finishGraphSubmission,
+  graphTransactionDatabase,
+  markGraphSubmissionUncertain,
+  readGraphSubmissions,
+  reserveRecoveryPrivacyRevision,
+  settleRecoveryPrivacyRevision,
+  type GraphSubmission,
+} from './graphSubmission.js';
 import { requirePermission } from './permissions.js';
+import { lockReleaseAuthority } from './release.js';
 import {
   MEMORY_DOCUMENT_MAX_BYTES,
   episodeDocumentRequestFacts,
@@ -64,7 +79,9 @@ import {
  *
  * 1. claim: one bounded lease update per batch, restricted to kinds this build
  *    commits, reclaiming leases that expired without settlement;
- * 2. re-derive every fact from SQL at delivery time (project state, epoch,
+ * 2. take the shared project barrier and commit a durable submission marker;
+ *    hold current authority row locks through graph execution and SQL settlement;
+ *    re-derive every fact from SQL at delivery time (project state, epoch,
  *    privacy revision, source availability and visibility) — never from the
  *    request that created the intent;
  * 3. verify the project graph's constraints are OPERATIONAL before writing;
@@ -75,9 +92,10 @@ import {
  * 6. settle SQL under the lease token; a lost lease leaves the receipt for the
  *    next claim to reconcile.
  *
- * Failures are classified by what was actually observed: a refused connection
- * leaves the operation `pending`, an unclassifiable reply is `ambiguous`, and
- * only `ambiguous` needs receipt reconciliation before any retry. Deterministic
+ * A failed graph write retains its durable marker, including after lease expiry.
+ * Recovery requires an exact receipt or acknowledged graph-generation fencing
+ * followed by receipt reconciliation; receipt absence alone never permits resubmission.
+ * Read-only failures can retry after confirmed graph responses. Deterministic
  * guard refusals settle as `rejected` with an explicit code; nothing here waits
  * for FalcorDB to merely answer a ping before settling.
  */
@@ -141,6 +159,44 @@ export interface OperationsWorker {
 
 /** Creates a leased delivery worker with bounded concurrency, graph reconciliation and status reporting. */
 export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWorker {
+  const execution = new AsyncLocalStorage<{
+    db: SqlDatabase;
+    submission?: GraphSubmission;
+    uncertain: boolean;
+    revalidateAuthority?: () => Promise<unknown>;
+  }>();
+  const workerDb = (): SqlDatabase => execution.getStore()?.db ?? deps.db;
+  const graphWrite = async <T>(work: () => Promise<T>): Promise<T> => {
+    const current = execution.getStore();
+    if (!current?.submission) throw new ThreadlineError('authority_unavailable', 'Graph submission has no durable reservation.');
+    await current.db.query('SELECT 1');
+    await current.revalidateAuthority?.();
+    current.uncertain = true;
+    const result = await work();
+    current.uncertain = false;
+    return result;
+  };
+  const settlementTransaction = async (
+    row: ClaimedOperationRow,
+    work: (tx: TxClient) => Promise<{ id: string }[]>,
+  ): Promise<{ id: string }[]> => workerDb().withTenantTransaction(row.tenant_id, async (tx) => {
+    const beforeSettlement = execution.getStore();
+    if (beforeSettlement?.submission && !beforeSettlement.uncertain) {
+      await settleRecoveryPrivacyRevision(tx, beforeSettlement.submission);
+    }
+    const updated = await work(tx);
+    if (updated.length !== 1) {
+      const current = execution.getStore();
+      if (current) current.uncertain = true;
+      throw new ThreadlineError('authority_unavailable', 'Operation settlement lost its SQL lease ownership.');
+    }
+    const current = execution.getStore();
+    if (current?.submission) {
+      if (current.uncertain) await markGraphSubmissionUncertain(tx, current.submission);
+      else await finishGraphSubmission(tx, current.submission);
+    }
+    return updated;
+  });
   const logger = deps.logger ?? silentLogger;
   const clock = deps.clock ?? (() => new Date());
   const workerId = `worker-${randomUUID()}`;
@@ -205,30 +261,21 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
     if (clock().getTime() < readyUntil) {
       return true;
     }
-    try {
-      const report = await deps.graphStore.ensureSchema(graphKey);
-      if (report.ready) {
-        graphReadyUntilMs.set(graphKey, clock().getTime() + GRAPH_READY_TTL_MS);
-        return true;
-      }
-      logger.log({
-        level: 'warn',
-        message: 'Project graph constraints are not all OPERATIONAL yet.',
-        fields: { graphKey, waitedMs: report.waitedMs },
-      });
-      return false;
-    } catch (error) {
-      logger.log({
-        level: 'warn',
-        message: 'Project graph schema verification failed.',
-        fields: { graphKey, errorName: error instanceof Error ? error.name : typeof error },
-      });
-      return false;
+    const report = await deps.graphStore.ensureSchema(graphKey);
+    if (report.ready) {
+      graphReadyUntilMs.set(graphKey, clock().getTime() + GRAPH_READY_TTL_MS);
+      return true;
     }
+    logger.log({
+      level: 'warn',
+      message: 'Project graph constraints are not all OPERATIONAL yet.',
+      fields: { graphKey, waitedMs: report.waitedMs },
+    });
+    return false;
   };
 
   const refreshBacklog = async (): Promise<void> => {
-    const rows = await deps.db.query<{
+    const rows = await workerDb().query<{
       operation_state: string;
       operation_count: string;
       oldest_created_at: Date | null;
@@ -256,7 +303,7 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
 
   const claimOperations = async (limit: number): Promise<ClaimedOperation[]> => {
     const leaseToken = randomUUID();
-    const rows = await deps.db.query<ClaimedOperationRow>(
+    const rows = await workerDb().query<ClaimedOperationRow>(
       'SELECT * FROM threadline_memory.claim_operations($1, $2, $3, $4, $5)',
       [limit, workerId, leaseToken, leaseSeconds, [...SUPPORTED_OPERATION_KINDS]],
     );
@@ -333,7 +380,160 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
   const processOperation = async (operation: ClaimedOperation): Promise<void> => {
     const { row } = operation;
     try {
-      await deliverOperation(operation);
+      await withProjectBarriers(deps.db, row.tenant_id, [row.project_id], async (db) =>
+        execution.run({ db, uncertain: false }, async () => {
+          try {
+            const markers = await readGraphSubmissions(db, row.tenant_id, row.project_id, row.id);
+            const own = markers.find((entry) => entry.operationId === row.id);
+            if (own) {
+              const current = execution.getStore()!;
+              current.submission = own;
+              current.uncertain = true;
+              const graph = deps.graphStore.graph(await resolveGraphKey(row));
+              const receipt = await readOperationReceipt(graph, receiptIdFor(own.graphEpoch, row.id));
+              if (own.graphEpoch !== row.graph_epoch || own.requestDigest !== row.request_digest ||
+                  (receipt !== null && !exactReceipt(row, receipt))) {
+                await retry(row, operation.leaseToken, 'graph_submission_unresolved', 'ambiguous',
+                  'The durable operation and graph receipt do not match; submission remains blocked.');
+                return;
+              }
+              if (exactReceipt(row, receipt) && own.recoveryPrivacyRevision === null) {
+                current.uncertain = false;
+                await settleCommitted(row, operation.leaseToken, receipt.eventSeq,
+                  receipt.outcome, receipt.committedAtMs);
+                return;
+              }
+              // Keep the old marker durable while the fence may be executing.
+              // Fencing carries no content and requires no revoked actor authority.
+              await db.query('SELECT 1');
+              const projects = await db.withTenantTransaction(row.tenant_id, (tx) => tx.rows<ProjectFactRow>(
+                `SELECT state, graph_key, graph_epoch, privacy_revision::text AS privacy_revision
+                   FROM threadline_memory.projects WHERE tenant_id = $1 AND id = $2`,
+                [row.tenant_id, row.project_id]));
+              const project = projects[0];
+              if (!project || project.graph_epoch !== own.graphEpoch) {
+                throw new ThreadlineError('authority_unavailable', 'Graph fence project identity is unavailable.');
+              }
+              let fenced: ProjectRootView;
+              if (own.writeGeneration === null) {
+                const target = own.recoveryPrivacyRevision ?? (BigInt(project.privacy_revision) + 1n).toString();
+                if (BigInt(target) > 9223372036854775807n) {
+                  throw new ThreadlineError('authority_unavailable', 'The legacy graph fence counter is exhausted.');
+                }
+                current.submission = await reserveRecoveryPrivacyRevision(db, own, target);
+                fenced = await fenceLegacyProjectWrites(graph, {
+                  projectRootId: projectRootIdFor(row.project_id), tenantId: row.tenant_id,
+                  projectId: row.project_id, graphEpoch: own.graphEpoch, writeGeneration: '0',
+                  expectedPrivacyRevision: (BigInt(target) - 1n).toString(), privacyRevision: target,
+                  graphSchemaVersion: MEMORY_GRAPH_SCHEMA_VERSION, nowMs: clock().getTime(),
+                });
+                if (fenced.graphEpoch !== own.graphEpoch || fenced.privacyRevision !== target) {
+                  throw new ThreadlineError('authority_unavailable', 'Legacy graph fencing was not established.');
+                }
+              } else {
+                fenced = await fenceProjectWrites(graph, {
+                  projectRootId: projectRootIdFor(row.project_id), tenantId: row.tenant_id,
+                  projectId: row.project_id, graphEpoch: own.graphEpoch,
+                  writeGeneration: own.writeGeneration, privacyRevision: project.privacy_revision,
+                  graphSchemaVersion: MEMORY_GRAPH_SCHEMA_VERSION, nowMs: clock().getTime(),
+                });
+                if (fenced.graphEpoch !== own.graphEpoch || fenced.writeGeneration === null ||
+                    BigInt(fenced.writeGeneration) <= BigInt(own.writeGeneration)) {
+                  throw new ThreadlineError('authority_unavailable', 'Graph fencing was not established.');
+                }
+              }
+              // An old mutation may have committed before the fence. Re-read only
+              // after its acknowledged advancement before deciding no effect.
+              const afterFence = await readOperationReceipt(graph, receiptIdFor(own.graphEpoch, row.id));
+              if (afterFence !== null && !exactReceipt(row, afterFence)) {
+                throw new ThreadlineError('authority_unavailable', 'The fenced graph receipt does not match its operation.');
+              }
+              current.uncertain = false;
+              if (exactReceipt(row, afterFence)) {
+                await settleCommitted(row, operation.leaseToken, afterFence.eventSeq,
+                  afterFence.outcome, afterFence.committedAtMs);
+              } else {
+                await retry(row, operation.leaseToken, 'graph_submission_fenced', 'pending',
+                  'Earlier graph execution was fenced; retry the same operation under current authority.');
+              }
+              return;
+            }
+            if (markers.length > 0) {
+              await retry(row, operation.leaseToken, 'graph_submission_unresolved', 'pending',
+                'Another unresolved graph submission blocks project writes.');
+              return;
+            }
+            if (!(await renewLease(row, operation.leaseToken))) return;
+            const current = execution.getStore()!;
+            const graph = deps.graphStore.graph(await resolveGraphKey(row));
+            const before = await readProjectRoot(graph, projectRootIdFor(row.project_id));
+            const writeGeneration = before === null ? '0' : before.writeGeneration;
+            if (writeGeneration === null) {
+              throw new ThreadlineError('authority_unavailable', 'The graph write generation is unreadable.');
+            }
+            current.submission = await beginGraphSubmission(db, {
+              tenantId: row.tenant_id, projectId: row.project_id, operationId: row.id,
+              ownerToken: operation.leaseToken, graphEpoch: row.graph_epoch, requestDigest: row.request_digest,
+              writeGeneration, recoveryPrivacyRevision: null,
+            });
+            await db.withTenantTransaction(row.tenant_id, async (tx) => {
+              const authorityDb = graphTransactionDatabase(db, tx, row.tenant_id);
+              await execution.run({ db: authorityDb, submission: current.submission, uncertain: false }, async () => {
+                const actors = await tx.rows<{
+                  actor_token_id: string | null; actor_principal_id: string; source_kind: string | null;
+                }>(`SELECT actor_token_id, actor_principal_id, payload->>'sourceKind' AS source_kind
+                      FROM threadline_memory.operations
+                     WHERE tenant_id = $1 AND project_id = $2 AND id = $3
+                       AND state = 'leased' AND lease_token = $4 FOR UPDATE`,
+                  [row.tenant_id, row.project_id, row.id, operation.leaseToken]);
+                const actor = actors[0];
+                if (!actor?.actor_token_id) {
+                  await settleRefused(row, operation.leaseToken, 'authority_unavailable',
+                    'The recorded intent has no current credential authority.');
+                  return;
+                }
+                try {
+                  const authority = await lockReleaseAuthority(tx, {
+                    tenantId: row.tenant_id, projectId: row.project_id,
+                    tokenId: actor.actor_token_id, principalId: actor.actor_principal_id,
+                  });
+                  execution.getStore()!.revalidateAuthority = () => lockReleaseAuthority(tx, {
+                    tenantId: row.tenant_id, projectId: row.project_id,
+                    tokenId: actor.actor_token_id!, principalId: actor.actor_principal_id,
+                  });
+                  const audit = row.kind === 'source.append' && actor.source_kind === 'context_manifest';
+                  if ((audit && authority.tokenKind === 'producer' && authority.nativeSessionId === null) ||
+                      (!audit && (authority.tokenKind === 'reader' || authority.tokenKind === 'producer' ||
+                        !['owner', 'member'].includes(authority.role ?? '')))) {
+                    await settleRefused(row, operation.leaseToken, 'scope_denied',
+                      'Current authority no longer permits the recorded graph change.');
+                    return;
+                  }
+                } catch (error) {
+                  if (error instanceof ThreadlineError &&
+                      ['scope_denied', 'unauthenticated', 'not_found'].includes(error.code)) {
+                    await settleRefused(row, operation.leaseToken, 'scope_denied',
+                      'Current authority no longer permits the recorded graph change.');
+                    return;
+                  }
+                  throw error;
+                }
+                await deliverOperation(operation);
+              });
+            });
+          } catch (error) {
+            const current = execution.getStore()!;
+            if (current.submission) {
+              // The marker survives even if this pinned connection no longer answers.
+              current.uncertain = true;
+              await db.withTenantTransaction(row.tenant_id,
+                (tx) => markGraphSubmissionUncertain(tx, current.submission!)).catch(() => undefined);
+            }
+            recordError('worker_operation', error, { operationId: row.id, kind: row.kind });
+            await retry(row, operation.leaseToken, 'worker_error', current.submission ? 'ambiguous' : 'pending',
+              'The worker could not establish its outcome; unresolved submissions remain blocked.').catch(() => undefined);
+          }
+        }));
     } catch (error) {
       recordError('worker_operation', error, { operationId: row.id, kind: row.kind });
       await retry(
@@ -363,7 +563,8 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
     // rounded value cannot be converted back.
     const privacyRevision = row.privacy_revision;
 
-    const ready = await ensureGraphReady(project.graph_key);
+    const current = execution.getStore()!;
+    const ready = await graphWrite(() => ensureGraphReady(project.graph_key));
     if (!ready) {
       await retry(
         row,
@@ -379,15 +580,16 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
     const nowMs = clock().getTime();
     let root: ProjectRootView;
     try {
-      root = await ensureProjectRoot(graph, {
+      root = await graphWrite(() => ensureProjectRoot(graph, {
         projectRootId,
         tenantId: row.tenant_id,
         projectId: row.project_id,
         graphEpoch: project.graph_epoch,
+        writeGeneration: current.submission!.writeGeneration!,
         privacyRevision: project.privacy_revision,
         nowMs,
         graphSchemaVersion: MEMORY_GRAPH_SCHEMA_VERSION,
-      });
+      }));
     } catch (error) {
       await retryAfterGraphFailure(operation, error);
       return;
@@ -419,16 +621,11 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
       return;
     }
 
-    // The graph call may take time; re-take the lease so a second worker cannot
-    // claim the same operation mid-commit. Losing the lease means another
-    // worker owns the operation now, so this one stops without a write.
+    // The authority transaction locks the operation row against reassignment;
+    // renew its lease and require SQL acknowledgement before another graph call.
     if (!(await renewLease(row, leaseToken))) {
-      logger.log({
-        level: 'warn',
-        message: 'Lease was lost before the graph commit; abandoning this claim unsettled.',
-        fields: { operationId: row.id, kind: row.kind },
-      });
-      return;
+      current.uncertain = true;
+      throw new ThreadlineError('authority_unavailable', 'Graph submission lost its operation lease.');
     }
 
     const receiptId = receiptIdFor(graphEpoch, row.id);
@@ -437,7 +634,8 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
       await retryAfterGraphFailure(operation, reconcile.error);
       return;
     }
-    if (reconcile.receipt !== null && reconcile.receipt.eventSeq !== null) {
+    if (exactReceipt(row, reconcile.receipt)) {
+      current.uncertain = false;
       await settleCommitted(
         row,
         leaseToken,
@@ -453,9 +651,17 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
       return;
     }
 
+    if (reconcile.receipt !== null) {
+      current.uncertain = true;
+      await retry(row, leaseToken, 'graph_receipt_mismatch', 'ambiguous',
+        'The graph receipt does not exactly match the durable operation; submission remains blocked.');
+      return;
+    }
+
     const context: CommitTimeContext = {
       projectRootId,
       graphEpoch,
+      writeGeneration: current.submission!.writeGeneration!,
       privacyRevision,
       receiptId,
       eventIdPrefix: eventIdPrefixFor(graphEpoch),
@@ -483,7 +689,16 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
 
     let eventSeq: DecimalString | null = null;
     try {
-      eventSeq = await plan.commit(graph, context);
+      const fresh = await prepareDelivery(row);
+      if (fresh.prepared === 'outcome') {
+        await settleOutcome(row, leaseToken, fresh.outcome);
+        return;
+      }
+      if (!(await renewLease(row, leaseToken))) {
+        current.uncertain = true;
+        throw new ThreadlineError('authority_unavailable', 'Graph submission lost its operation lease.');
+      }
+      eventSeq = await graphWrite(() => fresh.plan.commit(graph, context));
     } catch (error) {
       await retryAfterGraphFailure(operation, error);
       return;
@@ -506,7 +721,7 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
       await retryAfterGraphFailure(operation, after.error);
       return;
     }
-    if (after.receipt !== null && after.receipt.eventSeq !== null) {
+    if (exactReceipt(row, after.receipt)) {
       await settleCommitted(
         row,
         leaseToken,
@@ -514,6 +729,12 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
         after.receipt.outcome ?? 'committed',
         after.receipt.committedAtMs ?? clock().getTime(),
       );
+      return;
+    }
+    if (after.receipt !== null) {
+      current.uncertain = true;
+      await retry(row, leaseToken, 'graph_receipt_mismatch', 'ambiguous',
+        'The graph receipt does not exactly match the durable operation; submission remains blocked.');
       return;
     }
     const rootAfter = await readRootSafely(graph, projectRootId);
@@ -571,7 +792,7 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
 
   const retryAfterGraphFailure = async (operation: ClaimedOperation, error: unknown): Promise<void> => {
     const { row, leaseToken } = operation;
-    const classification = classifyGraphFailure(error);
+    const classification = execution.getStore()?.uncertain ? 'ambiguous' : classifyGraphFailure(error);
     logger.log({
       level: 'warn',
       message: 'Graph commit did not complete.',
@@ -587,7 +808,8 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
       // receipt already landed or an event sequence was taken concurrently.
       const graph = deps.graphStore.graph(await resolveGraphKey(row));
       const reconcile = await readReceiptSafely(graph, receiptIdFor(row.graph_epoch, row.id));
-      if (!reconcile.failed && reconcile.receipt !== null && reconcile.receipt.eventSeq !== null) {
+      if (!reconcile.failed && exactReceipt(row, reconcile.receipt)) {
+        execution.getStore()!.uncertain = false;
         await settleCommitted(
           row,
           leaseToken,
@@ -626,7 +848,7 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
   };
 
   const resolveGraphKey = async (row: ClaimedOperationRow): Promise<string> => {
-    const rows = await deps.db.withTenantTransaction(row.tenant_id, (tx) =>
+    const rows = await workerDb().withTenantTransaction(row.tenant_id, (tx) =>
       tx.rows<{ graph_key: string }>(
         'SELECT graph_key FROM threadline_memory.projects WHERE tenant_id = $1 AND id = $2',
         [row.tenant_id, row.project_id],
@@ -656,7 +878,7 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
       }
     | { readonly refusal: PlanOutcomeRefuse }
   > => {
-    const loaded = await deps.db.withTenantTransaction(row.tenant_id, async (tx) => {
+    const loaded = await workerDb().withTenantTransaction(row.tenant_id, async (tx) => {
       const projects = await tx.rows<ProjectFactRow>(
         `SELECT state, graph_key, graph_epoch, privacy_revision::text AS privacy_revision
            FROM threadline_memory.projects
@@ -721,11 +943,11 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
     if (sourceIds.length === 0) {
       return [];
     }
-    return deps.db.withTenantTransaction(row.tenant_id, (tx) =>
+    return workerDb().withTenantTransaction(row.tenant_id, (tx) =>
       tx.rows<SourceFileFactsRow>(
         `SELECT id, kind, digest, byte_size::text AS byte_size, storage_key, availability, visibility
            FROM threadline_memory.sources
-          WHERE tenant_id = $1 AND project_id = $2 AND id = ANY($3::uuid[])`,
+          WHERE tenant_id = $1 AND project_id = $2 AND id = ANY($3::uuid[]) AND release_state = 'eligible'`,
         [row.tenant_id, row.project_id, [...sourceIds]],
       ),
     );
@@ -857,11 +1079,11 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
     documentSourceId: string,
     evidenceIds: readonly string[],
   ): Promise<PlanOutcome | null> => {
-    const loaded = await deps.db.withTenantTransaction(row.tenant_id, async (tx) => {
+    const loaded = await workerDb().withTenantTransaction(row.tenant_id, async (tx) => {
       const evidence = await tx.rows<EvidenceFactsRow>(
         `SELECT id, availability, visibility
            FROM threadline_memory.sources
-          WHERE tenant_id = $1 AND project_id = $2 AND id = ANY($3::uuid[])
+          WHERE tenant_id = $1 AND project_id = $2 AND id = ANY($3::uuid[]) AND release_state = 'eligible'
             AND (visibility = 'project' OR owner_principal_id = $4)`,
         [row.tenant_id, row.project_id, [...evidenceIds], actorPrincipalId],
       );
@@ -1012,7 +1234,7 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
     row: ClaimedOperationRow,
     sourceIds: readonly string[],
   ): Promise<EpisodeEvidenceRow[]> =>
-    deps.db.withTenantTransaction(row.tenant_id, (tx) =>
+    workerDb().withTenantTransaction(row.tenant_id, (tx) =>
       tx.rows<EpisodeEvidenceRow>(
         `SELECT s.id, s.kind, s.completeness, s.availability, s.visibility,
                 s.producer_principal_id, p.kind AS producer_kind, o.state AS anchor_state
@@ -1021,7 +1243,7 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
            LEFT JOIN threadline_memory.operations o
                   ON o.tenant_id = s.tenant_id AND o.project_id = s.project_id
                  AND o.kind = 'source.append' AND o.intent_source_id = s.id
-          WHERE s.tenant_id = $1 AND s.project_id = $2 AND s.id = ANY($3::uuid[])`,
+          WHERE s.tenant_id = $1 AND s.project_id = $2 AND s.id = ANY($3::uuid[]) AND s.release_state = 'eligible'`,
         [row.tenant_id, row.project_id, [...sourceIds]],
       ),
     );
@@ -1088,7 +1310,7 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
     versionId: string | null,
     expectedHead: string | null,
   ): Promise<PendingIntentRow[]> =>
-    deps.db.withTenantTransaction(row.tenant_id, (tx) =>
+    workerDb().withTenantTransaction(row.tenant_id, (tx) =>
       tx.rows<PendingIntentRow>(PENDING_MEMORY_INTENTS_SQL, [
         row.tenant_id,
         row.project_id,
@@ -1103,7 +1325,7 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
     row: ClaimedOperationRow,
     versionId: string,
   ): Promise<PendingIntentRow | null> => {
-    const rows = await deps.db.withTenantTransaction(row.tenant_id, (tx) =>
+    const rows = await workerDb().withTenantTransaction(row.tenant_id, (tx) =>
       tx.rows<PendingIntentRow>(LATEST_VERSION_INTENT_SQL, [row.tenant_id, row.project_id, versionId]),
     );
     return rows[0] ?? null;
@@ -1114,7 +1336,7 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
     taskId: string,
     memoryId: string,
   ): Promise<PendingIntentRow[]> =>
-    deps.db.withTenantTransaction(row.tenant_id, (tx) =>
+    workerDb().withTenantTransaction(row.tenant_id, (tx) =>
       tx.rows<PendingIntentRow>(PENDING_TASK_INTENTS_SQL, [
         row.tenant_id,
         row.project_id,
@@ -1172,6 +1394,7 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
             projectRootId: context.projectRootId,
             graphEpoch: context.graphEpoch,
             privacyRevision: context.privacyRevision,
+            writeGeneration: context.writeGeneration,
             receiptId: context.receiptId,
             eventIdPrefix: context.eventIdPrefix,
             operationId: context.operationId,
@@ -1231,6 +1454,7 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
             projectRootId: context.projectRootId,
             graphEpoch: context.graphEpoch,
             privacyRevision: context.privacyRevision,
+            writeGeneration: context.writeGeneration,
             receiptId: context.receiptId,
             eventIdPrefix: context.eventIdPrefix,
             operationId: context.operationId,
@@ -1364,6 +1588,7 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
             projectRootId: context.projectRootId,
             graphEpoch: context.graphEpoch,
             privacyRevision: context.privacyRevision,
+            writeGeneration: context.writeGeneration,
             receiptId: context.receiptId,
             eventIdPrefix: context.eventIdPrefix,
             operationId: context.operationId,
@@ -1545,6 +1770,7 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
             projectRootId: context.projectRootId,
             graphEpoch: context.graphEpoch,
             privacyRevision: context.privacyRevision,
+            writeGeneration: context.writeGeneration,
             receiptId: context.receiptId,
             eventIdPrefix: context.eventIdPrefix,
             operationId: context.operationId,
@@ -1695,6 +1921,7 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
             projectRootId: context.projectRootId,
             graphEpoch: context.graphEpoch,
             privacyRevision: context.privacyRevision,
+            writeGeneration: context.writeGeneration,
             receiptId: context.receiptId,
             eventIdPrefix: context.eventIdPrefix,
             operationId: context.operationId,
@@ -1866,6 +2093,7 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
             projectRootId: context.projectRootId,
             graphEpoch: context.graphEpoch,
             privacyRevision: context.privacyRevision,
+            writeGeneration: context.writeGeneration,
             receiptId: context.receiptId,
             eventIdPrefix: context.eventIdPrefix,
             operationId: context.operationId,
@@ -2011,6 +2239,7 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
             projectRootId: context.projectRootId,
             graphEpoch: context.graphEpoch,
             privacyRevision: context.privacyRevision,
+            writeGeneration: context.writeGeneration,
             receiptId: context.receiptId,
             eventIdPrefix: context.eventIdPrefix,
             operationId: context.operationId,
@@ -2078,7 +2307,7 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
   };
 
   const renewLease = async (row: ClaimedOperationRow, leaseToken: string): Promise<boolean> => {
-    const updated = await deps.db.withTenantTransaction(row.tenant_id, (tx) =>
+    const updated = await workerDb().withTenantTransaction(row.tenant_id, (tx) =>
       tx.rows<{ id: string }>(
         `UPDATE threadline_memory.operations
             SET lease_expires_at = now() + make_interval(secs => $5)
@@ -2091,6 +2320,35 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
     return updated.length > 0;
   };
 
+  /** Only server-attested safe creations become releasable; acceptance never
+   * upgrades the provenance of an old memory identity or version. */
+  const qualifySafeCreation = async (tx: TxClient, row: ClaimedOperationRow): Promise<void> => {
+    if (!['memory.propose', 'memory.correct', 'memory.episode.record', 'task.create'].includes(row.kind)) return;
+    await tx.rows(
+      `INSERT INTO threadline_memory.release_safety
+         (tenant_id, project_id, resource_kind, resource_id, state, sanitizer_version)
+       SELECT o.tenant_id, o.project_id, resources.kind, resources.id, 'eligible', $4
+         FROM threadline_memory.operations o
+         LEFT JOIN threadline_memory.sources s
+           ON s.tenant_id = o.tenant_id AND s.project_id = o.project_id AND s.id = o.intent_source_id
+         CROSS JOIN LATERAL (
+           SELECT 'version'::text AS kind, o.intent_version_id AS id
+             WHERE o.kind IN ('memory.propose', 'memory.correct', 'memory.episode.record')
+           UNION ALL
+           SELECT 'memory'::text, o.intent_memory_id
+             WHERE o.kind IN ('memory.propose', 'memory.episode.record') AND o.payload->>'memoryMode' = 'create'
+           UNION ALL
+           SELECT 'task'::text, o.intent_task_id
+             WHERE o.kind = 'task.create'
+         ) resources
+        WHERE o.tenant_id = $1 AND o.project_id = $2 AND o.id = $3 AND o.state = 'committed'
+          AND resources.id IS NOT NULL
+          AND ((o.kind = 'task.create' AND o.payload->>'serverSafeIngress' = $4)
+            OR (o.kind <> 'task.create' AND s.release_state = 'eligible' AND s.sanitizer_version = $4))
+       ON CONFLICT (tenant_id, project_id, resource_kind, resource_id) DO NOTHING`,
+      [row.tenant_id, row.project_id, row.id, SANITIZER_VERSION_V3]);
+  };
+
   const settleCommitted = async (
     row: ClaimedOperationRow,
     leaseToken: string,
@@ -2098,8 +2356,8 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
     outcome: string,
     committedAtMs: number,
   ): Promise<void> => {
-    const updated = await deps.db.withTenantTransaction(row.tenant_id, (tx) =>
-      tx.rows<{ id: string }>(
+    const updated = await settlementTransaction(row, async (tx) => {
+      const settled = await tx.rows<{ id: string }>(
         `UPDATE threadline_memory.operations
             SET state = 'committed',
                 receipt_graph_epoch = $4,
@@ -2122,8 +2380,10 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
           new Date(committedAtMs),
           leaseToken,
         ],
-      ),
-    );
+      );
+      if (settled.length === 1) await qualifySafeCreation(tx, row);
+      return settled;
+    });
     lastSettledAtMs = clock().getTime();
     if (updated.length === 0) {
       // The graph receipt exists; the operation record will be settled by
@@ -2142,7 +2402,7 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
     errorCode: string,
     errorDetail: string,
   ): Promise<void> => {
-    const updated = await deps.db.withTenantTransaction(row.tenant_id, (tx) =>
+    const updated = await settlementTransaction(row, (tx) =>
       tx.rows<{ id: string }>(
         `UPDATE threadline_memory.operations
             SET state = 'rejected',
@@ -2180,7 +2440,7 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
   ): Promise<void> => {
     const delayMs = Math.min(RETRY_BASE_MS * 2 ** Math.max(0, row.attempts - 1), RETRY_MAX_MS);
     const nextAttemptAt = new Date(clock().getTime() + delayMs);
-    const updated = await deps.db.withTenantTransaction(row.tenant_id, (tx) =>
+    const updated = await settlementTransaction(row, (tx) =>
       tx.rows<{ id: string }>(
         `UPDATE threadline_memory.operations
             SET state = $4,
@@ -2518,6 +2778,7 @@ type PlanOutcome = PlanOutcomeRefuse | PlanOutcomeRetry;
 interface CommitTimeContext {
   readonly projectRootId: string;
   readonly graphEpoch: string;
+  readonly writeGeneration: DecimalString;
   readonly privacyRevision: string;
   readonly receiptId: string;
   readonly eventIdPrefix: string;
@@ -2599,6 +2860,15 @@ function classifyGraphFailure(error: unknown): 'constraint' | 'not_submitted' | 
     return 'not_submitted';
   }
   return 'ambiguous';
+}
+
+function exactReceipt(
+  row: ClaimedOperationRow,
+  receipt: OperationReceiptView | null,
+): receipt is OperationReceiptView & { eventSeq: DecimalString; outcome: string; committedAtMs: number } {
+  return receipt !== null && receipt.operationId === row.id &&
+    receipt.graphEpoch === row.graph_epoch && receipt.requestDigest === row.request_digest &&
+    receipt.eventSeq !== null && receipt.outcome === 'committed' && receipt.committedAtMs !== null;
 }
 
 type ReceiptAttempt =

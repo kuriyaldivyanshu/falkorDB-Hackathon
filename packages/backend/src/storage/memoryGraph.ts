@@ -35,6 +35,7 @@ export interface ProjectRootFacts {
   readonly tenantId: string;
   readonly projectId: string;
   readonly graphEpoch: string;
+  readonly writeGeneration: DecimalString;
   /** Canonical decimal string; a 64-bit counter never crosses as a JS number. */
   readonly privacyRevision: DecimalString;
   readonly nowMs: number;
@@ -43,6 +44,7 @@ export interface ProjectRootFacts {
 
 export interface ProjectRootView {
   readonly graphEpoch: string | null;
+  readonly writeGeneration: DecimalString | null;
   readonly privacyRevision: DecimalString | null;
   readonly state: string | null;
   readonly eventHead: DecimalString | null;
@@ -61,6 +63,7 @@ export interface OperationReceiptView {
 export interface SourceAnchorCommit {
   readonly projectRootId: string;
   readonly graphEpoch: string;
+  readonly writeGeneration: DecimalString;
   readonly privacyRevision: DecimalString;
   readonly receiptId: string;
   readonly eventIdPrefix: string;
@@ -85,13 +88,67 @@ export interface SourceAnchorCommit {
 const ENSURE_PROJECT_ROOT = `MERGE (p:Entity:ProjectRoot {id: $projectRootId})
 ON CREATE SET p.tenant_id = $tenantId, p.project_id = $projectId, p.graph_epoch = $graphEpoch,
               p.privacy_revision = toInteger($privacyRevision), p.state = 'active', p.event_head = 0,
-              p.graph_schema_version = $graphSchemaVersion, p.created_at_ms = $nowMs
-RETURN p.graph_epoch AS graph_epoch, toString(p.privacy_revision) AS privacy_revision,
+              p.graph_schema_version = $graphSchemaVersion, p.created_at_ms = $nowMs, p.write_generation = 0
+WITH p
+WHERE toString(coalesce(p.write_generation, 0)) = $writeGeneration
+RETURN p.graph_epoch AS graph_epoch, toString(coalesce(p.write_generation, 0)) AS write_generation,
+       toString(p.privacy_revision) AS privacy_revision,
        p.state AS state, toString(p.event_head) AS event_head, p.graph_schema_version AS graph_schema_version`;
 
 const READ_PROJECT_ROOT = `MATCH (p:Entity:ProjectRoot {id: $projectRootId})
-RETURN p.graph_epoch AS graph_epoch, toString(p.privacy_revision) AS privacy_revision,
+RETURN p.graph_epoch AS graph_epoch, toString(coalesce(p.write_generation, 0)) AS write_generation,
+       toString(p.privacy_revision) AS privacy_revision,
        p.state AS state, toString(p.event_head) AS event_head, p.graph_schema_version AS graph_schema_version`;
+
+/** Acknowledged generation advancement orders every older guarded mutation.
+ * Repeating or delayed fences never advance a newer generation: they only move
+ * their exact expected generation once. Missing roots are initialized at zero;
+ * late generation-zero initialization cannot change an existing fenced root.
+ */
+const FENCE_PROJECT_WRITES = `MERGE (p:Entity:ProjectRoot {id: $projectRootId})
+ON CREATE SET p.tenant_id = $tenantId, p.project_id = $projectId, p.graph_epoch = $graphEpoch,
+              p.privacy_revision = toInteger($privacyRevision), p.state = 'active', p.event_head = 0,
+              p.graph_schema_version = $graphSchemaVersion, p.created_at_ms = $nowMs, p.write_generation = 0
+WITH p
+WHERE p.tenant_id = $tenantId AND p.project_id = $projectId AND p.graph_epoch = $graphEpoch
+  AND coalesce(p.write_generation, 0) >= toInteger($writeGeneration)
+  AND coalesce(p.write_generation, 0) < 9223372036854775807
+SET p.write_generation = CASE WHEN coalesce(p.write_generation, 0) = toInteger($writeGeneration)
+                             THEN coalesce(p.write_generation, 0) + 1 ELSE p.write_generation END
+RETURN p.graph_epoch AS graph_epoch, toString(p.write_generation) AS write_generation,
+       toString(p.privacy_revision) AS privacy_revision, p.state AS state,
+       toString(p.event_head) AS event_head, p.graph_schema_version AS graph_schema_version`;
+
+/** No receipt absence/timeout can substitute for this acknowledged graph fence. */
+export async function fenceProjectWrites(graph: Graph, facts: ProjectRootFacts): Promise<ProjectRootView> {
+  const reply = await graph.query<Record<string, unknown>>(FENCE_PROJECT_WRITES, { params: { ...facts } });
+  const row = reply.data?.[0];
+  return row === undefined ? emptyRootView() : toProjectRootView(row);
+}
+
+/** Legacy requests already guard privacy_revision. A durable recovery target
+ * advances that existing guard without changing graph epoch or event sequence.
+ */
+const FENCE_LEGACY_PROJECT_WRITES = `MERGE (p:Entity:ProjectRoot {id: $projectRootId})
+ON CREATE SET p.tenant_id = $tenantId, p.project_id = $projectId, p.graph_epoch = $graphEpoch,
+              p.privacy_revision = toInteger($expectedPrivacyRevision), p.state = 'active', p.event_head = 0,
+              p.graph_schema_version = $graphSchemaVersion, p.created_at_ms = $nowMs, p.write_generation = 0
+WITH p
+WHERE p.tenant_id = $tenantId AND p.project_id = $projectId AND p.graph_epoch = $graphEpoch
+  AND (toString(p.privacy_revision) = $expectedPrivacyRevision OR toString(p.privacy_revision) = $privacyRevision)
+SET p.privacy_revision = toInteger($privacyRevision)
+RETURN p.graph_epoch AS graph_epoch, toString(coalesce(p.write_generation, 0)) AS write_generation,
+       toString(p.privacy_revision) AS privacy_revision, p.state AS state,
+       toString(p.event_head) AS event_head, p.graph_schema_version AS graph_schema_version`;
+
+export async function fenceLegacyProjectWrites(
+  graph: Graph,
+  facts: ProjectRootFacts & { readonly expectedPrivacyRevision: DecimalString },
+): Promise<ProjectRootView> {
+  const reply = await graph.query<Record<string, unknown>>(FENCE_LEGACY_PROJECT_WRITES, { params: { ...facts } });
+  const row = reply.data?.[0];
+  return row === undefined ? emptyRootView() : toProjectRootView(row);
+}
 
 const READ_OPERATION_RECEIPT = `MATCH (r:Entity:OperationReceipt {id: $receiptId})
 RETURN r.operation_id AS operation_id, r.outcome AS outcome, toString(r.event_seq) AS event_seq,
@@ -115,6 +172,7 @@ RETURN r.operation_id AS operation_id, r.outcome AS outcome, toString(r.event_se
  */
 const COMMIT_SOURCE_ANCHOR = `MATCH (p:Entity:ProjectRoot {id: $projectRootId})
 WHERE p.graph_epoch = $graphEpoch
+  AND toString(coalesce(p.write_generation, 0)) = $writeGeneration
   AND toString(p.privacy_revision) = $privacyRevision
   AND p.state = 'active'
 OPTIONAL MATCH (existing:Entity:OperationReceipt {id: $receiptId})
@@ -160,6 +218,7 @@ export async function ensureProjectRoot(graph: Graph, facts: ProjectRootFacts): 
       tenantId: facts.tenantId,
       projectId: facts.projectId,
       graphEpoch: facts.graphEpoch,
+      writeGeneration: facts.writeGeneration,
       privacyRevision: facts.privacyRevision,
       graphSchemaVersion: facts.graphSchemaVersion,
       nowMs: facts.nowMs,
@@ -169,10 +228,24 @@ export async function ensureProjectRoot(graph: Graph, facts: ProjectRootFacts): 
   return row === undefined ? emptyRootView() : toProjectRootView(row);
 }
 
+/** GRAPH.RO_QUERY deliberately does not create a missing graph key. Its exact
+ * empty-key response proves this read has no rows; network/timeouts and other
+ * engine errors remain failures and cannot establish receipt absence. */
+async function readFromExistingGraph(
+  graph: Graph,
+  statement: string,
+  params: Record<string, string>,
+): Promise<{ data?: Record<string, unknown>[] }> {
+  try {
+    return await graph.roQuery<Record<string, unknown>>(statement, { params });
+  } catch (error) {
+    if (error instanceof Error && error.message === 'ERR Invalid graph operation on empty key') return { data: [] };
+    throw error;
+  }
+}
+
 export async function readProjectRoot(graph: Graph, projectRootId: string): Promise<ProjectRootView | null> {
-  const reply = await graph.roQuery<Record<string, unknown>>(READ_PROJECT_ROOT, {
-    params: { projectRootId },
-  });
+  const reply = await readFromExistingGraph(graph, READ_PROJECT_ROOT, { projectRootId });
   const row = reply.data?.[0];
   return row === undefined ? null : toProjectRootView(row);
 }
@@ -181,9 +254,7 @@ export async function readOperationReceipt(
   graph: Graph,
   receiptId: string,
 ): Promise<OperationReceiptView | null> {
-  const reply = await graph.roQuery<Record<string, unknown>>(READ_OPERATION_RECEIPT, {
-    params: { receiptId },
-  });
+  const reply = await readFromExistingGraph(graph, READ_OPERATION_RECEIPT, { receiptId });
   const row = reply.data?.[0];
   if (row === undefined) {
     return null;
@@ -211,6 +282,7 @@ export async function commitSourceAnchor(
     params: {
       projectRootId: commit.projectRootId,
       graphEpoch: commit.graphEpoch,
+      writeGeneration: commit.writeGeneration,
       privacyRevision: commit.privacyRevision,
       receiptId: commit.receiptId,
       eventIdPrefix: commit.eventIdPrefix,
@@ -243,6 +315,7 @@ export async function commitSourceAnchor(
 export interface GraphCommitBase {
   readonly projectRootId: string;
   readonly graphEpoch: string;
+  readonly writeGeneration: DecimalString;
   readonly privacyRevision: DecimalString;
   readonly receiptId: string;
   readonly eventIdPrefix: string;
@@ -255,6 +328,7 @@ export interface GraphCommitBase {
 
 const COMMIT_TASK_CREATE = `MATCH (p:Entity:ProjectRoot {id: $projectRootId})
 WHERE p.graph_epoch = $graphEpoch
+  AND toString(coalesce(p.write_generation, 0)) = $writeGeneration
   AND toString(p.privacy_revision) = $privacyRevision
   AND p.state = 'active'
 OPTIONAL MATCH (existing:Entity:OperationReceipt {id: $receiptId})
@@ -316,6 +390,7 @@ export async function commitTaskCreate(graph: Graph, commit: TaskCreateCommit): 
 
 const COMMIT_MEMORY_PROPOSE = `MATCH (p:Entity:ProjectRoot {id: $projectRootId})
 WHERE p.graph_epoch = $graphEpoch
+  AND toString(coalesce(p.write_generation, 0)) = $writeGeneration
   AND toString(p.privacy_revision) = $privacyRevision
   AND p.state = 'active'
 OPTIONAL MATCH (existing:Entity:OperationReceipt {id: $receiptId})
@@ -467,6 +542,7 @@ export async function commitMemoryPropose(
 
 const COMMIT_MEMORY_ACCEPT = `MATCH (p:Entity:ProjectRoot {id: $projectRootId})
 WHERE p.graph_epoch = $graphEpoch
+  AND toString(coalesce(p.write_generation, 0)) = $writeGeneration
   AND toString(p.privacy_revision) = $privacyRevision
   AND p.state = 'active'
 OPTIONAL MATCH (existing:Entity:OperationReceipt {id: $receiptId})
@@ -534,6 +610,7 @@ export async function commitMemoryAccept(
 
 const COMMIT_MEMORY_CORRECT = `MATCH (p:Entity:ProjectRoot {id: $projectRootId})
 WHERE p.graph_epoch = $graphEpoch
+  AND toString(coalesce(p.write_generation, 0)) = $writeGeneration
   AND toString(p.privacy_revision) = $privacyRevision
   AND p.state = 'active'
 OPTIONAL MATCH (existing:Entity:OperationReceipt {id: $receiptId})
@@ -667,6 +744,7 @@ export async function commitMemoryCorrect(
 
 const COMMIT_TASK_REQUIRE = `MATCH (p:Entity:ProjectRoot {id: $projectRootId})
 WHERE p.graph_epoch = $graphEpoch
+  AND toString(coalesce(p.write_generation, 0)) = $writeGeneration
   AND toString(p.privacy_revision) = $privacyRevision
   AND p.state = 'active'
 OPTIONAL MATCH (existing:Entity:OperationReceipt {id: $receiptId})
@@ -795,6 +873,8 @@ export async function readTaskRequirementHeadRows(
 const READ_MEMORY_HEAD_ROWS_TASK = `MATCH (p:Entity:ProjectRoot {id: $projectRootId})-[:HAS_TASK]->(t:Entity:Task {id: $taskId})-[:REQUIRES]->(m:Entity:Memory)
 WHERE ($kind IS NULL OR m.kind = $kind)
   AND ($memoryId IS NULL OR m.id = $memoryId)
+  AND m.id > $afterMemoryId
+WITH DISTINCT m ORDER BY m.id ASC LIMIT $limitPlusOne
 OPTIONAL MATCH (m)-[cur:CURRENT]->(curv:Entity:MemoryVersion)
 OPTIONAL MATCH (m)-[:HAS_VERSION]->(cand:Entity:MemoryVersion)
 WITH m, curv, collect(DISTINCT cand) AS cands
@@ -805,12 +885,13 @@ RETURN m.id AS memory_id, m.kind AS kind, curv.id AS current_version_id,
        curv.kind AS current_kind,
        [c IN cands WHERE c.acceptance = 'proposed' | c.id] AS candidate_version_ids,
        m.created_at_ms AS created_at_ms
-ORDER BY created_at_ms DESC, memory_id ASC
-LIMIT $limitPlusOne`;
+ORDER BY memory_id ASC, current_version_id ASC`;
 
 const READ_MEMORY_HEAD_ROWS_PROJECT = `MATCH (p:Entity:ProjectRoot {id: $projectRootId})-[:HAS_MEMORY]->(m:Entity:Memory)
 WHERE ($kind IS NULL OR m.kind = $kind)
   AND ($memoryId IS NULL OR m.id = $memoryId)
+  AND m.id > $afterMemoryId
+WITH DISTINCT m ORDER BY m.id ASC LIMIT $limitPlusOne
 OPTIONAL MATCH (m)-[cur:CURRENT]->(curv:Entity:MemoryVersion)
 OPTIONAL MATCH (m)-[:HAS_VERSION]->(cand:Entity:MemoryVersion)
 WITH m, curv, collect(DISTINCT cand) AS cands
@@ -821,8 +902,7 @@ RETURN m.id AS memory_id, m.kind AS kind, curv.id AS current_version_id,
        curv.kind AS current_kind,
        [c IN cands WHERE c.acceptance = 'proposed' | c.id] AS candidate_version_ids,
        m.created_at_ms AS created_at_ms
-ORDER BY created_at_ms DESC, memory_id ASC
-LIMIT $limitPlusOne`;
+ORDER BY memory_id ASC, current_version_id ASC`;
 
 export interface MemoryHeadRow {
   readonly memory_id: string | null;
@@ -844,6 +924,7 @@ export async function readScopedMemoryHeadRows(
     readonly kind: string | null;
     readonly focus: string | null;
     readonly limitPlusOne: number;
+    readonly afterMemoryId?: string;
   },
 ): Promise<MemoryHeadRow[]> {
   const statement = params.taskId === null ? READ_MEMORY_HEAD_ROWS_PROJECT : READ_MEMORY_HEAD_ROWS_TASK;
@@ -855,6 +936,7 @@ export async function readScopedMemoryHeadRows(
       kind: params.kind,
       focus: params.focus,
       limitPlusOne: params.limitPlusOne,
+      afterMemoryId: params.afterMemoryId ?? '',
     },
   });
   return (reply.data ?? []).map((row) => ({
@@ -1119,12 +1201,13 @@ function asStringList(value: unknown): string[] {
 }
 
 function emptyRootView(): ProjectRootView {
-  return { graphEpoch: null, privacyRevision: null, state: null, eventHead: null, graphSchemaVersion: null };
+  return { graphEpoch: null, writeGeneration: null, privacyRevision: null, state: null, eventHead: null, graphSchemaVersion: null };
 }
 
 function toProjectRootView(row: Record<string, unknown>): ProjectRootView {
   return {
     graphEpoch: asString(row.graph_epoch),
+    writeGeneration: asDecimal(row.write_generation),
     privacyRevision: asDecimal(row.privacy_revision),
     state: asString(row.state),
     eventHead: asDecimal(row.event_head),

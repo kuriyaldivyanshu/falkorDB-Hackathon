@@ -74,6 +74,7 @@ export interface AuthenticatedCall {
   readonly scope: AuthorizedScope;
   readonly tokenId: string;
   readonly displayLabel: string;
+  readonly scopes?: readonly string[];
   readonly enrollmentId: string | null;
   readonly bindingGeneration: number;
   readonly mcpInstanceId: string | null;
@@ -215,6 +216,7 @@ export function createAuthService(deps: AuthServiceDeps): AuthService {
       const call: AuthenticatedCall = {
         tokenId: row.token_id,
         displayLabel: row.display_label,
+        scopes: row.scopes ?? [],
         enrollmentId: row.enrollment_id,
         bindingGeneration: row.binding_generation,
         mcpInstanceId: row.mcp_instance_id,

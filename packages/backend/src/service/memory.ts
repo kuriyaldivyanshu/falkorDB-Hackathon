@@ -40,6 +40,9 @@ import {
 import type { SqlDatabase } from '../storage/pg.js';
 import { withProjectWriteLock } from '../storage/pg.js';
 import type { AuthenticatedCall } from './auth.js';
+import { requireSafeManualJson, requireSafeManualText, MANUAL_SCANNER_VERSION } from './ingress.js';
+import { encodePageCursor, decodePageCursor } from './cursors.js';
+import { createReleaseService, RELEASE_LIMITS, type ReleaseService } from './release.js';
 import { requirePermission } from './permissions.js';
 import {
   MEMORY_DOCUMENT_MAX_BYTES,
@@ -99,12 +102,14 @@ export interface MemoryServiceDeps {
   readonly db: SqlDatabase;
   readonly files: SourceFileStore;
   readonly graphStore: GraphStore;
+  readonly release?: ReleaseService;
   readonly clock?: () => Date;
   readonly logger?: Logger;
 }
 
 /** Creates scoped memory admission and read operations backed by SQL, source files and the graph. */
 export function createMemoryService(deps: MemoryServiceDeps): MemoryService {
+  const release = deps.release ?? createReleaseService(deps);
   const logger = deps.logger ?? silentLogger;
   const clock = deps.clock ?? (() => new Date());
 
@@ -195,6 +200,10 @@ export function createMemoryService(deps: MemoryServiceDeps): MemoryService {
     },
   ): Promise<MemoryOperationResult> => {
     const now = clock();
+    requireSafeManualJson(intent.document.content);
+    requireSafeManualJson(intent.document.applicability, 'applicability');
+    requireSafeManualJson(intent.document.observedUnder, 'observed_under');
+    if (intent.document.reason) requireSafeManualText(intent.document.reason);
     const documentBytes = Buffer.from(encodeMemoryDocument(intent.document), 'utf8');
     if (documentBytes.byteLength > MEMORY_DOCUMENT_MAX_BYTES) {
       throw new ThreadlineError('invalid_request', 'The memory intent document exceeds the admitted byte bound.');
@@ -262,6 +271,26 @@ export function createMemoryService(deps: MemoryServiceDeps): MemoryService {
           stored.storageKey,
         ],
       );
+      await tx.rows(`UPDATE threadline_memory.sources SET release_state='eligible',sanitizer_version=$4
+        WHERE tenant_id=$1 AND project_id=$2 AND id=$3`, [call.scope.tenantId,projectId,contentSourceId,MANUAL_SCANNER_VERSION]);
+      for (const sourceId of intent.document.sourceIds) await tx.rows(
+        `INSERT INTO threadline_memory.source_links
+         (tenant_id,project_id,parent_source_id,child_source_id,relation)
+         VALUES ($1,$2,$3,$4,'depends_on') ON CONFLICT DO NOTHING`,
+        [call.scope.tenantId,projectId,sourceId,contentSourceId]);
+      const dependencies = [
+        ...intent.document.contradictsVersionIds.map((id) => ({kind:'version',id})),
+        ...(intent.document.content.kind === 'procedural'
+          ? intent.document.content.supportedBy.map((id) => ({kind:'version',id})) : []),
+        ...(intent.document.expectedHead ? [{kind:'version',id:intent.document.expectedHead}] : []),
+        ...(intent.document.originTaskId ? [{kind:'task',id:intent.document.originTaskId}] : []),
+        ...(intent.document.memoryMode === 'attach' ? [{kind:'memory',id:intent.document.memoryId}] : []),
+      ];
+      for (const dependency of dependencies) await tx.rows(
+        `INSERT INTO threadline_memory.release_dependencies
+         (tenant_id,project_id,resource_kind,resource_id,dependency_project_id,dependency_kind,dependency_id)
+         VALUES ($1,$2,'source',$3,$2,$4,$5) ON CONFLICT DO NOTHING`,
+        [call.scope.tenantId,projectId,contentSourceId,dependency.kind,dependency.id]);
       await insertIntent(tx, call.scope.tenantId, projectId, {
         id: contentSourceId,
         kind: 'source.append',
@@ -541,6 +570,7 @@ export function createMemoryService(deps: MemoryServiceDeps): MemoryService {
       requireHumanAuthority(call, 'Explicit memory acceptance');
       requireWriteRole(call);
       const reason = parsed.reason ?? null;
+      if (reason !== null) requireSafeManualText(reason);
       const requestDigest = canonicalDigest({
         kind: 'memory.accept',
         projectId: parsed.projectId,
@@ -617,8 +647,13 @@ export function createMemoryService(deps: MemoryServiceDeps): MemoryService {
 
     async query(call, input): Promise<MemoryQueryResult> {
       requirePermission(call, 'read');
+      const deadline = Date.now() + RELEASE_LIMITS.workMs;
       const parsed = parseContract(memoryQuerySchema, input, 'memory query');
       requireProjectScope(call, parsed.projectId);
+      if (parsed.taskId && !await release.eligible(call, [{ projectId: parsed.projectId, kind: 'task', id: parsed.taskId }], undefined, deadline)) {
+        throw new ThreadlineError('not_found', 'The requested resource does not exist.');
+      }
+      const filterDigest = canonicalDigest({projectId:parsed.projectId,taskId:parsed.taskId??null,kind:parsed.kind??null,focus:parsed.focus??null});
       const graph = requireGraph(call);
       return withGraphRead(async () => {
         await requireActiveProjectRoot(graph, call);
@@ -629,17 +664,24 @@ export function createMemoryService(deps: MemoryServiceDeps): MemoryService {
             taskId: parsed.taskId ?? null,
             memoryId: null,
             kind: parsed.kind ?? null,
-            focus: parsed.focus ?? null,
-            limitPlusOne: limit + 1,
+            focus: null,
+            limitPlusOne: 33,
+            afterMemoryId: decodePageCursor(call, filterDigest, parsed.cursor, ''),
           });
           const grouped = groupHeadRows(rows, parsed.taskId ?? null);
-          const entries = [...grouped.entries()];
-          const page = entries.slice(0, limit);
+          const candidates = [...grouped.entries()].slice(0,32);
+          const eligibility = await release.eligibleMany(call,candidates.map(([id])=>[{projectId:parsed.projectId,kind:'memory' as const,id}]),undefined,deadline);
+          const entries = candidates.filter((_,index)=>eligibility[index]);
+          const page = entries.slice(0,limit);
+          const hasMore = entries.length > limit || grouped.size > 32;
+          const lastId = entries.length > limit ? page.at(-1)?.[0] : candidates.at(-1)?.[0];
+          const nextCursor = hasMore && lastId ? encodePageCursor(call,filterDigest,lastId) : null;
           const details = await loadVersionDetails(graph, page.map(([, row]) => row));
-          const memories = page.map(([memoryId, row]) => assembleMemoryView(memoryId, row, details));
+          let memories = page.map(([memoryId, row]) => assembleMemoryView(memoryId, row, details));
+          if (parsed.focus) memories = memories.filter((view) => JSON.stringify([view.current?.content,...view.candidates.map(v=>v.content)]).toLowerCase().includes(parsed.focus!.toLowerCase()));
           return parseContract(
             memoryQueryResultSchema,
-            { memories, hasMore: entries.length > limit },
+            { memories, hasMore, nextCursor },
             'memory query result',
           );
         };
@@ -650,6 +692,7 @@ export function createMemoryService(deps: MemoryServiceDeps): MemoryService {
     async view(call, projectId, memoryId): Promise<MemoryView> {
       requirePermission(call, 'read');
       requireProjectScope(call, projectId);
+      if (!await release.eligible(call, [{projectId,kind:'memory',id:memoryId}])) throw new ThreadlineError('not_found', 'The requested resource does not exist.');
       const graph = requireGraph(call);
       return withGraphRead(async () => {
         await requireActiveProjectRoot(graph, call);

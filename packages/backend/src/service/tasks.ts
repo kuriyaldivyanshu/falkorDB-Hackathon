@@ -26,6 +26,8 @@ import {
 import type { SqlDatabase } from '../storage/pg.js';
 import { withProjectWriteLock } from '../storage/pg.js';
 import type { AuthenticatedCall } from './auth.js';
+import { requireSafeManualText, MANUAL_SCANNER_VERSION } from './ingress.js';
+import type { ReleaseService } from './release.js';
 import { requirePermission } from './permissions.js';
 import {
   classifyDedupe,
@@ -63,6 +65,7 @@ export interface TaskService {
 export interface TaskServiceDeps {
   readonly db: SqlDatabase;
   readonly graphStore: GraphStore;
+  readonly release: ReleaseService;
   readonly clock?: () => Date;
   readonly logger?: Logger;
 }
@@ -134,6 +137,8 @@ export function createTaskService(deps: TaskServiceDeps): TaskService {
       const parsed = parseContract(createTaskInputSchema, input, 'task creation input');
       requireProjectScope(call, parsed.projectId);
       requireWriteRole(call);
+      requireSafeManualText(parsed.title);
+      if (parsed.taskFamily) requireSafeManualText(parsed.taskFamily);
       const taskFamily = parsed.taskFamily ?? null;
       return admitTaskIntent(call, parsed.projectId, {
         kind: 'task.create',
@@ -144,7 +149,7 @@ export function createTaskService(deps: TaskServiceDeps): TaskService {
           title: parsed.title,
           taskFamily,
         }),
-        payload: { title: parsed.title, taskFamily },
+        payload: { title: parsed.title, taskFamily,serverSafeIngress:MANUAL_SCANNER_VERSION },
         operationId: randomUUID(),
         intentTaskId: randomUUID(),
       });
@@ -153,6 +158,7 @@ export function createTaskService(deps: TaskServiceDeps): TaskService {
     async view(call, projectId, taskId): Promise<TaskView> {
       requirePermission(call, 'read');
       requireProjectScope(call, projectId);
+      if (!await deps.release.eligible(call, [{projectId,kind:'task',id:taskId}])) throw new ThreadlineError('not_found', 'The requested resource does not exist.');
       const graph = requireGraph(call);
       return withGraphRead(async () => {
         await requireActiveProjectRoot(graph, call);
@@ -202,6 +208,7 @@ export function createTaskService(deps: TaskServiceDeps): TaskService {
     async requirements(call, projectId, taskId): Promise<TaskRequirementsView> {
       requirePermission(call, 'read');
       requireProjectScope(call, projectId);
+      if (!await deps.release.eligible(call, [{projectId,kind:'task',id:taskId}])) throw new ThreadlineError('not_found', 'The requested resource does not exist.');
       const graph = requireGraph(call);
       return withGraphRead(async () => {
         await requireActiveProjectRoot(graph, call);
