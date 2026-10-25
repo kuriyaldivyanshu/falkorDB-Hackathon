@@ -2,6 +2,8 @@ import { readFileSync } from 'node:fs';
 
 import { ConfigurationError, type ConfigurationIssue } from '@threadline/shared';
 
+import { loadProductPolicy, type LoadedProductPolicy } from './policy.js';
+
 import { installationPaths, type EnvironmentMap, type InstallationPaths } from './environment.js';
 
 /**
@@ -123,6 +125,8 @@ export interface LoadedConfig {
   readonly config: ServiceConfig;
   /** Which parts came from the environment rather than the stored file. */
   readonly overriddenFields: readonly string[];
+  /** Validated proposal only; effective activation/revision fencing belongs to M04-02. */
+  readonly productPolicy: LoadedProductPolicy;
 }
 
 /**
@@ -134,6 +138,7 @@ export interface LoadedConfig {
  */
 export function loadServiceConfig(home: string, env: EnvironmentMap = process.env): LoadedConfig {
   const paths = installationPaths(home);
+  const productPolicy = loadProductPolicy(home);
   const file = readConfigFile(paths.configFile);
   const secrets = readSecretsFile(paths.secretsFile);
   const overridden: string[] = [];
@@ -273,6 +278,7 @@ export function loadServiceConfig(home: string, env: EnvironmentMap = process.en
       ownerLabel: pick(ENV_KEYS.ownerLabel, readString(file?.ownerLabel), 'Local Owner'),
     },
     overriddenFields: overridden,
+    productPolicy,
   };
 }
 
