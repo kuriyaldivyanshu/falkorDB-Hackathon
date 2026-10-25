@@ -37,6 +37,7 @@ export function resolveHomeDirectory(explicit?: string): string {
 export interface InstallationPaths {
   readonly home: string;
   readonly configFile: string;
+  readonly policyFile: string;
   readonly secretsFile: string;
   readonly credentialFile: string;
   readonly sourceRoot: string;
@@ -47,6 +48,7 @@ export function installationPaths(home: string): InstallationPaths {
   return {
     home,
     configFile: join(home, 'config.json'),
+    policyFile: join(home, 'threadline.toml'),
     secretsFile: join(home, 'secrets.json'),
     credentialFile: join(home, 'credential.json'),
     sourceRoot: join(home, 'sources'),
@@ -61,3 +63,8 @@ export function installationPaths(home: string): InstallationPaths {
  * nothing else about configuration reads ambient state.
  */
 export type EnvironmentMap = Readonly<Record<string, string | undefined>>;
+
+/** One explicitly selected repository root; no ancestor/cwd discovery. */
+export function projectPreferencesPath(workspaceRoot: string): string {
+  return join(workspaceRoot, '.threadline.toml');
+}
