@@ -74,7 +74,7 @@ export type {
   ServiceConfigSummary,
   ServiceLimits,
 } from './config.js';
-export { DEFAULT_HOME_DIRECTORY_NAME, HOME_ENV_KEY, installationPaths, projectPreferencesPath, resolveHomeDirectory } from './environment.js';
+export { DEFAULT_HOME_DIRECTORY_NAME, HOME_ENV_KEY, OWNER_POLICY_FILE_NAME, PROJECT_PREFERENCES_FILE_NAME, installationPaths, projectPreferencesPath, resolveHomeDirectory } from './environment.js';
 export type { EnvironmentMap, InstallationPaths } from './environment.js';
 export { createJsonLogger, silentLogger } from './log.js';
 export type { Logger, LogRecord } from './log.js';

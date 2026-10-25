@@ -19,6 +19,8 @@ import { isAbsolute, join, resolve } from 'node:path';
 
 export const HOME_ENV_KEY = 'THREADLINE_HOME';
 export const DEFAULT_HOME_DIRECTORY_NAME = '.threadline';
+export const OWNER_POLICY_FILE_NAME = 'threadline.toml';
+export const PROJECT_PREFERENCES_FILE_NAME = '.threadline.toml';
 
 export function resolveHomeDirectory(explicit?: string): string {
   if (explicit !== undefined && explicit.trim().length > 0) {
@@ -48,7 +50,7 @@ export function installationPaths(home: string): InstallationPaths {
   return {
     home,
     configFile: join(home, 'config.json'),
-    policyFile: join(home, 'threadline.toml'),
+    policyFile: join(home, OWNER_POLICY_FILE_NAME),
     secretsFile: join(home, 'secrets.json'),
     credentialFile: join(home, 'credential.json'),
     sourceRoot: join(home, 'sources'),
@@ -66,5 +68,5 @@ export type EnvironmentMap = Readonly<Record<string, string | undefined>>;
 
 /** One explicitly selected repository root; no ancestor/cwd discovery. */
 export function projectPreferencesPath(workspaceRoot: string): string {
-  return join(workspaceRoot, '.threadline.toml');
+  return join(workspaceRoot, PROJECT_PREFERENCES_FILE_NAME);
 }
