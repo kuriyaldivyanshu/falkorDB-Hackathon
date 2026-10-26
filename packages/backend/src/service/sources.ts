@@ -51,8 +51,8 @@ export interface SourceService {
   appendContextManifest(call: AuthenticatedCall, manifest: unknown, nonce: string, transaction: TxClient): Promise<SourceAppendResult>;
   /** Public append always requires knowledge-write permission. */
   append(call: AuthenticatedCall, input: unknown, transaction?: TxClient): Promise<SourceAppendResult>;
-  view(call: AuthenticatedCall, projectId: string, sourceId: string, transaction?: TxClient): Promise<SourceView>;
-  range(call: AuthenticatedCall, projectId: string, sourceId: string, start?: number, end?: number, transaction?: TxClient): Promise<SourceRange>;
+  view(call: AuthenticatedCall, projectId: string, sourceId: string, transaction?: TxClient, deadline?: number): Promise<SourceView>;
+  range(call: AuthenticatedCall, projectId: string, sourceId: string, start?: number, end?: number, transaction?: TxClient, deadline?: number): Promise<SourceRange>;
   history(call: AuthenticatedCall, query: unknown): Promise<SourceHistoryPage>;
 }
 
@@ -131,7 +131,7 @@ const SOURCE_SELECT = `
     FROM threadline_memory.sources s`;
 
 export function createSourceService(deps: SourceServiceDeps): SourceService {
-  const release = deps.release ?? createReleaseService({ db: deps.db, files: deps.files });
+  const release = deps.release ?? createReleaseService({ db: deps.db, files: deps.files, policies:deps.admission.policies });
   const logger = deps.logger ?? silentLogger;
   const clock = deps.clock ?? (() => new Date());
 
@@ -142,7 +142,7 @@ export function createSourceService(deps: SourceServiceDeps): SourceService {
     }
   };
 
-  const readRow = async (call: AuthenticatedCall, projectId: string, sourceId: string, transaction?: TxClient): Promise<SourceRow> => {
+  const readRow = async (call: AuthenticatedCall, projectId: string, sourceId: string, transaction?: TxClient, deadline?: number): Promise<SourceRow> => {
     const read = (tx: TxClient) => tx.rows<SourceRow>(
         `${SOURCE_SELECT}
           WHERE s.tenant_id = $1 AND s.project_id = $2 AND s.id = $3
@@ -154,7 +154,7 @@ export function createSourceService(deps: SourceServiceDeps): SourceService {
     if (row === undefined) {
       throw new ThreadlineError('not_found', 'No such source exists in this project scope.');
     }
-    if (!await release.eligible(call, [{projectId, kind: 'source', id: sourceId}], transaction)) {
+    if (!await release.eligible(call, [{projectId, kind: 'source', id: sourceId}], transaction, deadline)) {
       throw new ThreadlineError('not_found', 'The requested resource does not exist.');
     }
     return row;
@@ -295,9 +295,9 @@ export function createSourceService(deps: SourceServiceDeps): SourceService {
       }] }, transaction);
     },
 
-    async view(call: AuthenticatedCall, projectId: string, sourceId: string, transaction?: TxClient): Promise<SourceView> {
+    async view(call: AuthenticatedCall, projectId: string, sourceId: string, transaction?: TxClient, deadline?: number): Promise<SourceView> {
       requireProject(call, projectId);
-      return toView(await readRow(call, projectId, sourceId, transaction));
+      return toView(await readRow(call, projectId, sourceId, transaction, deadline));
     },
 
     async range(
@@ -307,9 +307,10 @@ export function createSourceService(deps: SourceServiceDeps): SourceService {
       start = 0,
       end = SOURCE_LIMITS.maxRangeBytes,
       transaction?: TxClient,
+      deadline?: number,
     ): Promise<SourceRange> {
       requireProject(call, projectId);
-      const row = await readRow(call, projectId, sourceId, transaction);
+      const row = await readRow(call, projectId, sourceId, transaction, deadline);
       if (row.availability !== 'available') {
         throw new ThreadlineError('source_unavailable', 'The source bytes are not available.', {
           availability: row.availability,
@@ -344,6 +345,7 @@ export function createSourceService(deps: SourceServiceDeps): SourceService {
       const deadline = Date.now() + RELEASE_LIMITS.workMs;
       const parsed = parseContract(sourceHistoryQuerySchema, query, 'history query');
       requireProject(call, parsed.projectId);
+      await release.policy(call);
 
       const kinds = parsed.kinds === undefined ? null : [...parsed.kinds].sort();
       const filterDigest = sha256Hex(

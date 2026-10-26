@@ -517,3 +517,7 @@ export {
   type SanitizationPolicyV3,
   type SanitizationInputV3,
 } from './sanitization.js';
+
+export { activatePolicyV3Schema, policyStatusV3Schema, type ActivatePolicyV3, type PolicyStatusV3 } from './policy.js';
+
+export { POLICY_CONTROL_SURFACES } from './protocol.js';

@@ -993,12 +993,12 @@ export interface VersionDetailRow {
 }
 
 /** Reads stored content, provenance and authority details for the selected version IDs. */
-export async function readVersionDetailRows(graph: Graph, versionIds: readonly string[]): Promise<VersionDetailRow[]> {
+export async function readVersionDetailRows(graph: Graph, versionIds: readonly string[], timeoutMs=2000): Promise<VersionDetailRow[]> {
   if (versionIds.length === 0) {
     return [];
   }
   const reply = await graph.roQuery<Record<string, unknown>>(READ_VERSION_DETAILS, {
-    params: { versionIds: [...versionIds] },
+    params: { versionIds: [...versionIds] }, TIMEOUT: Math.max(1,Math.min(2000,timeoutMs)),
   });
   return (reply.data ?? []).map((row) => ({
     version_id: asString(row.version_id),

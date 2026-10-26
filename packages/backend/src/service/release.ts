@@ -1,8 +1,10 @@
+import { requirePolicyPermission, type PolicyService, type EffectivePolicySnapshot } from './policy.js';
+import { assertSafeAdmissionInput, assertSafeText, assertPolicyInputLimits } from '../admission.js';
 import { hasOperationAdmission } from '../admission.js';
 export { hasOperationAdmission } from '../admission.js';
 import { randomUUID } from 'node:crypto';
 
-import { ThreadlineError } from '@threadline/shared';
+import { POLICY_CONTROL_SURFACES, ThreadlineError } from '@threadline/shared';
 
 import { canonicalDigest } from '../storage/digest.js';
 import type { SourceFileStore } from '../storage/files.js';
@@ -91,14 +93,15 @@ async function currentAuthority(tx: TxClient, identity: ReleaseIdentity, lock: b
 }
 
 export interface AdmissionSelection { readonly kind: string; readonly sourceIds?: readonly string[]; readonly operationIds?: readonly string[] }
-export interface ReleaseSelection { readonly resources: readonly ReleaseResource[]; readonly admission?: AdmissionSelection }
+export interface ReleaseSelection { readonly resources: readonly ReleaseResource[]; readonly admission?: AdmissionSelection; readonly policyRevision?: string }
 
-interface DependencySnapshot { resources: ReleaseResource[]; projects: string[]; fingerprint: string }
+interface DependencySnapshot { resources: ReleaseResource[]; projects: string[]; fingerprint: string; policies: Record<string,string> }
 export interface ReleaseTicket {
   readonly requestId: string; readonly call: AuthenticatedCall; readonly startedAt: number;
-  readonly surface: string; readonly roots: ReadonlyMap<string, string>; readonly seeds: readonly ReleaseResource[]; readonly graphRead: boolean;
+  readonly surface: string; readonly roots: ReadonlyMap<string, string>; readonly seeds: readonly ReleaseResource[]; readonly graphRead: boolean; readonly policyRevision: string | null;
 }
 export interface ReleaseService {
+  policy(call: AuthenticatedCall, transaction?: TxClient): Promise<EffectivePolicySnapshot>;
   begin(call: AuthenticatedCall, surface: string, seeds?: readonly ReleaseResource[], graphRead?: boolean): Promise<ReleaseTicket>;
   /** Prepared JSON bytes go straight back to onSend after this commit. No
    * permit is returned to a caller or accepted as authorization on a later call. */
@@ -107,7 +110,8 @@ export interface ReleaseService {
   eligible(call: AuthenticatedCall, resources: readonly ReleaseResource[], transaction?: TxClient, deadline?: number): Promise<boolean>;
 }
 
-export function createReleaseService(deps: { db: SqlDatabase; graphStore?: GraphStore; files: SourceFileStore }): ReleaseService {
+export function createReleaseService(deps: { db: SqlDatabase; graphStore?: GraphStore; files: SourceFileStore; policies: PolicyService }): ReleaseService {
+  const policies = deps.policies;
   const graphStore = (): GraphStore => {
     if (!deps.graphStore) throw new ThreadlineError('authority_unavailable', 'Current graph authority is unavailable.');
     return deps.graphStore;
@@ -132,9 +136,10 @@ export function createReleaseService(deps: { db: SqlDatabase; graphStore?: Graph
     }
   };
 
-  const closure = async (call: AuthenticatedCall, seeds: readonly ReleaseResource[], tx: TxClient, deadline: number, verifyBytes = true): Promise<DependencySnapshot> => {
+  const closure = async (call: AuthenticatedCall, seeds: readonly ReleaseResource[], tx: TxClient, deadline: number, verifyBytes = true, enforcePolicy = true): Promise<DependencySnapshot> => {
     const seen = new Map<string, ReleaseResource>();
     const facts: unknown[] = [];
+    const currentPolicies = new Map<string,EffectivePolicySnapshot>();
     const projects = new Set<string>(call.scope.projectId === null ? [] : [call.scope.projectId]);
     const checkedProjects = new Set<string>();
     let frontier = [...seeds];
@@ -151,6 +156,13 @@ export function createReleaseService(deps: { db: SqlDatabase; graphStore?: Graph
           checkedProjects.add(resource.projectId);
         }
         if (seen.size > RELEASE_LIMITS.dependencies || projects.size > RELEASE_LIMITS.projects) broad();
+        if (enforcePolicy && !currentPolicies.has(resource.projectId)) {
+          const policy = await policies.current(call.scope.tenantId,resource.projectId,tx);
+          requirePolicyPermission(policy,call,'recall');
+          currentPolicies.set(resource.projectId,policy);
+          facts.push({projectId:resource.projectId,policyRevision:policy.revision,policyDigest:policy.digest});
+        }
+        const policy = currentPolicies.get(resource.projectId);
         const identity = [call.scope.tenantId, resource.projectId, resource.id];
         const denied = await tx.rows(`SELECT resource_id FROM threadline_memory.release_denials
           WHERE tenant_id=$1 AND project_id=$2 AND resource_kind=$3 AND resource_id=$4`,
@@ -174,10 +186,13 @@ export function createReleaseService(deps: { db: SqlDatabase; graphStore?: Graph
           if (rows.length !== 1) deny(); facts.push({resource, row: rows[0]});
         } else if (resource.kind === 'source') {
           const rows = await tx.rows<{ id: string; availability: string; visibility: string; owner_principal_id: string | null;
-            digest: string; byte_size: string; storage_key: string; deletion_generation: string; release_state: string }>(
+            digest: string; byte_size: string; storage_key: string; deletion_generation: string; release_state: string; kind: string }>(
             `SELECT id,availability,visibility,owner_principal_id,digest,byte_size::text AS byte_size,storage_key,
-             deletion_generation::text AS deletion_generation,release_state FROM threadline_memory.sources
-             WHERE tenant_id=$1 AND project_id=$2 AND id=$3`, identity);
+             deletion_generation::text AS deletion_generation,release_state,kind,origin_key,origin_revision,parent_origin_key,
+             native_turn_ref,native_item_ref,native_tool_ref,media_type,gap_reason FROM threadline_memory.sources
+             WHERE tenant_id=$1 AND project_id=$2 AND id=$3
+               AND ($4::integer IS NULL OR captured_at >= clock_timestamp()-make_interval(days=>$4::integer))`,
+            [...identity,policy?.settings.ceilings.retention_days ?? null]);
           const row = rows[0];
           if (!row || row.availability !== 'available' || row.release_state !== 'eligible'
             || (row.visibility !== 'project' && row.owner_principal_id !== call.scope.principalId)) deny();
@@ -187,10 +202,25 @@ export function createReleaseService(deps: { db: SqlDatabase; graphStore?: Graph
           if (verifyBytes) {
             let cache = verifiedFiles.get(call);
             if (!cache) { cache = new Map(); verifiedFiles.set(call,cache); }
-            const fileKey = `${resource.projectId}:${row.storage_key}:${row.digest}:${size}`;
+            const fileKey = `${resource.projectId}:${row.storage_key}:${row.digest}:${size}:${policy?.revision ?? 'metadata'}`;
             if (!cache.has(fileKey)) cache.set(fileKey, deps.files.readRange({tenantId:call.scope.tenantId,
               projectId:resource.projectId,storageKey:row.storage_key,digest:row.digest,byteSize:size,
-              maxBytes:RELEASE_LIMITS.sourceBytes,start:0,end:0}).then(()=>undefined));
+              maxBytes:RELEASE_LIMITS.sourceBytes,start:0,end:policy ? size : 0}).then(range=>{
+                if (!policy) return;
+                const scanner = {revision:policy.revision,excludedPaths:policy.settings.capture.exclude_paths};
+                try {
+                  assertSafeAdmissionInput(Object.fromEntries(Object.entries(row).filter(([,value])=>typeof value==='string')),scanner);
+                  const text = new TextDecoder('utf-8',{fatal:true}).decode(range.bytes);
+                  if (row.kind==='memory_proposal') {
+                    const document = JSON.parse(text) as {content?:unknown;applicability?:unknown;observedUnder?:unknown};
+                    assertSafeAdmissionInput(document,scanner);
+                    assertPolicyInputLimits(document,{maxPayloadBytes:policy.settings.ceilings.max_payload_bytes,maxBatchRecords:policy.settings.ceilings.max_batch_records});
+                  } else {
+                    if(size>policy.settings.ceilings.max_payload_bytes)deny();
+                    assertSafeText(text,scanner);
+                  }
+                } catch { deny(); }
+              }));
             await cache.get(fileKey);
           }
           const links = await tx.rows<{ parent_source_id: string }>(`SELECT parent_source_id FROM threadline_memory.source_links
@@ -202,11 +232,15 @@ export function createReleaseService(deps: { db: SqlDatabase; graphStore?: Graph
           if (!await hasOperationAdmission(tx, call.scope.tenantId, resource.projectId, resource.id)) deny();
           const rows = await tx.rows<{ intent_source_id: string | null; intent_memory_id: string | null;
             intent_version_id: string | null; intent_task_id: string | null; state: string;
-            kind: string; memory_mode: string | null; expected_head_token: string | null }>(
-            `SELECT intent_source_id,intent_memory_id,intent_version_id,intent_task_id,state,kind,
+            kind: string; payload:unknown; memory_mode: string | null; expected_head_token: string | null }>(
+            `SELECT intent_source_id,intent_memory_id,intent_version_id,intent_task_id,state,kind,payload,
              payload->>'memoryMode' AS memory_mode,expected_head_token
              FROM threadline_memory.operations WHERE tenant_id=$1 AND project_id=$2 AND id=$3`, identity);
           const row = rows[0]; if (!row) deny();
+          if(policy)try {
+            assertSafeAdmissionInput(row.payload,{revision:policy.revision,excludedPaths:policy.settings.capture.exclude_paths});
+            assertPolicyInputLimits(row.payload,{maxPayloadBytes:policy.settings.ceilings.max_payload_bytes,maxBatchRecords:policy.settings.ceilings.max_batch_records});
+          } catch {deny();}
           facts.push({ resource, row });
           // Denial applies to reserved identities before graph materialization,
           // independently of operation state. Existence is required only for
@@ -257,15 +291,25 @@ export function createReleaseService(deps: { db: SqlDatabase; graphStore?: Graph
              RETURN target.id AS id,root.project_id AS project_id,
                CASE WHEN target:MemoryVersion THEN 'version' WHEN target:Memory THEN 'memory' ELSE 'task' END AS kind,
                properties(target) AS properties LIMIT 2`,
-          { params: { id: resource.id, kind: resource.kind }, TIMEOUT: 2000 });
+          { params: { id: resource.id, kind: resource.kind }, TIMEOUT: remainingGraphTime(deadline) });
           const rows = reply.data ?? [];
           if (rows.length !== 1) deny();
           const row = rows[0]!;
           if (row.project_id !== resource.projectId || row.kind !== resource.kind) deny();
+          if (policy) {
+            const scanner = {revision:policy.revision,excludedPaths:policy.settings.capture.exclude_paths};
+            try {
+              assertPolicyInputLimits(row.properties,{maxPayloadBytes:policy.settings.ceilings.max_payload_bytes,maxBatchRecords:policy.settings.ceilings.max_batch_records});
+              for(const [field,value] of Object.entries(row.properties)) if(typeof value==='string') {
+                if(field.endsWith('_json')) assertSafeAdmissionInput(JSON.parse(value),scanner);
+                else assertSafeText(value,scanner);
+              }
+            } catch { deny(); }
+          }
           const edges = await graph.roQuery<{ id: string; labels: string[] }>(
             `MATCH (target:Entity {id:$id})-[:SOURCED_FROM|CONTRADICTS|SUPPORTED_BY|SUPERSEDES|REQUIRES|CURRENT|HAS_VERSION]->(d:Entity)
              RETURN DISTINCT d.id AS id,labels(d) AS labels ORDER BY id LIMIT 257`,
-          {params: {id: resource.id}, TIMEOUT: 2000});
+          {params: {id: resource.id}, TIMEOUT: remainingGraphTime(deadline)});
           const dependencies = edges.data ?? [];
           if (dependencies.length > RELEASE_LIMITS.dependencies) broad();
           facts.push({ resource, row, dependencies });
@@ -282,7 +326,7 @@ export function createReleaseService(deps: { db: SqlDatabase; graphStore?: Graph
                OPTIONAL MATCH (o)-[:HAS_VERSION]->(v:Entity:MemoryVersion)
                WITH r,o,v WHERE o.id=$id OR v.id=$id
                RETURN DISTINCT r.project_id AS project_id LIMIT 2`,
-            { params: { id: dependency.id }, TIMEOUT: 2000 });
+            { params: { id: dependency.id }, TIMEOUT: remainingGraphTime(deadline) });
             const resolved = refs.data ?? []; if (resolved.length !== 1) deny();
             add(kind, dependency.id, resolved[0]!.project_id);
           }
@@ -298,17 +342,29 @@ export function createReleaseService(deps: { db: SqlDatabase; graphStore?: Graph
       frontier = next;
     }
     return { resources: [...seen.values()].sort((a,b) => key(a).localeCompare(key(b))),
-      projects: [...projects].sort(), fingerprint: digest(facts) };
+      projects: [...projects].sort(), fingerprint: digest(facts), policies:Object.fromEntries([...currentPolicies].map(([id,policy])=>[id,policy.revision])) };
   };
 
   return {
+    async policy(call,transaction) {
+      if (!call.scope.projectId) throw new ThreadlineError('scope_denied','Project policy is required.');
+      const policy = await policies.current(call.scope.tenantId,call.scope.projectId,transaction);
+      requirePolicyPermission(policy,call,'recall');
+      return policy;
+    },
     async begin(call, surface, seeds = [], graphRead = true) {
+      let policyRevision: string | null = null;
+      if (call.scope.projectId && policyPurpose(surface)!=='control') {
+        const policy = await policies.current(call.scope.tenantId,call.scope.projectId);
+        requirePolicyPermission(policy,call,policyPurpose(surface));
+        policyRevision = policy.revision;
+      }
       const startedAt = Date.now();
       deadlines.set(call, startedAt + RELEASE_LIMITS.workMs);
       verifiedFiles.set(call,new Map());
       const roots = new Map<string, string>();
       if (graphRead && call.scope.projectId !== null) roots.set(call.scope.projectId, await projectRoot(call, call.scope.projectId));
-      const ticket: ReleaseTicket = { requestId: randomUUID(), call, surface, seeds, roots, startedAt, graphRead };
+      const ticket: ReleaseTicket = { requestId: randomUUID(), call, surface, seeds, roots, startedAt, graphRead, policyRevision };
       issued.add(ticket); return ticket;
     },
     async eligible(call, resources, transaction, deadline) {
@@ -347,6 +403,14 @@ export function createReleaseService(deps: { db: SqlDatabase; graphStore?: Graph
       if (!selection || !Array.isArray(selection.resources)) deny();
       const seeds = [...ticket.seeds, ...selection.resources];
       const { call } = ticket;
+      const checkPolicy = async(tx:TxClient):Promise<void> => {
+        if (!call.scope.projectId || ticket.policyRevision===null) return;
+        const policy = await policies.current(call.scope.tenantId,call.scope.projectId,tx);
+        if(policy.revision!==ticket.policyRevision)stale();
+        requirePolicyPermission(policy,call,policyPurpose(ticket.surface));
+        try { assertSafeAdmissionInput(JSON.parse(payload),{revision:policy.revision,excludedPaths:policy.settings.capture.exclude_paths}); }
+        catch { deny(); }
+      };
       if (selection?.admission) {
         // Content-free acknowledgement of this credential's own admission only.
         // Arbitrary requested targets never receive an eligibility exemption.
@@ -354,6 +418,7 @@ export function createReleaseService(deps: { db: SqlDatabase; graphStore?: Graph
           if (call.scope.projectId === null) deny();
           await lockProjectBarriers(tx,call.scope.tenantId,[call.scope.projectId], 'shared');
           compareAuthority(call,await lockReleaseAuthority(tx,identityOf(call)));
+          await checkPolicy(tx);
           for (const id of selection.admission!.sourceIds ?? []) {
             const rows = await tx.rows<{ id: string; operation_id: string }>(`SELECT s.id,o.id AS operation_id FROM threadline_memory.sources s
               JOIN threadline_memory.operations o ON o.tenant_id=s.tenant_id AND o.project_id=s.project_id AND o.intent_source_id=s.id AND o.kind='source.append'
@@ -378,19 +443,24 @@ export function createReleaseService(deps: { db: SqlDatabase; graphStore?: Graph
         });
         return;
       }
-      const before = await deps.db.withTenantTransaction(call.scope.tenantId, (tx) => closure(call, seeds, tx, deadline));
+      const before = await deps.db.withTenantTransaction(call.scope.tenantId, (tx) => closure(call, seeds, tx, deadline,true,policyPurpose(ticket.surface)!=='control'));
       // Discover the complete closure before acquiring ANY project lock.
       await deps.db.withTenantTransaction(call.scope.tenantId, async (tx) => {
           await lockProjectBarriers(tx, call.scope.tenantId, before.projects, 'shared');
           const authority = await lockReleaseAuthority(tx, identityOf(call));
           compareAuthority(call, authority);
+          await checkPolicy(tx);
+          if(selection.policyRevision!==undefined && call.scope.projectId) {
+            const current = await tx.rows<{policy_revision:string}>(`SELECT policy_revision::text FROM threadline_memory.projects WHERE tenant_id=$1 AND id=$2`,[call.scope.tenantId,call.scope.projectId]);
+            if(current[0]?.policy_revision!==selection.policyRevision)stale();
+          }
           for (const projectId of before.projects) {
             if (projectId !== call.scope.projectId) await lockReleaseAuthority(tx, { ...identityOf(call), projectId });
           }
           const unresolved = await tx.rows(`SELECT operation_id FROM threadline_memory.graph_submissions
             WHERE tenant_id=$1 AND project_id=ANY($2::uuid[]) LIMIT 1`, [call.scope.tenantId, before.projects]);
           if (unresolved.length) throw new ThreadlineError('authority_unavailable', 'Graph reconciliation is required before release.');
-          const after = await closure(call, seeds, tx, deadline, false);
+          const after = await closure(call, seeds, tx, deadline, false,policyPurpose(ticket.surface)!=='control');
           if (digest(before) !== digest(after)) stale();
           for (const projectId of before.projects) {
             if (!ticket.graphRead && !before.resources.some((r) => ['memory','version','task'].includes(r.kind))) continue;
@@ -402,7 +472,7 @@ export function createReleaseService(deps: { db: SqlDatabase; graphStore?: Graph
           }
           within(deadline);
           await lockReleaseAuthority(tx, identityOf(call));
-          await insertPermit(tx,ticket,payload,before.projects,before.resources.length);
+          await insertPermit(tx,ticket,payload,before.projects,before.resources.length,selection.policyRevision!==undefined && call.scope.projectId ? {...after.policies,[call.scope.projectId]:selection.policyRevision} : after.policies);
       });
     },
   };
@@ -430,14 +500,24 @@ function digest(value: unknown): string {
   return canonicalDigest(JSON.parse(JSON.stringify(value)) as Parameters<typeof canonicalDigest>[0]);
 }
 
-async function insertPermit(tx: TxClient,ticket: ReleaseTicket,payload: string,projects: readonly string[],count:number): Promise<void> {
+async function insertPermit(tx: TxClient,ticket: ReleaseTicket,payload: string,projects: readonly string[],count:number,policyRevisions?:Record<string,string>): Promise<void> {
   // Bounded metadata ledger per credential; old request IDs are never accepted
   // as authorization, so expired entries need not remain indefinitely.
   await tx.rows(`DELETE FROM threadline_memory.release_permits WHERE tenant_id=$1 AND id IN
     (SELECT id FROM threadline_memory.release_permits WHERE tenant_id=$1 AND token_id=$2
      ORDER BY committed_at DESC,id DESC OFFSET 255 LIMIT 32)`,[ticket.call.scope.tenantId,ticket.call.tokenId]);
   await tx.rows(`INSERT INTO threadline_memory.release_permits
-    (tenant_id,id,token_id,principal_id,project_ids,surface,response_bytes,dependency_count)
-    VALUES ($1,$2,$3,$4,$5::uuid[],$6,$7,$8)`,
-    [ticket.call.scope.tenantId,ticket.requestId,ticket.call.tokenId,ticket.call.scope.principalId,projects,ticket.surface,Buffer.byteLength(payload),count]);
+    (tenant_id,id,token_id,principal_id,project_ids,surface,response_bytes,dependency_count,policy_revisions)
+    VALUES ($1,$2,$3,$4,$5::uuid[],$6,$7,$8,$9::jsonb)`,
+    [ticket.call.scope.tenantId,ticket.requestId,ticket.call.tokenId,ticket.call.scope.principalId,projects,ticket.surface,Buffer.byteLength(payload),count,JSON.stringify(policyRevisions ?? (ticket.call.scope.projectId && ticket.policyRevision!==null ? {[ticket.call.scope.projectId]:ticket.policyRevision} : {}))]);
+}
+
+const policyControlSurfaces = new Set<string>(POLICY_CONTROL_SURFACES);
+function remainingGraphTime(deadline:number):number {within(deadline);return Math.max(1,Math.min(2000,deadline-Date.now()));}
+function policyPurpose(surface:string): 'control' | 'write' | 'recall' {
+  if(policyControlSurfaces.has(surface))return 'control';
+  if (/^POST \/v2\/(?:context|context-occurrences)/.test(surface)) return 'recall';
+  if (/^POST \/v2\/(?:sources|memories|tasks)/.test(surface)) return 'write';
+  if (/^GET \/v2\/(?:sources|history|memories|tasks|operations)/.test(surface)) return 'recall';
+  return 'recall';
 }

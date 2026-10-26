@@ -1,4 +1,5 @@
-import { assertSafeAdmissionInput, CURRENT_ADMISSION_PARAMETERS, CURRENT_OPERATION_ADMISSION_SQL, hasOperationAdmission } from '../admission.js';
+import { requirePolicyPermission, type PolicyService } from './policy.js';
+import { assertSafeAdmissionInput, assertPolicyInputLimits, CURRENT_ADMISSION_PARAMETERS, CURRENT_OPERATION_ADMISSION_SQL, hasOperationAdmission } from '../admission.js';
 import type { AdmissionService } from './admission.js';
 import { randomUUID } from 'node:crypto';
 import { AsyncLocalStorage } from 'node:async_hooks';
@@ -166,6 +167,7 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
     submission?: GraphSubmission;
     uncertain: boolean;
     revalidateAuthority?: () => Promise<unknown>;
+    revalidatePolicy?: () => Promise<unknown>;
   }>();
   const workerDb = (): SqlDatabase => execution.getStore()?.db ?? deps.db;
   const graphWrite = async <T>(work: () => Promise<T>): Promise<T> => {
@@ -173,7 +175,7 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
     if (!current?.submission) throw new ThreadlineError('authority_unavailable', 'Graph submission has no durable reservation.');
     await current.db.query('SELECT 1');
     await current.revalidateAuthority?.();
-    deps.admission.requireCurrentPolicy();
+    await current.revalidatePolicy?.();
     current.uncertain = true;
     const result = await work();
     current.uncertain = false;
@@ -468,8 +470,8 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
             }
             // Receipt reconciliation/fencing above always runs first. No
             // historical unqualified intent is replayed as a fresh graph write.
-            const admissions = await db.withTenantTransaction(row.tenant_id, tx => tx.rows<{ id: string; payload: unknown }>(
-              `SELECT a.id,o.payload FROM threadline_memory.operations o
+            const admissions = await db.withTenantTransaction(row.tenant_id, tx => tx.rows<{ id: string; payload: unknown; policy_revision: string }>(
+              `SELECT a.id,o.payload,a.policy_revision::text FROM threadline_memory.operations o
                 JOIN threadline_memory.ingress_admissions a ON ${CURRENT_OPERATION_ADMISSION_SQL}
                WHERE o.tenant_id=$1 AND o.project_id=$2 AND o.id=$3`,
               [row.tenant_id,row.project_id,row.id,...CURRENT_ADMISSION_PARAMETERS]));
@@ -479,9 +481,13 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
               return;
             }
             try {
-              deps.admission.requireCurrentPolicy();
-            } catch {
-              await retry(row, operation.leaseToken, 'policy_unavailable', 'pending',
+              const policy = await db.withTenantTransaction(row.tenant_id,tx=>deps.admission.requireCurrentPolicy(row.tenant_id,row.project_id,tx));
+              if (policy.revision !== admissions[0]!.policy_revision) throw new ThreadlineError('stale_revision','Recorded intent uses an earlier policy revision.',{reason:'policy_unavailable'});
+              if (!(row.kind === 'source.append' && (admissions[0]!.payload as {sourceKind?:string}).sourceKind === 'context_manifest') && !policy.settings.ceilings.manual_record) {
+                throw new ThreadlineError('authority_unavailable','Current policy does not permit this recorded intent.',{reason:'policy_unavailable'});
+              }
+            } catch (error) {
+              await retry(row, operation.leaseToken, error instanceof ThreadlineError && error.code==='stale_revision' ? 'policy_revision_changed' : 'policy_unavailable', 'pending',
                 'Current content policy is unavailable; the operation will be retried.');
               return;
             }
@@ -530,6 +536,14 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
                     tenantId: row.tenant_id, projectId: row.project_id,
                     tokenId: actor.actor_token_id!, principalId: actor.actor_principal_id,
                   });
+                  execution.getStore()!.revalidatePolicy = async () => {
+                    const policy = await deps.admission.requireCurrentPolicy(row.tenant_id,row.project_id,tx);
+                    if (policy.revision !== admissions[0]!.policy_revision) throw new ThreadlineError('stale_revision','Recorded intent uses an earlier policy revision.',{reason:'policy_unavailable'});
+                    if (!(row.kind === 'source.append' && (admissions[0]!.payload as {sourceKind?:string}).sourceKind === 'context_manifest') && !policy.settings.ceilings.manual_record) {
+                      throw new ThreadlineError('authority_unavailable','Current policy does not permit this recorded intent.',{reason:'policy_unavailable'});
+                    }
+                  };
+                  await execution.getStore()!.revalidatePolicy!();
                   const audit = row.kind === 'source.append' && actor.source_kind === 'context_manifest';
                   if ((audit && authority.tokenKind === 'producer' && authority.nativeSessionId === null) ||
                       (!audit && (authority.tokenKind === 'reader' || authority.tokenKind === 'producer' ||
@@ -539,6 +553,12 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
                     return;
                   }
                 } catch (error) {
+                  if (error instanceof ThreadlineError && ['authority_unavailable','stale_revision'].includes(error.code)
+                    && error.details?.['reason']==='policy_unavailable' && !execution.getStore()?.uncertain) {
+                    await retry(row,operation.leaseToken,error.code==='stale_revision'?'policy_revision_changed':'policy_unavailable','pending',
+                      'Current content policy is unavailable; the operation will be retried.');
+                    return;
+                  }
                   if (error instanceof ThreadlineError &&
                       ['scope_denied', 'unauthenticated', 'not_found'].includes(error.code)) {
                     await settleRefused(row, operation.leaseToken, 'scope_denied',
@@ -549,9 +569,9 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
                 }
                 try { await deliverOperation(operation); }
                 catch (error) {
-                  if (error instanceof ThreadlineError && error.code === 'authority_unavailable'
+                  if (error instanceof ThreadlineError && ['authority_unavailable','stale_revision'].includes(error.code)
                     && error.details?.['reason'] === 'policy_unavailable' && !execution.getStore()?.uncertain) {
-                    await retry(row, operation.leaseToken, 'policy_unavailable', 'pending',
+                    await retry(row, operation.leaseToken, error instanceof ThreadlineError && error.code==='stale_revision' ? 'policy_revision_changed' : 'policy_unavailable', 'pending',
                       'Current content policy is unavailable; the operation will be retried.');
                     return;
                   }
@@ -829,9 +849,9 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
   };
 
   const retryAfterGraphFailure = async (operation: ClaimedOperation, error: unknown): Promise<void> => {
-    if (error instanceof ThreadlineError && error.code === 'authority_unavailable'
+    if (error instanceof ThreadlineError && ['authority_unavailable','stale_revision'].includes(error.code)
       && error.details?.['reason'] === 'policy_unavailable' && !execution.getStore()?.uncertain) {
-      await retry(operation.row, operation.leaseToken, 'policy_unavailable', 'pending',
+      await retry(operation.row, operation.leaseToken, error instanceof ThreadlineError && error.code==='stale_revision' ? 'policy_revision_changed' : 'policy_unavailable', 'pending',
         'Current content policy is unavailable; the operation will be retried.');
       return;
     }
@@ -2629,23 +2649,33 @@ export interface OperationService {
   inspect(call: AuthenticatedCall, projectId: string, operationId: string): Promise<OperationView>;
 }
 
-export function createOperationService(deps: { readonly db: SqlDatabase }): OperationService {
+export function createOperationService(deps: { readonly db: SqlDatabase; readonly policies: PolicyService }): OperationService {
+  const policies = deps.policies;
   return {
     async inspect(call, projectId, operationId): Promise<OperationView> {
       requirePermission(call, 'read');
       if (call.scope.projectId !== projectId) throw new ThreadlineError('scope_denied', 'The credential is not scoped to that project.');
       const rows = await deps.db.withTenantTransaction(call.scope.tenantId, async (tx) => {
+        const policy=await policies.current(call.scope.tenantId,projectId,tx);
+        requirePolicyPermission(policy,call,'recall');
         if (!await hasOperationAdmission(tx, call.scope.tenantId, projectId, operationId)) {
           throw new ThreadlineError('not_found', 'The requested resource does not exist.');
         }
-        return tx.rows<OperationInspectRow>(
-          `SELECT id, project_id, kind, state, request_digest, attempts,
+        const rows=await tx.rows<OperationInspectRow & {payload:unknown}>(
+          `SELECT id, project_id, kind, state, request_digest, attempts, payload,
                   created_at, settled_at, error_code,
                   receipt_graph_epoch, receipt_event_seq, receipt_outcome, receipt_committed_at
              FROM threadline_memory.operations
             WHERE tenant_id = $1 AND project_id = $2 AND id = $3`,
           [call.scope.tenantId, projectId, operationId],
         );
+        try {
+          for(const row of rows) {
+            assertSafeAdmissionInput(row.payload,{revision:policy.revision,excludedPaths:policy.settings.capture.exclude_paths});
+            assertPolicyInputLimits(row.payload,{maxPayloadBytes:policy.settings.ceilings.max_payload_bytes,maxBatchRecords:policy.settings.ceilings.max_batch_records});
+          }
+        } catch {throw new ThreadlineError('not_found','The requested resource does not exist.');}
+        return rows;
       });
       const row = rows[0];
       if (row === undefined) {

@@ -96,7 +96,8 @@ export interface ApiSuccessEnvelope<TData> {
   readonly data: TData;
 }
 
-/** Declarations only: no registration, handler or capability is enabled. V2
+/** Policy control alone has scoped runtime handlers. Other v3 entries remain
+ * declarations: no registration or capability is enabled by them. V2
  * stays unchanged here. Future runtime adapters must apply the current release
  * gate to safe v2 reads and refuse unsafe v2 mutation/context requests. */
 export const CONTRACT_PROTOCOL_VERSION_V3 = 3;
@@ -123,6 +124,17 @@ export const CONTRACT_ROUTES_V3 = {
   deletion: (id: string): string => `${CONTRACT_API_PREFIX_V3}/privacy/deletions/${id}`,
   operation: (id: string): string => `${CONTRACT_API_PREFIX_V3}/operations/${id}`,
 } as const;
+
+/** Content-free control surfaces still require authority locks and a permit.
+ * All other authenticated surfaces default to current recall policy checks. */
+export const POLICY_CONTROL_SURFACES = [
+  `GET ${ROUTES.status}`,`GET ${ROUTES.capabilities}`,`GET ${ROUTES.projects}`,`POST ${ROUTES.projects}`,
+  `GET ${ROUTES.projectGrants(':projectId')}`,
+  ...['GET','POST'].flatMap(method=>[`${method} ${ROUTES.readerCredentials(':projectId')}`,`${method} ${ROUTES.enrollments(':projectId')}`]),
+  `POST ${ROUTES.readerCredentialRevocation(':projectId',':credentialId')}`,`GET ${ROUTES.enrollment(':projectId',':enrollmentId')}`,
+  `POST ${ROUTES.enrollmentRevocation(':projectId',':enrollmentId')}`,`POST ${ROUTES.nativeSessions}`,`GET ${ROUTES.projectSessions(':projectId')}`,
+  `GET ${CONTRACT_ROUTES_V3.policy(':projectId')}`,`POST ${CONTRACT_ROUTES_V3.policy(':projectId')}`,
+] as const;
 
 /** Equality is over the full validated canonical request plus authenticated
  * tenant/project/principal and stored enrollment/session/stream binding. Include
