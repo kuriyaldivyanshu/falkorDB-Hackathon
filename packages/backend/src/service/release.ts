@@ -4,7 +4,7 @@ import { hasOperationAdmission } from '../admission.js';
 export { hasOperationAdmission } from '../admission.js';
 import { randomUUID } from 'node:crypto';
 
-import { POLICY_CONTROL_SURFACES, ThreadlineError } from '@threadline/shared';
+import { policyPurpose as declaredPolicyPurpose, ThreadlineError } from '@threadline/shared';
 
 import { canonicalDigest } from '../storage/digest.js';
 import type { SourceFileStore } from '../storage/files.js';
@@ -185,6 +185,9 @@ export function createReleaseService(deps: { db: SqlDatabase; graphStore?: Graph
             FROM threadline_memory.projects WHERE tenant_id=$1 AND id=$2`, identity.slice(0,2));
           if (rows.length !== 1) deny(); facts.push({resource, row: rows[0]});
         } else if (resource.kind === 'source') {
+          // Revision zero preserves existing age visibility. A retention age
+          // cutoff starts only with explicit owner approval; stored denials and
+          // availability still apply at every revision.
           const rows = await tx.rows<{ id: string; availability: string; visibility: string; owner_principal_id: string | null;
             digest: string; byte_size: string; storage_key: string; deletion_generation: string; release_state: string; kind: string }>(
             `SELECT id,availability,visibility,owner_principal_id,digest,byte_size::text AS byte_size,storage_key,
@@ -192,7 +195,7 @@ export function createReleaseService(deps: { db: SqlDatabase; graphStore?: Graph
              native_turn_ref,native_item_ref,native_tool_ref,media_type,gap_reason FROM threadline_memory.sources
              WHERE tenant_id=$1 AND project_id=$2 AND id=$3
                AND ($4::integer IS NULL OR captured_at >= clock_timestamp()-make_interval(days=>$4::integer))`,
-            [...identity,policy?.settings.ceilings.retention_days ?? null]);
+            [...identity,policy && policy.revision!=='0' ? policy.settings.ceilings.retention_days : null]);
           const row = rows[0];
           if (!row || row.availability !== 'available' || row.release_state !== 'eligible'
             || (row.visibility !== 'project' && row.owner_principal_id !== call.scope.principalId)) deny();
@@ -512,12 +515,9 @@ async function insertPermit(tx: TxClient,ticket: ReleaseTicket,payload: string,p
     [ticket.call.scope.tenantId,ticket.requestId,ticket.call.tokenId,ticket.call.scope.principalId,projects,ticket.surface,Buffer.byteLength(payload),count,JSON.stringify(policyRevisions ?? (ticket.call.scope.projectId && ticket.policyRevision!==null ? {[ticket.call.scope.projectId]:ticket.policyRevision} : {}))]);
 }
 
-const policyControlSurfaces = new Set<string>(POLICY_CONTROL_SURFACES);
 function remainingGraphTime(deadline:number):number {within(deadline);return Math.max(1,Math.min(2000,deadline-Date.now()));}
-function policyPurpose(surface:string): 'control' | 'write' | 'recall' {
-  if(policyControlSurfaces.has(surface))return 'control';
-  if (/^POST \/v2\/(?:context|context-occurrences)/.test(surface)) return 'recall';
-  if (/^POST \/v2\/(?:sources|memories|tasks)/.test(surface)) return 'write';
-  if (/^GET \/v2\/(?:sources|history|memories|tasks|operations)/.test(surface)) return 'recall';
-  return 'recall';
+function policyPurpose(surface:string):'control'|'write'|'recall' {
+  const purpose=declaredPolicyPurpose(surface);
+  if(purpose===null)deny();
+  return purpose;
 }

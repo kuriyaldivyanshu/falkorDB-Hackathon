@@ -106,6 +106,7 @@ export {
   type SourceHistoryCursor,
   type SourceHistoryPage,
   type SourceHistoryQuery,
+  isContextManifestSourceKind,
   type SourceKind,
   type SourceLink,
   type SourceLinkRelation,
@@ -520,4 +521,4 @@ export {
 
 export { activatePolicyV3Schema, policyStatusV3Schema, type ActivatePolicyV3, type PolicyStatusV3 } from './policy.js';
 
-export { POLICY_CONTROL_SURFACES } from './protocol.js';
+export { POLICY_CONTROL_SURFACES, policyPurpose, type PolicyPurpose } from './protocol.js';

@@ -44,6 +44,8 @@ export const SOURCE_KINDS = [
 ] as const;
 export type SourceKind = (typeof SOURCE_KINDS)[number];
 
+export function isContextManifestSourceKind(kind:unknown):kind is 'context_manifest' {return kind==='context_manifest';}
+
 export const CAPTURE_COMPLETENESS = ['complete', 'partial', 'unknown', 'gap'] as const;
 export type CaptureCompleteness = (typeof CAPTURE_COMPLETENESS)[number];
 

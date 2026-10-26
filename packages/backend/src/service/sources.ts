@@ -2,7 +2,7 @@ import { type AdmissionService } from './admission.js';
 import { createHash, randomUUID } from 'node:crypto';
 
 import {
-  contextManifestSchema,
+  contextManifestSchema, isContextManifestSourceKind,
   parseContract,
   sourceAppendInputSchema,
   sourceAppendResultSchema,
@@ -194,14 +194,14 @@ export function createSourceService(deps: SourceServiceDeps): SourceService {
     );
   };
 
-  const appendStored = async (call: AuthenticatedCall, input: unknown, transaction?: TxClient): Promise<SourceAppendResult> => {
+  const appendStored = async (call: AuthenticatedCall, input: unknown, transaction?: TxClient, surface: 'source.append'|'context.manifest' = 'source.append'): Promise<SourceAppendResult> => {
     const parsed = parseContract(sourceAppendInputSchema, input, 'source append');
     const projectId = parsed.projectId;
     requireProject(call, projectId);
 
     // Bound first: normalize and limit every record before anything durable
     // is written, so an oversized batch fails without a partial publication.
-    const ticket = await deps.admission.check(call, 'source.append', parsed, transaction);
+    const ticket = await deps.admission.check(call, surface, parsed, transaction);
     const prepared: PreparedRecord[] = [];
     let batchBytes = 0;
     for (const record of parsed.records) {
@@ -278,7 +278,7 @@ export function createSourceService(deps: SourceServiceDeps): SourceService {
     async append(call, input, transaction) {
       requirePermission(call, 'knowledge.write');
       const parsed = parseContract(sourceAppendInputSchema, input, 'source append');
-      if (parsed.records.some((record) => record.kind === 'context_manifest')) {
+      if (parsed.records.some((record) => isContextManifestSourceKind(record.kind))) {
         throw new ThreadlineError('scope_denied', 'Context manifests require the trusted audit path.');
       }
       return appendStored(call, input, transaction);
@@ -292,7 +292,7 @@ export function createSourceService(deps: SourceServiceDeps): SourceService {
         deliveryId: `context:${nonce}`, originKey: `threadline:context:${nonce}`, originRevision: '1',
         kind: 'context_manifest', mediaType: 'application/json', bytesBase64: bytes.toString('base64'),
         observedAtMs: clock().getTime(), completeness: 'complete',
-      }] }, transaction);
+      }] }, transaction, 'context.manifest');
     },
 
     async view(call: AuthenticatedCall, projectId: string, sourceId: string, transaction?: TxClient, deadline?: number): Promise<SourceView> {

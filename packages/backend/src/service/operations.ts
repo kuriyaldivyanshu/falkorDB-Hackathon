@@ -1,5 +1,5 @@
-import { requirePolicyPermission, type PolicyService } from './policy.js';
-import { assertSafeAdmissionInput, assertPolicyInputLimits, CURRENT_ADMISSION_PARAMETERS, CURRENT_OPERATION_ADMISSION_SQL, hasOperationAdmission } from '../admission.js';
+import { requireOperationPolicy, requirePolicyPermission, type PolicyService } from './policy.js';
+import { assertSafeAdmissionInput, assertPolicyInputLimits, QUALIFIED_ADMISSION_PARAMETERS, QUALIFIED_OPERATION_ADMISSION_SQL, hasOperationAdmission } from '../admission.js';
 import type { AdmissionService } from './admission.js';
 import { randomUUID } from 'node:crypto';
 import { AsyncLocalStorage } from 'node:async_hooks';
@@ -11,6 +11,7 @@ import {
   ThreadlineError,
   memoryContentFits,
   memoryDocumentSchema,
+  isContextManifestSourceKind,
   operationViewSchema,
   parseContract,
   type DecimalString,
@@ -472,9 +473,9 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
             // historical unqualified intent is replayed as a fresh graph write.
             const admissions = await db.withTenantTransaction(row.tenant_id, tx => tx.rows<{ id: string; payload: unknown; policy_revision: string }>(
               `SELECT a.id,o.payload,a.policy_revision::text FROM threadline_memory.operations o
-                JOIN threadline_memory.ingress_admissions a ON ${CURRENT_OPERATION_ADMISSION_SQL}
+                JOIN threadline_memory.ingress_admissions a ON ${QUALIFIED_OPERATION_ADMISSION_SQL}
                WHERE o.tenant_id=$1 AND o.project_id=$2 AND o.id=$3`,
-              [row.tenant_id,row.project_id,row.id,...CURRENT_ADMISSION_PARAMETERS]));
+              [row.tenant_id,row.project_id,row.id,...QUALIFIED_ADMISSION_PARAMETERS]));
             if (admissions.length !== 1) {
               await settleRefused(row, operation.leaseToken, 'admission_unqualified',
                 'Historical intent requires explicit safe migration before graph delivery.');
@@ -482,10 +483,7 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
             }
             try {
               const policy = await db.withTenantTransaction(row.tenant_id,tx=>deps.admission.requireCurrentPolicy(row.tenant_id,row.project_id,tx));
-              if (policy.revision !== admissions[0]!.policy_revision) throw new ThreadlineError('stale_revision','Recorded intent uses an earlier policy revision.',{reason:'policy_unavailable'});
-              if (!(row.kind === 'source.append' && (admissions[0]!.payload as {sourceKind?:string}).sourceKind === 'context_manifest') && !policy.settings.ceilings.manual_record) {
-                throw new ThreadlineError('authority_unavailable','Current policy does not permit this recorded intent.',{reason:'policy_unavailable'});
-              }
+              requireOperationPolicy(policy,admissions[0]!.policy_revision,row.kind,admissions[0]!.payload);
             } catch (error) {
               await retry(row, operation.leaseToken, error instanceof ThreadlineError && error.code==='stale_revision' ? 'policy_revision_changed' : 'policy_unavailable', 'pending',
                 'Current content policy is unavailable; the operation will be retried.');
@@ -538,13 +536,10 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
                   });
                   execution.getStore()!.revalidatePolicy = async () => {
                     const policy = await deps.admission.requireCurrentPolicy(row.tenant_id,row.project_id,tx);
-                    if (policy.revision !== admissions[0]!.policy_revision) throw new ThreadlineError('stale_revision','Recorded intent uses an earlier policy revision.',{reason:'policy_unavailable'});
-                    if (!(row.kind === 'source.append' && (admissions[0]!.payload as {sourceKind?:string}).sourceKind === 'context_manifest') && !policy.settings.ceilings.manual_record) {
-                      throw new ThreadlineError('authority_unavailable','Current policy does not permit this recorded intent.',{reason:'policy_unavailable'});
-                    }
+                    requireOperationPolicy(policy,admissions[0]!.policy_revision,row.kind,admissions[0]!.payload);
                   };
                   await execution.getStore()!.revalidatePolicy!();
-                  const audit = row.kind === 'source.append' && actor.source_kind === 'context_manifest';
+                  const audit = row.kind === 'source.append' && isContextManifestSourceKind(actor.source_kind);
                   if ((audit && authority.tokenKind === 'producer' && authority.nativeSessionId === null) ||
                       (!audit && (authority.tokenKind === 'reader' || authority.tokenKind === 'producer' ||
                         !['owner', 'member'].includes(authority.role ?? '')))) {
@@ -2394,7 +2389,7 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
        SELECT o.tenant_id, o.project_id, resources.kind, resources.id, 'eligible', $5
          FROM threadline_memory.operations o
          JOIN threadline_memory.ingress_admissions a
-           ON ${CURRENT_OPERATION_ADMISSION_SQL}
+           ON ${QUALIFIED_OPERATION_ADMISSION_SQL}
          LEFT JOIN threadline_memory.sources s
            ON s.tenant_id = o.tenant_id AND s.project_id = o.project_id AND s.id = o.intent_source_id
          CROSS JOIN LATERAL (
@@ -2412,7 +2407,7 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
           AND ((o.kind = 'task.create' AND o.payload->>'serverSafeIngress' = $5)
             OR (o.kind <> 'task.create' AND s.release_state = 'eligible' AND s.sanitizer_version = $5))
        ON CONFLICT (tenant_id, project_id, resource_kind, resource_id) DO NOTHING`,
-      [row.tenant_id, row.project_id, row.id, ...CURRENT_ADMISSION_PARAMETERS]);
+      [row.tenant_id, row.project_id, row.id, ...QUALIFIED_ADMISSION_PARAMETERS]);
   };
 
   const settleCommitted = async (

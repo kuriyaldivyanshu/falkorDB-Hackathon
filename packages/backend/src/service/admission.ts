@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
-import { ThreadlineError } from '@threadline/shared';
+import { ThreadlineError, policyPurpose } from '@threadline/shared';
 
 import { assertSafeAdmissionInput, assertPolicyInputLimits, ADMISSION_SCANNER_VERSION } from '../admission.js';
 export { assertSafeText, assertSafeJson, assertSafeAdmissionInput, ADMISSION_POLICY_REVISION, ADMISSION_SCANNER_VERSION } from '../admission.js';
@@ -37,14 +37,13 @@ export function createAdmissionService(deps: { readonly db: SqlDatabase; readonl
       const id = randomUUID();
       let failure: unknown;
       let policy = baselinePolicySnapshot();
-      const purpose = surface.startsWith('context.') || (surface === 'source.append' &&
-        (input as {records?:{kind:string}[]}).records?.every(record=>record.kind==='context_manifest')) ? 'recall'
-        : /^(?:memory|task|source)\./.test(surface) ? 'write' : 'control';
+      const purpose = policyPurpose(surface);
+      if(purpose===null)throw new ThreadlineError('scope_denied','This action has no policy purpose contract.');
       const check = async (tx: TxClient): Promise<ReleaseAuthority> => {
         const authority = await lockReleaseAuthority(tx, identityOf(call));
         requireMatchingAuthority(call, authority);
         try {
-          if (call.scope.projectId) policy = await policies.current(call.scope.tenantId,call.scope.projectId,tx);
+          if (call.scope.projectId && purpose!=='control') policy = await policies.current(call.scope.tenantId,call.scope.projectId,tx);
           requirePolicyPermission(policy,call,purpose);
           assertSafeAdmissionInput(input,{revision:policy.revision,excludedPaths:policy.settings.capture.exclude_paths});
           if(purpose!=='control')assertPolicyInputLimits(input,{maxPayloadBytes:policy.settings.ceilings.max_payload_bytes,maxBatchRecords:policy.settings.ceilings.max_batch_records});
@@ -69,7 +68,7 @@ export function createAdmissionService(deps: { readonly db: SqlDatabase; readonl
       if (!sameAuthority(current, state.authority)) {
         throw new ThreadlineError('stale_revision', 'Admission authority changed; retry the request.');
       }
-      const policy = state.call.scope.projectId ? await policies.current(state.call.scope.tenantId,state.call.scope.projectId,tx) : baselinePolicySnapshot();
+      const policy = state.call.scope.projectId && state.purpose!=='control' ? await policies.current(state.call.scope.tenantId,state.call.scope.projectId,tx) : baselinePolicySnapshot();
       if (policy.revision !== state.policy.revision) throw new ThreadlineError('stale_revision','Effective policy changed; retry admission.');
       requirePolicyPermission(policy,state.call,state.purpose);
       await tx.rows("SELECT set_config('threadline.admission_id',$1,true)", [ticket.id]);

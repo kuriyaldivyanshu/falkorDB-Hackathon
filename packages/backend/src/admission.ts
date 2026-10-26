@@ -108,20 +108,22 @@ export function assertSafePublication(text: string, kind: 'text' | 'memory_docum
   assertSafeAdmissionInput(document);
 }
 
-/** One predicate and parameter order for execution, release and qualification.
+/** Qualification proves baseline or historically approved admission, not current
+ * authorization. Workers separately require the current revision; release
+ * rechecks the payload/dependencies under current policy. One parameter order.
  * There is no project.initialize producer; unsupported future kinds gain no
  * tenant-level attestation exception. */
-export const CURRENT_OPERATION_ADMISSION_SQL = `a.tenant_id=o.tenant_id AND a.id=o.admission_id
+export const QUALIFIED_OPERATION_ADMISSION_SQL = `a.tenant_id=o.tenant_id AND a.id=o.admission_id
   AND a.project_id=o.project_id AND a.principal_id=o.actor_principal_id AND a.token_id=o.actor_token_id
   AND a.state='accepted' AND a.sanitizer_version=$5
   AND (a.policy_revision=$4 OR EXISTS (SELECT 1 FROM threadline_memory.policy_revisions qualified
     WHERE qualified.tenant_id=a.tenant_id AND qualified.project_id=a.project_id AND qualified.revision=a.policy_revision))`;
-export const CURRENT_ADMISSION_PARAMETERS = [ADMISSION_POLICY_REVISION, ADMISSION_SCANNER_VERSION] as const;
+export const QUALIFIED_ADMISSION_PARAMETERS = [ADMISSION_POLICY_REVISION, ADMISSION_SCANNER_VERSION] as const;
 
 export async function hasOperationAdmission(tx: TxClient, tenantId: string, projectId: string, operationId: string): Promise<boolean> {
   const rows = await tx.rows(`SELECT o.id FROM threadline_memory.operations o
-    JOIN threadline_memory.ingress_admissions a ON ${CURRENT_OPERATION_ADMISSION_SQL}
+    JOIN threadline_memory.ingress_admissions a ON ${QUALIFIED_OPERATION_ADMISSION_SQL}
     WHERE o.tenant_id=$1 AND o.project_id=$2 AND o.id=$3`,
-    [tenantId, projectId, operationId, ...CURRENT_ADMISSION_PARAMETERS]);
+    [tenantId, projectId, operationId, ...QUALIFIED_ADMISSION_PARAMETERS]);
   return rows.length === 1;
 }

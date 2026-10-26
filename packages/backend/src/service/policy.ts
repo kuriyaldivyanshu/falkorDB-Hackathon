@@ -1,6 +1,6 @@
 import {
   activatePolicyV3Schema, ownerPolicyV3Schema, policyStatusV3Schema, parseContract, uuidSchema, ThreadlineError, ConfigurationError,
-  type OwnerPolicyV3, type PolicyStatusV3,
+  policyPurpose, isContextManifestSourceKind, type OwnerPolicyV3, type PolicyStatusV3,
 } from '@threadline/shared';
 
 import { baselinePolicySettings, policyCandidate } from '../effectivePolicy.js';
@@ -41,7 +41,19 @@ export function requirePolicyPermission(snapshot: EffectivePolicySnapshot, call:
   }
 }
 export function baselinePolicySnapshot(): EffectivePolicySnapshot {
-  return { revision: '0', settings: baselinePolicySettings(), digest: 'baseline', bindingId: null };
+  const settings=baselinePolicySettings();
+  return { revision: '0', settings, digest: canonicalDigest({revision:'0',settings}), bindingId: null };
+}
+/** Receipt qualification alone is historical. Fresh delivery requires the same
+ * current revision and current write permission, including the trusted audit
+ * exception for existing context-manifest operations. */
+export function requireOperationPolicy(snapshot:EffectivePolicySnapshot,admittedRevision:string,kind:string,payload:unknown):void {
+  if(snapshot.revision!==admittedRevision)throw new ThreadlineError('stale_revision','Recorded intent uses an earlier policy revision.',{reason:'policy_unavailable'});
+  const surface=kind==='source.append' && isContextManifestSourceKind((payload as {sourceKind?:unknown})?.sourceKind) ? 'context.manifest' : kind;
+  const purpose=policyPurpose(surface);
+  if(purpose===null || purpose==='control' || (purpose==='write' && !snapshot.settings.ceilings.manual_record)) {
+    throw new ThreadlineError('authority_unavailable','Current policy does not permit this recorded intent.',{reason:'policy_unavailable'});
+  }
 }
 export function createPolicyService(deps: { readonly db: SqlDatabase; readonly policyHome: string }): PolicyService {
   const head = async (tx: TxClient, tenantId: string, projectId: string): Promise<Head> => {
@@ -51,7 +63,8 @@ export function createPolicyService(deps: { readonly db: SqlDatabase; readonly p
     return rows[0];
   };
   const revision = async (tx: TxClient, tenantId: string, projectId: string, value: string): Promise<Revision> => {
-    const rows = await tx.rows<Revision>(`SELECT *,revision::text FROM threadline_memory.policy_revisions
+    const rows = await tx.rows<Revision>(`SELECT revision::text,binding_id,candidate_digest,settings,request_digest,owner_principal_id,owner_state
+      FROM threadline_memory.policy_revisions
       WHERE tenant_id=$1 AND project_id=$2 AND revision=$3 FOR SHARE`, [tenantId,projectId,value]);
     if (!rows[0]) unavailable();
     return rows[0];
@@ -143,7 +156,8 @@ export function createPolicyService(deps: { readonly db: SqlDatabase; readonly p
         await authorizeProjectOwner(tx,call,parsed.projectId);
         const row = await head(tx,call.scope.tenantId,parsed.projectId);
         const digest = canonicalDigest(parsed);
-        const known = await tx.rows<Revision>(`SELECT *,revision::text FROM threadline_memory.policy_revisions
+        const known = await tx.rows<Revision>(`SELECT revision::text,binding_id,candidate_digest,settings,request_digest,owner_principal_id,owner_state
+          FROM threadline_memory.policy_revisions
           WHERE tenant_id=$1 AND project_id=$2 AND request_id=$3`, [call.scope.tenantId,parsed.projectId,parsed.requestId]);
         if (known[0]) {
           if (known[0].request_digest !== digest || known[0].owner_principal_id !== call.scope.principalId) {
@@ -170,7 +184,10 @@ export function createPolicyService(deps: { readonly db: SqlDatabase; readonly p
           (tenant_id,project_id,revision,owner_principal_id,owner_token_id,binding_id,request_id,request_digest,candidate_digest,settings,owner_state)
           VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11)`, [call.scope.tenantId,parsed.projectId,next.toString(),call.scope.principalId,
           call.tokenId,loaded.bindingId,parsed.requestId,digest,loaded.digest,JSON.stringify(loaded.settings),loaded.owner.state]);
-        await tx.rows(`UPDATE threadline_memory.projects SET policy_revision=$3 WHERE tenant_id=$1 AND id=$2`, [call.scope.tenantId,parsed.projectId,next.toString()]);
+        const advanced=await tx.rows(`UPDATE threadline_memory.projects SET policy_revision=$3
+          WHERE tenant_id=$1 AND id=$2 AND policy_revision=$4 AND privacy_revision=$5 RETURNING id`,
+          [call.scope.tenantId,parsed.projectId,next.toString(),parsed.guard.expectedPolicyRevision,parsed.guard.expectedPrivacyGeneration]);
+        if(advanced.length!==1)throw new ThreadlineError('stale_revision','Policy or privacy changed; inspect and approve the current candidate.');
         return wire(parsed.projectId,{...row,policy_revision:next.toString()},loaded.settings,call.scope.principalId);
       });
     },

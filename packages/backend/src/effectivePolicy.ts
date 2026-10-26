@@ -11,6 +11,9 @@ import { canonicalDigest } from './storage/digest.js';
 
 const DEFAULT_SETTINGS = parseProductPolicy('schema_version = 1\n');
 const MAX_EXCLUSIONS = 64;
+// A conservative byte allowance per requested token, not a token-count claim.
+// The existing hard byte ceiling still applies; native context is harness-owned.
+const CONTEXT_BYTES_PER_REQUESTED_TOKEN = 4;
 
 function invalid(): never {
   throw new ThreadlineError('invalid_request', 'Effective policy settings are unsupported or exceed their bounds.');
@@ -102,7 +105,8 @@ export function resolvePolicySettings(owner: ProductPolicySettings, preferences:
 }
 
 /** Revision zero preserves M03's explicit manual workflow only when the caller
- * has established no prior approval and no owner file. This is not a candidate. */
+ * has established no prior approval and no owner file. Source age limits start
+ * after owner approval; stored availability/denials still apply. */
 export function baselinePolicySettings(): ProductPolicySettings {
   return deepFreeze({
     ...structuredClone(DEFAULT_SETTINGS),
@@ -138,8 +142,9 @@ export function contextPolicyLimits(settings: ProductPolicySettings): {
   requireSupported(settings);
   const policy = settings;
   return deepFreeze({
-    maxBodyBytes: Math.min(CONTEXT_MAX_BODY_BYTES, minimum(policy.context.recall_max_tokens, undefined) * 4),
+    maxBodyBytes: Math.min(CONTEXT_MAX_BODY_BYTES, minimum(policy.context.recall_max_tokens, undefined) * CONTEXT_BYTES_PER_REQUESTED_TOKEN),
     maxCandidates: Math.min(RECALL_LIMITS_V3.maxExaminedCandidates, minimum(policy.retrieval.max_candidates, undefined)),
+    // optional_wait_ms bounds the complete optional discovery/selection phase.
     deadlineMs: Math.min(RECALL_LIMITS_V3.deadlineMs, minimum(policy.retrieval.optional_wait_ms, undefined, true)),
   });
 }
