@@ -12,6 +12,7 @@ import { createApiServer, type ApiServerHandle, type ServiceAddress } from './ap
 import { storageConfigured, type ServiceConfig } from './config.js';
 import type { Logger } from './log.js';
 import { silentLogger } from './log.js';
+import { createPolicyService, type PolicyService } from './service/policy.js';
 import { createAdmissionService } from './service/admission.js';
 import { createReleaseService, type ReleaseService } from './service/release.js';
 import { createAccessService, type AccessService } from './service/access.js';
@@ -160,6 +161,7 @@ export interface MemoryService {
   capabilities(): CapabilityReport;
   /** Durable services. Throws `storage_unavailable` until the stores are ready. */
   readonly release: ReleaseService;
+  readonly policies: PolicyService;
   readonly auth: AuthService;
   readonly access: AccessService;
   readonly nativeAccess: NativeAccessService;
@@ -199,6 +201,7 @@ export function createMemoryService(deps: MemoryServiceDeps): MemoryService {
     detail: 'The privileged SQL path has not been checked yet.',
   };
   let release: ReleaseService | null = null;
+  let policies: PolicyService | null = null;
   let auth: AuthService | null = null;
   let projects: ProjectService | null = null;
   let access: AccessService | null = null;
@@ -330,14 +333,15 @@ export function createMemoryService(deps: MemoryServiceDeps): MemoryService {
     files ??= createSourceFileStore({ root: deps.config.paths.sourceRoot, logger });
     filesReady = await files.probe();
 
-    release = createReleaseService({db: database, files, ...(graphStore === null ? {} : {graphStore})});
-    const admission = createAdmissionService({ db: database, policyHome: deps.config.paths.home });
+    policies = createPolicyService({db:database,policyHome:deps.config.paths.home});
+    release = createReleaseService({db: database, files, policies, ...(graphStore === null ? {} : {graphStore})});
+    const admission = createAdmissionService({ db: database, policyHome: deps.config.paths.home, policies });
     auth = createAuthService({ db: database, clock, logger });
     access = createAccessService({ db: database, admission });
     nativeAccess = createNativeAccessService({ db: database, admission });
     projects = createProjectService({ db: database, admission, clock, logger });
     sources = createSourceService({ db: database, admission, files, release, clock, logger });
-    operations = createOperationService({ db: database });
+    operations = createOperationService({ db: database, policies });
     if (graphStore !== null && sqlReady()) {
       memories = createSemanticMemoryService({ db: database, admission, files, graphStore, release, clock, logger });
       tasks = createTaskService({ db: database, admission, graphStore, release, clock, logger });
@@ -515,6 +519,7 @@ export function createMemoryService(deps: MemoryServiceDeps): MemoryService {
       return server?.address ?? null;
     },
 
+    get policies() { return requireDurable(policies); },
     get release() { return requireDurable(release); },
     get auth(): AuthService {
       if (auth === null || !durableReady()) {
@@ -641,3 +646,6 @@ export type { ProductPolicySettings, ProjectPreferences, LoadedProductPolicy, Lo
 export { createAdmissionService } from './service/admission.js';
 export { ADMISSION_LIMITS, assertSafeText, assertSafeAdmissionInput } from './admission.js';
 export type { AdmissionService, AdmissionTicket } from './service/admission.js';
+
+export { createPolicyService } from './service/policy.js';
+export type { PolicyService, EffectivePolicySnapshot } from './service/policy.js';

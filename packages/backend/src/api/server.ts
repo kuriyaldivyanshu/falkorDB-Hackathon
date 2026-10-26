@@ -1,7 +1,7 @@
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 
 import {
-  API_PREFIX,
+  API_PREFIX, POLICY_CONTROL_SURFACES, CONTRACT_ROUTES_V3, ownerPolicyV3Schema, policyStatusV3Schema,
   ROUTES,
   ThreadlineError,
   errorPayload, parseContract, sourceAppendResultSchema, sourceHistoryPageSchema, sourceViewSchema,
@@ -159,6 +159,18 @@ function buildApp(deps: ApiServerDeps): FastifyInstance {
     const envelope = JSON.parse(payload) as {data:unknown};
     await service.release.permit(ticket, payload, releaseSelection(ticket.surface,envelope.data,ticket.call));
     return payload;
+  });
+
+  app.get(CONTRACT_ROUTES_V3.policy(':projectId'), async (request,reply) => {
+    const projectId = (request.params as {projectId:string}).projectId;
+    const call = await authenticate(request,{projectId});
+    const bindingId = (request.query as {bindingId?:string}).bindingId;
+    return reply.send({ok:true,data:await service.policies.inspect(call,bindingId)});
+  });
+  app.post(CONTRACT_ROUTES_V3.policy(':projectId'), async (request,reply) => {
+    const projectId = (request.params as {projectId:string}).projectId;
+    const call = await authenticate(request,{projectId});
+    return reply.send({ok:true,data:await service.policies.activate(call,request.body)});
   });
 
   app.setErrorHandler((error: unknown, _request: FastifyRequest, reply: FastifyReply) => {
@@ -502,12 +514,13 @@ const SAFE_INPUT_FIELDS = new Set([
   'content', 'records', 'applicability', 'observedUnder', 'reason', 'title', 'family',
   'limit', 'cursor', 'discoveryCursor', 'offset', 'maxBytes', 'focus', 'kind', 'kinds',
   'idempotencyKey', 'expectedCurrentVersionId', 'expectedTaskRevision', 'sourceIds',
-  'nativeSessionId', 'joinProjectId', 'root', 'label',
+  'nativeSessionId', 'joinProjectId', 'root', 'label', 'bindingId', 'candidateDigest', 'guard', 'ceilings',
 ]);
 
 /** Reduces any thrown value to the shared payload; driver messages never escape. */
 function toSafeError(error: unknown): SafeError {
   if (error instanceof ThreadlineError) {
+    if(error.code==='authority_unavailable' && error.details?.['reason']==='policy_unavailable')return {code:error.code,payload:errorPayload(error.code,'Current policy requires owner reconciliation; inspect the project policy.',{reason:'policy_unavailable'})};
     if (error.code === 'invalid_request') {
       const details = error.details;
       const candidate = typeof details?.field === 'string' ? details.field
@@ -614,14 +627,7 @@ function readStringList(value: Record<string, unknown>, field: string): string[]
   throw new ThreadlineError('invalid_request', `The "${field}" filter must be a list of names.`, { field });
 }
 
-const id = ':projectId';
-const metadataSurfaces = [
-  `GET ${ROUTES.status}`,`GET ${ROUTES.capabilities}`,`GET ${ROUTES.projects}`,`POST ${ROUTES.projects}`,
-  `GET ${ROUTES.projectGrants(id)}`,
-  ...['GET','POST'].flatMap(method=>[`${method} ${ROUTES.readerCredentials(id)}`,`${method} ${ROUTES.enrollments(id)}`]),
-  `POST ${ROUTES.readerCredentialRevocation(id,':credentialId')}`,`GET ${ROUTES.enrollment(id,':enrollmentId')}`,
-  `POST ${ROUTES.enrollmentRevocation(id,':enrollmentId')}`,`POST ${ROUTES.nativeSessions}`,`GET ${ROUTES.projectSessions(id)}`,
-];
+const metadataSurfaces = POLICY_CONTROL_SURFACES;
 const admissionKinds = new Map([
   [`POST ${ROUTES.appendSources}`,'source.append'],[`POST ${ROUTES.memoryProposals}`,'memory.propose'],
   [`POST ${ROUTES.memoryEpisodes}`,'memory.episode.record'],[`POST ${ROUTES.memoryAccept(':memoryId')}`,'memory.accept'],
@@ -640,6 +646,12 @@ function releaseSelection(surface:string,data:unknown,call:AuthenticatedCall):Re
     if(projectId===null)throw new ThreadlineError('scope_denied','Project release scope is required.');
     resources.push({kind,id,projectId});
   };
+  if(surface===`GET ${CONTRACT_ROUTES_V3.policy(':projectId')}` || surface===`POST ${CONTRACT_ROUTES_V3.policy(':projectId')}`) {
+    requirePermission(call,'access.admin');
+    const policy = surface.startsWith('GET ') ? parseContract(policyStatusV3Schema,data,'policy status').current : parseContract(ownerPolicyV3Schema,data,'approved policy');
+    add('project',policy.projectId,policy.projectId);
+    return {resources,policyRevision:policy.fence.policyRevision};
+  }
   const admissionKind=admissionKinds.get(surface);
   if(admissionKind) {
     if(admissionKind==='source.append') {

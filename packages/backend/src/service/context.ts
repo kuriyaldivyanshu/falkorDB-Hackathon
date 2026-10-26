@@ -1,6 +1,8 @@
+import { contextPolicyLimits } from '../effectivePolicy.js';
 import { type AdmissionService } from './admission.js';
 import { encodePageCursor, decodePageCursor } from './cursors.js';
 import { randomUUID } from 'node:crypto';
+import type { QueryResultRow } from 'pg';
 
 import {
   CONTEXT_EXCERPT_BYTES, CONTEXT_MAX_MANDATORY_ITEMS, CONTEXT_MAX_OPTIONAL_MEMORIES,
@@ -16,7 +18,7 @@ import { canonicalDigest, sha256Hex } from '../storage/digest.js';
 import { readContextCandidates, readContextHeads, readContextRequirementIds, readContextTaskRevision } from '../storage/contextGraph.js';
 import type { GraphStore } from '../storage/graph.js';
 import { projectRootIdFor, readProjectRoot, readVersionDetailRows } from '../storage/memoryGraph.js';
-import { projectWriteLockKey, type SqlDatabase, type TxClient } from '../storage/pg.js';
+import { projectWriteLockKey, toStorageError, type SqlDatabase, type TxClient } from '../storage/pg.js';
 import type { AuthenticatedCall } from './auth.js';
 import { requirePermission } from './permissions.js';
 import { requireNativeSession } from './nativeAuthority.js';
@@ -89,7 +91,7 @@ export function createContextService(deps: ContextServiceDeps): ContextService {
   /** Full bounded SQL provenance closure, then the existing source service's
    * visibility, availability and whole-object digest verification. Never truncate refs.
    */
-  const provenance = async (tx: TxClient, call: AuthenticatedCall, ids: readonly string[]): Promise<ContextSourceRef[]> => {
+  const provenance = async (tx: TxClient, call: AuthenticatedCall, ids: readonly string[], deadline?:number): Promise<ContextSourceRef[]> => {
     if (ids.length === 0 || ids.length > CONTEXT_MAX_SOURCE_REFS) throw new ContextRefusal('incomplete_provenance');
     const seen = new Set(ids);
     let frontier = [...seen];
@@ -110,12 +112,12 @@ export function createContextService(deps: ContextServiceDeps): ContextService {
     const refs: ContextSourceRef[] = [];
     for (const id of [...seen].sort()) {
       try {
-        const source = await deps.sources.view(call, call.scope.projectId!, id, tx);
+        const source = await deps.sources.view(call, call.scope.projectId!, id, tx, deadline);
         if (source.visibility !== 'project' || source.availability !== 'available') {
           throw new ContextRefusal('incomplete_provenance');
         }
         // range verifies the complete object before returning even an empty slice.
-        await deps.sources.range(call, call.scope.projectId!, id, 0, 0, tx);
+        await deps.sources.range(call, call.scope.projectId!, id, 0, 0, tx, deadline);
         refs.push({ sourceId: id, kind: source.kind, digest: source.digest, start: null, end: null });
       } catch (error) {
         if (error instanceof ThreadlineError && ['not_found', 'source_unavailable', 'scope_denied'].includes(error.code)) {
@@ -127,13 +129,13 @@ export function createContextService(deps: ContextServiceDeps): ContextService {
     return refs;
   };
 
-  const version = async (call: AuthenticatedCall, memoryId: string, expected?: string): Promise<MemoryVersion> => {
+  const version = async (call: AuthenticatedCall, memoryId: string, expected?: string, deadline?:number): Promise<MemoryVersion> => {
     const graph = graphFor(call);
-    const heads = await withGraphRead(() => readContextHeads(graph, projectRootIdFor(call.scope.projectId!), memoryId));
+    const heads = await withGraphRead(() => readContextHeads(graph, projectRootIdFor(call.scope.projectId!), memoryId,optionalRemaining(deadline)));
     if (heads.length !== 1 || (expected !== undefined && heads[0] !== expected)) {
       throw new ContextRefusal(expected === undefined ? 'missing_current_authority' : 'stale_preparation');
     }
-    const rows = await withGraphRead(() => readVersionDetailRows(graph, heads));
+    const rows = await withGraphRead(() => readVersionDetailRows(graph, heads,optionalRemaining(deadline)));
     const row = rows[0];
     if (rows.length !== 1 || row === undefined || !row.is_current || row.acceptance !== 'accepted' || row.memory_id !== memoryId) {
       throw new ContextRefusal('missing_current_authority');
@@ -141,7 +143,7 @@ export function createContextService(deps: ContextServiceDeps): ContextService {
     return toMemoryVersion(row);
   };
 
-  const makeItem = async (tx: TxClient, call: AuthenticatedCall, v: MemoryVersion, mandatory: boolean, taskId: string | null): Promise<ContextItem> => {
+  const makeItem = async (tx: TxClient, call: AuthenticatedCall, v: MemoryVersion, mandatory: boolean, taskId: string | null, deadline?:number): Promise<ContextItem> => {
     if (v.content.kind !== 'semantic' && v.content.kind !== 'episodic') throw new ContextRefusal('missing_current_authority');
     const text = memoryText(v);
     return {
@@ -151,7 +153,7 @@ export function createContextService(deps: ContextServiceDeps): ContextService {
       representation: 'exact', text, byteLength: Buffer.byteLength(text, 'utf8'),
       reason: mandatory ? 'current_required_obligation' : v.content.kind === 'episodic' ? 'applicable_episode'
         : v.content.subtype === 'decision' ? 'accepted_decision' : 'accepted_fact',
-      sourceRefs: await provenance(tx, call, v.sourceIds),
+      sourceRefs: await provenance(tx, call, v.sourceIds,deadline),
     };
   };
 
@@ -163,6 +165,8 @@ export function createContextService(deps: ContextServiceDeps): ContextService {
   };
 
   const replay = async (tx: TxClient, call: AuthenticatedCall, row: OccurrenceRow, parsed: PrepareContextInput): Promise<ContextResult> => {
+    const policy = await deps.admission.requireCurrentPolicy(call.scope.tenantId,parsed.projectId,tx);
+    const limits = contextPolicyLimits(policy.settings);
     const before = await rootFor(call);
     const source = await deps.sources.view(call, parsed.projectId, row.manifest_source_id, tx);
     if (source.kind !== 'context_manifest' || source.availability !== 'available' || source.byteSize > 131072) {
@@ -191,10 +195,10 @@ export function createContextService(deps: ContextServiceDeps): ContextService {
     await checkItemSources(tx, call, items);
     await checkTask(call, manifest);
     if (canonicalDigest(before) !== canonicalDigest(await rootFor(call))) throw new ContextRefusal('stale_snapshot');
-    const candidates = await withGraphRead(() => readContextCandidates(graphFor(call), projectRootIdFor(parsed.projectId), 257,
-      decodePageCursor(call, `context:${parsed.taskId ?? ''}:${parsed.focus ?? ''}`, parsed.discoveryCursor, '')));
-    const discoveryCursor = candidates.length > 256
-      ? encodePageCursor(call, `context:${parsed.taskId ?? ''}:${parsed.focus ?? ''}`, candidates[255]!) : null;
+    const candidates = limits.deadlineMs===0 ? [] : await withGraphRead(() => readContextCandidates(graphFor(call), projectRootIdFor(parsed.projectId), limits.maxCandidates+1,
+      decodePageCursor(call, `context:${parsed.taskId ?? ''}:${parsed.focus ?? ''}`, parsed.discoveryCursor, ''),limits.deadlineMs));
+    const discoveryCursor = candidates.length > limits.maxCandidates
+      ? encodePageCursor(call, `context:${parsed.taskId ?? ''}:${parsed.focus ?? ''}`, candidates[limits.maxCandidates-1]!) : null;
     return packet(manifest, row.manifest_source_id, row.id, items, body, clock().getTime(), discoveryCursor);
   };
 
@@ -205,6 +209,9 @@ export function createContextService(deps: ContextServiceDeps): ContextService {
       requireProjectScope(call, parsed.projectId);
       validateHints(parsed);
       const ticket = await deps.admission.check(call, 'context.prepare', parsed);
+      const limits = contextPolicyLimits(deps.admission.policy(ticket).settings);
+      if (limits.maxBodyBytes < 1024) throw new ThreadlineError('overloaded','Current policy budget is below the supported context minimum.');
+      parsed.maxBodyBytes = Math.min(parsed.maxBodyBytes,limits.maxBodyBytes);
       const nonce = canonicalDigest({ principalId: call.scope.principalId, key: parsed.idempotencyKey });
       const { idempotencyKey: _key, ...request } = parsed;
       const requestDigest = canonicalDigest(request);
@@ -221,9 +228,16 @@ export function createContextService(deps: ContextServiceDeps): ContextService {
             );
             if (known[0] !== undefined) {
               const row = known[0];
-              if (row.principal_id !== call.scope.principalId || row.token_id !== call.tokenId || row.request_digest !== requestDigest) {
+              if (row.principal_id !== call.scope.principalId || row.token_id !== call.tokenId) {
                 throw new ThreadlineError('idempotency_mismatch', 'The context identity already names another request or credential.');
               }
+              const admitted = await tx.rows<{policy_revision:string}>(`SELECT a.policy_revision::text
+                FROM threadline_memory.sources s JOIN threadline_memory.ingress_admissions a
+                  ON a.tenant_id=s.tenant_id AND a.id=s.admission_id
+                WHERE s.tenant_id=$1 AND s.project_id=$2 AND s.id=$3 AND a.state='accepted'`,
+                [call.scope.tenantId,parsed.projectId,row.manifest_source_id]);
+              if(admitted[0]?.policy_revision!==deps.admission.policy(ticket).revision)throw new ThreadlineError('stale_revision','Context preparation belongs to an earlier policy; prepare with a new request identity.');
+              if(row.request_digest!==requestDigest)throw new ThreadlineError('idempotency_mismatch','The context identity already names another request.');
               const result = await replay(tx, call, row, parsed);
               await releaseScope(tx, call);
               return result;
@@ -248,47 +262,55 @@ export function createContextService(deps: ContextServiceDeps): ContextService {
             }
             if (sourceIds(items).length > CONTEXT_MAX_SOURCE_REFS) throw new ContextRefusal('incomplete_provenance');
             if (Buffer.byteLength(render(items)) > parsed.maxBodyBytes) throw new ContextRefusal('mandatory_overflow');
-            const candidates = await withGraphRead(() => readContextCandidates(graphFor(call), projectRootIdFor(parsed.projectId), 257,decodePageCursor(call,`context:${parsed.taskId??''}:${parsed.focus??''}`,parsed.discoveryCursor,'')));
-            const scan = candidates.slice(0,256);
-            const discoveryCursor = candidates.length>256 ? encodePageCursor(call,`context:${parsed.taskId??''}:${parsed.focus??''}`,scan.at(-1)!) : null;
-            const eligible = await deps.release.eligibleMany(call, scan.map(id=>[{projectId:parsed.projectId,kind:'memory' as const,id}]),tx);
-            const ranked: MemoryVersion[] = [];
-            for (const [index,id] of scan.entries()) {
-              if (task?.requiredMemoryIds.includes(id)) continue;
-              try {
-                if (!eligible[index]) continue;
-                const v = await version(call, id);
-                if (v.content.kind === 'semantic' && v.content.subtype === 'requirement') continue;
-                if (!applicable(v, parsed, task)) { omit(v.content.kind, 'not_applicable'); continue; }
-                ranked.push(v);
-              } catch (error) {
-                if (error instanceof ContextRefusal) continue;
-                throw error;
+            const optionalDeadline = Date.now()+limits.deadlineMs;
+            let discoveryCursor:string|null=null;
+            const mandatoryCount=items.length;
+            const completed = limits.deadlineMs>0 && await withOptionalWork(tx,optionalDeadline,async optionalTx=>{
+              const candidates = limits.deadlineMs===0 ? [] : await withGraphRead(() => readContextCandidates(graphFor(call), projectRootIdFor(parsed.projectId), limits.maxCandidates+1,decodePageCursor(call,`context:${parsed.taskId??''}:${parsed.focus??''}`,parsed.discoveryCursor,''),optionalRemaining(optionalDeadline)));
+              const scan = candidates.slice(0,limits.maxCandidates);
+              discoveryCursor = candidates.length>limits.maxCandidates ? encodePageCursor(call,`context:${parsed.taskId??''}:${parsed.focus??''}`,scan.at(-1)!) : null;
+              const eligible = await deps.release.eligibleMany(call, scan.map(id=>[{projectId:parsed.projectId,kind:'memory' as const,id}]),optionalTx,optionalDeadline);
+              const ranked: MemoryVersion[] = [];
+              for (const [index,id] of scan.entries()) {
+                if (Date.now()>optionalDeadline) {omit('orientation','optional_budget_exhausted');break;}
+                if (task?.requiredMemoryIds.includes(id)) continue;
+                try {
+                  if (!eligible[index]) continue;
+                  const v = await version(call, id,undefined,optionalDeadline);
+                  if (v.content.kind === 'semantic' && v.content.subtype === 'requirement') continue;
+                  if (!applicable(v, parsed, task)) { omit(v.content.kind, 'not_applicable'); continue; }
+                  ranked.push(v);
+                } catch (error) {
+                  if (error instanceof ContextRefusal) continue;
+                  throw error;
+                }
               }
-            }
-            // Truncation concerns eligible/applicable candidates only. Do not
-            // publish private skipped counts. A fixed count-free coverage marker
-            // describes the bounded discovery policy on every packet.
-            omissions.push({kind:'orientation',reason:'candidate_limit',count:0});
-            ranked.sort((a, b) => priority(a) - priority(b) || focusScore(b, parsed.focus) - focusScore(a, parsed.focus)
-              || b.createdAtMs - a.createdAtMs || a.memoryId.localeCompare(b.memoryId));
-            for (const v of ranked) {
-              if (items.filter((item) => item.priority === 'optional').length >= CONTEXT_MAX_OPTIONAL_MEMORIES) {
-                omit(v.content.kind, 'optional_budget_exhausted'); continue;
+              // Truncation concerns eligible/applicable candidates only. Do not
+              // publish private skipped counts. A fixed count-free coverage marker
+              // describes the bounded discovery policy on every packet.
+              omissions.push({kind:'orientation',reason:'candidate_limit',count:0});
+              ranked.sort((a, b) => priority(a) - priority(b) || focusScore(b, parsed.focus) - focusScore(a, parsed.focus)
+                || b.createdAtMs - a.createdAtMs || a.memoryId.localeCompare(b.memoryId));
+              for (const v of ranked) {
+                optionalRemaining(optionalDeadline);
+                if (items.filter((item) => item.priority === 'optional').length >= CONTEXT_MAX_OPTIONAL_MEMORIES) {
+                  omit(v.content.kind, 'optional_budget_exhausted'); continue;
+                }
+                let item: ContextItem;
+                try { item = await makeItem(optionalTx, call, v, false, parsed.taskId ?? null,optionalDeadline); }
+                catch (error) {
+                  if (error instanceof ContextRefusal) { omit('orientation', 'source_unavailable'); continue; }
+                  throw error;
+                }
+                if (sourceIds([...items, item]).length > CONTEXT_MAX_SOURCE_REFS) {
+                  omit('orientation', 'source_reference_limit'); continue;
+                }
+                if (Buffer.byteLength(render([...items, item])) > parsed.maxBodyBytes) item = excerpt(item);
+                if (Buffer.byteLength(render([...items, item])) > parsed.maxBodyBytes) { omit(item.kind, 'optional_budget_exhausted'); continue; }
+                items.push(item);
               }
-              let item: ContextItem;
-              try { item = await makeItem(tx, call, v, false, parsed.taskId ?? null); }
-              catch (error) {
-                if (error instanceof ContextRefusal) { omit('orientation', 'source_unavailable'); continue; }
-                throw error;
-              }
-              if (sourceIds([...items, item]).length > CONTEXT_MAX_SOURCE_REFS) {
-                omit('orientation', 'source_reference_limit'); continue;
-              }
-              if (Buffer.byteLength(render([...items, item])) > parsed.maxBodyBytes) item = excerpt(item);
-              if (Buffer.byteLength(render([...items, item])) > parsed.maxBodyBytes) { omit(item.kind, 'optional_budget_exhausted'); continue; }
-              items.push(item);
-            }
+            });
+            if(!completed){items.splice(mandatoryCount);discoveryCursor=null;omit('orientation','optional_budget_exhausted');}
             const body = render(items);
             const manifest = parseContract(contextManifestSchema, {
               manifestVersion: CONTEXT_MANIFEST_SCHEMA_VERSION, rendererVersion: CONTEXT_RENDERER_VERSION,
@@ -471,6 +493,33 @@ interface OccurrenceRow {
   state: ContextOccurrence['state']; boundary: string | null; native_turn_ref: string | null;
   packet_digest: string; privacy_revision: string; emitted_at: Date | null; refusal_reason: string | null;
   request_digest: string | null; update_key: string | null; update_digest: string | null;
+}
+function optionalRemaining(deadline?:number):number {
+  if(deadline===undefined)return 2000;
+  const remaining=deadline-Date.now();
+  if(remaining<=0)throw new ThreadlineError('overloaded','Optional context budget exhausted.');
+  return Math.min(2000,remaining);
+}
+/** Optional work is read-only. Roll back its savepoint even on success to
+ * restore timeouts and recover an aborted SQL query before mandatory finalization. */
+async function withOptionalWork(tx:TxClient,deadline:number,work:(bounded:TxClient)=>Promise<void>):Promise<boolean> {
+  await tx.rows('SAVEPOINT optional_context');
+  try {
+    const bounded:TxClient={rows:async<TRow extends QueryResultRow>(text:string,values?:readonly unknown[]):Promise<TRow[]>=>{
+      const remaining=optionalRemaining(deadline);
+      try {
+        await tx.rows("SELECT set_config('statement_timeout',$1,true),set_config('lock_timeout',$1,true)",[`${remaining}ms`]);
+        const rows=await tx.rows<TRow>(text,values);optionalRemaining(deadline);return rows;
+      } catch(error) {throw error instanceof ThreadlineError?error:toStorageError(error,'context_optional');}
+    }};
+    await work(bounded);optionalRemaining(deadline);return true;
+  } catch(error) {
+    if(error instanceof ThreadlineError && ['overloaded','authority_unavailable','storage_unavailable'].includes(error.code))return false;
+    throw error;
+  } finally {
+    await tx.rows('ROLLBACK TO SAVEPOINT optional_context');
+    await tx.rows('RELEASE SAVEPOINT optional_context');
+  }
 }
 function occurrence(row: OccurrenceRow): ContextOccurrence {
   return parseContract(contextOccurrenceSchema, {

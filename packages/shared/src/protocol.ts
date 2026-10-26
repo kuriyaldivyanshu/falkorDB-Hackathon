@@ -96,7 +96,8 @@ export interface ApiSuccessEnvelope<TData> {
   readonly data: TData;
 }
 
-/** Declarations only: no registration, handler or capability is enabled. V2
+/** Policy control alone has scoped runtime handlers. Other v3 entries remain
+ * declarations: no registration or capability is enabled by them. V2
  * stays unchanged here. Future runtime adapters must apply the current release
  * gate to safe v2 reads and refuse unsafe v2 mutation/context requests. */
 export const CONTRACT_PROTOCOL_VERSION_V3 = 3;
@@ -123,6 +124,40 @@ export const CONTRACT_ROUTES_V3 = {
   deletion: (id: string): string => `${CONTRACT_API_PREFIX_V3}/privacy/deletions/${id}`,
   operation: (id: string): string => `${CONTRACT_API_PREFIX_V3}/operations/${id}`,
 } as const;
+
+export type PolicyPurpose = 'control' | 'write' | 'recall';
+
+/** Explicit internal actions and HTTP route labels share one purpose contract.
+ * Unknown surfaces have no purpose and must be refused by admission/release. */
+const POLICY_SURFACES: readonly {purpose:PolicyPurpose;surfaces:readonly string[]}[] = [
+  {purpose:'control',surfaces:[
+    'project.add','reader.issue','native.issue','native.register',
+    `GET ${ROUTES.status}`,`GET ${ROUTES.capabilities}`,`GET ${ROUTES.projects}`,`POST ${ROUTES.projects}`,
+    `GET ${ROUTES.projectGrants(':projectId')}`,
+    ...['GET','POST'].flatMap(method=>[`${method} ${ROUTES.readerCredentials(':projectId')}`,`${method} ${ROUTES.enrollments(':projectId')}`]),
+    `POST ${ROUTES.readerCredentialRevocation(':projectId',':credentialId')}`,`GET ${ROUTES.enrollment(':projectId',':enrollmentId')}`,
+    `POST ${ROUTES.enrollmentRevocation(':projectId',':enrollmentId')}`,`POST ${ROUTES.nativeSessions}`,`GET ${ROUTES.projectSessions(':projectId')}`,
+    `GET ${CONTRACT_ROUTES_V3.policy(':projectId')}`,`POST ${CONTRACT_ROUTES_V3.policy(':projectId')}`,
+  ]},
+  {purpose:'write',surfaces:[
+    'source.append','memory.propose','memory.recordEpisode','memory.episode.record','memory.accept','memory.correct','task.create','task.require',
+    `POST ${ROUTES.appendSources}`,`POST ${ROUTES.memoryProposals}`,`POST ${ROUTES.memoryEpisodes}`,
+    `POST ${ROUTES.memoryAccept(':memoryId')}`,`POST ${ROUTES.memoryCorrections(':memoryId')}`,
+    `POST ${ROUTES.tasks}`,`POST ${ROUTES.taskRequirements(':taskId')}`,
+  ]},
+  {purpose:'recall',surfaces:[
+    'context.prepare','context.occurrence','context.manifest','operation.inspect',
+    `POST ${ROUTES.context}`,`POST ${ROUTES.contextOccurrences}`,
+    `GET ${ROUTES.memories}`,`GET ${ROUTES.memory(':memoryId')}`,`GET ${ROUTES.task(':taskId')}`,
+    `GET ${ROUTES.taskRequirements(':taskId')}`,`GET ${ROUTES.history}`,`GET ${ROUTES.source(':sourceId')}`,
+    `GET ${ROUTES.sourceRange(':sourceId')}`,`GET ${ROUTES.operation(':operationId')}`,
+  ]},
+];
+const policyPurposes = new Map(POLICY_SURFACES.flatMap(({purpose,surfaces})=>surfaces.map(surface=>[surface,purpose] as const)));
+export function policyPurpose(surface:string):PolicyPurpose|null {return policyPurposes.get(surface) ?? null;}
+/** Derived control route labels still require current authority and a permit. */
+export const POLICY_CONTROL_SURFACES = Object.freeze(POLICY_SURFACES
+  .filter(entry=>entry.purpose==='control').flatMap(entry=>entry.surfaces.filter(surface=>/^(GET|POST) /.test(surface))));
 
 /** Equality is over the full validated canonical request plus authenticated
  * tenant/project/principal and stored enrollment/session/stream binding. Include

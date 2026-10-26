@@ -877,6 +877,21 @@ export const MEMORY_SQL_MIGRATIONS: readonly SqlMigration[] = [
     `UPDATE release_safety SET state='quarantined' WHERE state='eligible'`,
     `CREATE INDEX ingress_admissions_retention ON ingress_admissions(tenant_id,created_at,id)`,
   ] },
+  { version: 11, name: 'effective_policy_revisions', statements: [
+    `ALTER TABLE projects ADD COLUMN policy_revision bigint NOT NULL DEFAULT 0 CHECK(policy_revision >= 0)`,
+    `CREATE TABLE policy_revisions (
+       tenant_id uuid NOT NULL, project_id uuid NOT NULL, revision bigint NOT NULL CHECK(revision>0),
+       owner_principal_id uuid NOT NULL, owner_token_id uuid NOT NULL, binding_id uuid NOT NULL,
+       request_id uuid NOT NULL, request_digest text NOT NULL, candidate_digest text NOT NULL,
+       settings jsonb NOT NULL, owner_state text NOT NULL CHECK(owner_state IN ('configured','restrictive-defaults')),
+       created_at timestamptz NOT NULL DEFAULT now(), PRIMARY KEY(tenant_id,project_id,revision),
+       UNIQUE(tenant_id,project_id,request_id),
+       FOREIGN KEY(tenant_id,project_id) REFERENCES projects(tenant_id,id),
+       FOREIGN KEY(tenant_id,project_id,binding_id) REFERENCES workspace_bindings(tenant_id,project_id,id)
+     )`,
+    COMMON_TENANT_TABLE_FOOTER('policy_revisions'),
+    `ALTER TABLE release_permits ADD COLUMN policy_revisions jsonb NOT NULL DEFAULT '{}'::jsonb`,
+  ] },
 ];
 
 export const LATEST_SQL_SCHEMA_VERSION = MEMORY_SQL_MIGRATIONS.reduce(

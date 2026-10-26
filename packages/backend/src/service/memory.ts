@@ -111,7 +111,7 @@ export interface MemoryServiceDeps {
 
 /** Creates scoped memory admission and read operations backed by SQL, source files and the graph. */
 export function createMemoryService(deps: MemoryServiceDeps): MemoryService {
-  const release = deps.release ?? createReleaseService(deps);
+  const release = deps.release ?? createReleaseService({...deps,policies:deps.admission.policies});
   const logger = deps.logger ?? silentLogger;
   const clock = deps.clock ?? (() => new Date());
 
@@ -662,6 +662,9 @@ export function createMemoryService(deps: MemoryServiceDeps): MemoryService {
       const deadline = Date.now() + RELEASE_LIMITS.workMs;
       const parsed = parseContract(memoryQuerySchema, input, 'memory query');
       requireProjectScope(call, parsed.projectId);
+      const policy = await release.policy(call);
+      parsed.limit = Math.min(parsed.limit,policy.settings.retrieval.max_candidates);
+      if(parsed.focus)assertSafeText(parsed.focus,{revision:policy.revision,excludedPaths:policy.settings.capture.exclude_paths});
       if (parsed.taskId && !await release.eligible(call, [{ projectId: parsed.projectId, kind: 'task', id: parsed.taskId }], undefined, deadline)) {
         throw new ThreadlineError('not_found', 'The requested resource does not exist.');
       }
