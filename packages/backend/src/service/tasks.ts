@@ -24,7 +24,7 @@ import {
   readTaskRow,
   readVersionDetailRows,
 } from '../storage/memoryGraph.js';
-import type { SqlDatabase } from '../storage/pg.js';
+import type { SqlDatabase, TxClient } from '../storage/pg.js';
 import { withProjectWriteLock } from '../storage/pg.js';
 import type { AuthenticatedCall } from './auth.js';
 import { assertSafeText, ADMISSION_SCANNER_VERSION } from './admission.js';
@@ -58,7 +58,7 @@ import {
 
 export interface TaskService {
   create(call: AuthenticatedCall, input: unknown): Promise<TaskOperationResult>;
-  view(call: AuthenticatedCall, projectId: string, taskId: string): Promise<TaskView>;
+  view(call: AuthenticatedCall, projectId: string, taskId: string, transaction?: TxClient): Promise<TaskView>;
   require(call: AuthenticatedCall, input: unknown): Promise<TaskOperationResult>;
   requirements(call: AuthenticatedCall, projectId: string, taskId: string): Promise<TaskRequirementsView>;
 }
@@ -160,10 +160,10 @@ export function createTaskService(deps: TaskServiceDeps): TaskService {
       });
     },
 
-    async view(call, projectId, taskId): Promise<TaskView> {
+    async view(call, projectId, taskId, transaction): Promise<TaskView> {
       requirePermission(call, 'read');
       requireProjectScope(call, projectId);
-      if (!await deps.release.eligible(call, [{projectId,kind:'task',id:taskId}])) throw new ThreadlineError('not_found', 'The requested resource does not exist.');
+      if (!await deps.release.eligible(call, [{projectId,kind:'task',id:taskId}],transaction)) throw new ThreadlineError('not_found', 'The requested resource does not exist.');
       const graph = requireGraph(call);
       return withGraphRead(async () => {
         await requireActiveProjectRoot(graph, call);

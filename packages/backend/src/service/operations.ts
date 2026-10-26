@@ -2620,12 +2620,12 @@ export function createOperationsWorker(deps: OperationsWorkerDeps): OperationsWo
       }
       stopping = true;
       const pendingLoop = loopPromise;
-      loopPromise = null;
       if (pendingLoop !== null) {
-        await settleWithin(pendingLoop, 5_000);
+        await pendingLoop;
       }
+      loopPromise = null;
       if (inFlight.size > 0) {
-        await settleWithin(Promise.allSettled([...inFlight]), 15_000);
+        await Promise.allSettled([...inFlight]);
       }
       running = false;
       logger.log({ level: 'info', message: 'Operation worker stopped.', fields: { workerId } });
@@ -2965,21 +2965,5 @@ async function readRootSafely(graph: Graph, projectRootId: string): Promise<Root
     return { failed: false, root: await readProjectRoot(graph, projectRootId) };
   } catch (error) {
     return { failed: true, error };
-  }
-}
-
-async function settleWithin(promise: Promise<unknown>, ms: number): Promise<void> {
-  let timer: NodeJS.Timeout | undefined;
-  await Promise.race([
-    promise.then(
-      () => undefined,
-      () => undefined,
-    ),
-    new Promise<void>((resolve) => {
-      timer = setTimeout(resolve, ms);
-    }),
-  ]);
-  if (timer !== undefined) {
-    clearTimeout(timer);
   }
 }

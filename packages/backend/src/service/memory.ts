@@ -1,3 +1,4 @@
+import { createPublicationService, type PublicationService } from './publication.js';
 import { type AdmissionService, type AdmissionTicket } from './admission.js';
 import { randomUUID } from 'node:crypto';
 
@@ -103,6 +104,7 @@ export interface MemoryServiceDeps {
   readonly db: SqlDatabase;
   readonly admission: AdmissionService;
   readonly files: SourceFileStore;
+  readonly publication?: PublicationService;
   readonly graphStore: GraphStore;
   readonly release?: ReleaseService;
   readonly clock?: () => Date;
@@ -113,6 +115,7 @@ export interface MemoryServiceDeps {
 export function createMemoryService(deps: MemoryServiceDeps): MemoryService {
   const release = deps.release ?? createReleaseService({...deps,policies:deps.admission.policies});
   const logger = deps.logger ?? silentLogger;
+  const publication=deps.publication??createPublicationService(deps);
   const clock = deps.clock ?? (() => new Date());
 
   const requireGraph = (call: AuthenticatedCall): Graph => {
@@ -221,24 +224,22 @@ export function createMemoryService(deps: MemoryServiceDeps): MemoryService {
       return toMemoryOperationResult(known);
     }
     const documentDigest = sha256Hex(documentBytes.toString('utf8'));
-    const stored = await deps.files.publish({
-      tenantId: call.scope.tenantId,
-      projectId,
-      digest: documentDigest,
-      bytes: documentBytes,
-      maxBytes: MEMORY_DOCUMENT_MAX_BYTES,
-      kind: 'memory_document',
-    });
     const contentSourceId = randomUUID();
     const operationId = randomUUID();
     const anchorKey = `source.append:${operationKey}`;
 
-    const record = await withProjectWriteLock(deps.db, call.scope.tenantId, projectId, async (tx) => {
+    const record = await publication.run(call.scope.tenantId, projectId, async tx=> {
+      const existing=await findIntentByKey(tx,call.scope.tenantId,projectId,operationKey);
+      return {value:existing,inputs:existing ? [] : [{tenantId:call.scope.tenantId,projectId,digest:documentDigest,
+        bytes:documentBytes,maxBytes:MEMORY_DOCUMENT_MAX_BYTES,kind:'memory_document' as const}]};
+    }, async (tx, _known, objects) => {
+      const stored=objects.get(documentDigest);
       await deps.admission.revalidate(ticket, tx);
       const existing = await findIntentByKey(tx, call.scope.tenantId, projectId, operationKey);
       if (existing !== null) {
         return classifyDedupe(existing, call.scope.principalId, intent.requestDigest);
       }
+      if(!stored)throw new ThreadlineError('storage_unavailable','Memory document publication is unavailable.');
       const sequence = await tx.rows<{ next_source_seq: string }>(
         `UPDATE threadline_memory.projects
             SET next_source_seq = next_source_seq + 1
@@ -339,7 +340,7 @@ export function createMemoryService(deps: MemoryServiceDeps): MemoryService {
         throw new ThreadlineError('internal_error', 'The admitted operation could not be read back.');
       }
       return classifyDedupe(inserted, call.scope.principalId, intent.requestDigest);
-    });
+    },tx=>deps.admission.revalidate(ticket,tx));
 
     logger.log({
       level: 'info',

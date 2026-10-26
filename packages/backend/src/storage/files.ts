@@ -8,7 +8,7 @@ import {
   mkdirSync,
   openSync,
   readFileSync,
-  renameSync,
+  linkSync,
   unlinkSync,
   writeSync,
 } from 'node:fs';
@@ -49,6 +49,15 @@ export interface PublishSourceBytesInput {
   readonly bytes: Buffer;
   readonly maxBytes: number;
   readonly kind?: 'memory_document';
+  readonly publication?: FilePublication;
+}
+
+const permits = new WeakSet<object>();
+export interface FilePublication { readonly id: string; readonly tenantId: string; readonly projectId: string; readonly digest: string }
+/** Only the catalog publication coordinator grants a scoped, live capability. */
+export async function withFilePublication<T>(permit: FilePublication, work: () => Promise<T>): Promise<T> {
+  permits.add(permit);
+  try { return await work(); } finally { permits.delete(permit); }
 }
 
 export interface StoredSourceBytes {
@@ -77,6 +86,7 @@ export interface SourceByteRange {
 export interface SourceFileStore {
   /** Publishes bytes for a catalog row. Republishing the same digest is stable. */
   publish(input: PublishSourceBytesInput): Promise<StoredSourceBytes>;
+  recoverPartial(permit: FilePublication): Promise<void>;
   read(input: ReadSourceBytesInput): Promise<Buffer>;
   readRange(input: ReadSourceBytesInput & { readonly start: number; readonly end: number }): Promise<SourceByteRange>;
   /** Removes bytes for a project during an authorized deletion. */
@@ -115,7 +125,17 @@ export function createSourceFileStore(deps: SourceFileStoreDeps): SourceFileStor
       }
     },
 
+    async recoverPartial(permit) {
+      if (!permits.has(permit)) throw new ThreadlineError('scope_denied', 'Publication ownership is required.');
+      const target = absolutePathFor(`${permit.tenantId}/${permit.projectId}/${permit.digest.slice(0,2)}/${permit.digest}`);
+      try { unlinkSync(`${target}.${permit.id}.partial`); syncDirectory(dirname(target)); }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+    },
+
     async publish(input: PublishSourceBytesInput): Promise<StoredSourceBytes> {
+      const permit = input.publication;
+      if (!permit || !permits.has(permit) || permit.tenantId !== input.tenantId || permit.projectId !== input.projectId || permit.digest !== input.digest)
+        throw new ThreadlineError('scope_denied', 'Durable publication ownership is required.');
       if (!/^[0-9a-f]{64}$/.test(input.digest)) {
         throw new ThreadlineError('internal_error', 'A source digest must be a SHA-256 hex value.');
       }
@@ -144,6 +164,10 @@ export function createSourceFileStore(deps: SourceFileStoreDeps): SourceFileStor
       const storageKey = `${input.tenantId}/${input.projectId}/${input.digest.slice(0, 2)}/${input.digest}`;
       const target = absolutePathFor(storageKey);
       mkdirSync(dirname(target), { recursive: true, mode: 0o700 });
+      for (let path = dirname(target); path.startsWith(root); path = dirname(path)) {
+        syncDirectory(path);
+        if (path === root) break;
+      }
 
       const existing = readVerified(target, input.digest, input.bytes.byteLength);
       if (existing !== null) {
@@ -158,7 +182,7 @@ export function createSourceFileStore(deps: SourceFileStoreDeps): SourceFileStor
         });
       }
 
-      writeAtomically(target, input.bytes);
+      writeAtomically(target, input.bytes, permit.id);
       if (readVerified(target, input.digest, input.bytes.byteLength) === null) {
         throw new ThreadlineError('storage_unavailable', 'The source bytes did not verify after writing.', {
           reason: 'source_bytes_unverifiable',
@@ -217,33 +241,20 @@ export function createSourceFileStore(deps: SourceFileStoreDeps): SourceFileStor
       };
     },
 
-    async remove(tenantId: string, projectId: string, storageKey: string): Promise<boolean> {
-      const prefix = `${tenantId}/${projectId}/`;
-      if (!storageKey.startsWith(prefix)) {
-        throw new ThreadlineError('internal_error', 'A deletion targeted a storage key outside the project.');
-      }
-      try {
-        unlinkSync(absolutePathFor(storageKey));
-        return true;
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-          return false;
-        }
-        throw new ThreadlineError('storage_unavailable', 'Could not remove stored source bytes.', {
-          reason: error instanceof Error ? error.name : typeof error,
-        });
-      }
+    async remove(_tenantId: string, _projectId: string, _storageKey: string): Promise<boolean> {
+      throw new ThreadlineError('scope_denied', 'Object removal requires the guarded deletion lifecycle.');
     },
   };
   return store;
 }
 
 /**
- * Writes through a temporary file and renames, so a reader never observes a
- * partial object and a crash leaves only an inert `.partial` name.
+ * Writes through a reservation-named temporary file and installs with a hard
+ * link that cannot replace an existing object. Directory fsync makes the name
+ * durable; recovery owns any leftover `.partial` through the SQL reservation.
  */
-function writeAtomically(target: string, bytes: Buffer): void {
-  const temporary = `${target}.${randomUUID()}.partial`;
+function writeAtomically(target: string, bytes: Buffer, publicationId: string): void {
+  const temporary = `${target}.${publicationId}.partial`;
   let descriptor: number | null = null;
   try {
     descriptor = openSync(temporary, 'wx', 0o600);
@@ -254,7 +265,12 @@ function writeAtomically(target: string, bytes: Buffer): void {
     fsyncSync(descriptor);
     closeSync(descriptor);
     descriptor = null;
-    renameSync(temporary, target);
+    // link is an atomic no-overwrite installation, unlike rename.
+    try { linkSync(temporary, target); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error; }
+    syncDirectory(dirname(target));
+    unlinkSync(temporary);
+    syncDirectory(dirname(target));
   } catch (error) {
     if (descriptor !== null) {
       closeSync(descriptor);
@@ -326,4 +342,9 @@ async function readVerifiedAsync(path: string, digest: string, expectedSize: num
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
     throw new ThreadlineError('storage_unavailable','Could not verify source bytes.');
   }
+}
+
+function syncDirectory(path: string): void {
+  const fd = openSync(path, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+  try { fsyncSync(fd); } finally { closeSync(fd); }
 }

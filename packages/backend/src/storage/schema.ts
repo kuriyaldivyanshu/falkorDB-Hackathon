@@ -892,6 +892,48 @@ export const MEMORY_SQL_MIGRATIONS: readonly SqlMigration[] = [
     COMMON_TENANT_TABLE_FOOTER('policy_revisions'),
     `ALTER TABLE release_permits ADD COLUMN policy_revisions jsonb NOT NULL DEFAULT '{}'::jsonb`,
   ] },
+  { version: 12, name: 'source_occurrence_and_publication_lifetime', statements: [
+    `DROP INDEX sources_origin`,
+    `DROP INDEX sources_delivery`,
+    `ALTER TABLE sources ADD COLUMN retry_namespace text, ADD COLUMN envelope_digest text`,
+    `CREATE UNIQUE INDEX sources_actor_delivery ON sources(tenant_id,project_id,retry_namespace,delivery_id)
+       WHERE retry_namespace IS NOT NULL`,
+    `CREATE INDEX sources_legacy_delivery ON sources(tenant_id,project_id,delivery_id) WHERE retry_namespace IS NULL`,
+    `CREATE TABLE evidence_objects (
+       tenant_id uuid NOT NULL, project_id uuid NOT NULL, digest text NOT NULL CHECK(digest ~ '^[0-9a-f]{64}$'),
+       byte_size bigint NOT NULL CHECK(byte_size>0), storage_key text NOT NULL,
+       generation bigint NOT NULL DEFAULT 1 CHECK(generation>0),
+       PRIMARY KEY(tenant_id,project_id,digest), FOREIGN KEY(tenant_id,project_id) REFERENCES projects(tenant_id,id)
+     )`,
+    `CREATE TABLE evidence_publications (
+       tenant_id uuid NOT NULL, project_id uuid NOT NULL, id uuid NOT NULL,
+       digest text NOT NULL, generation bigint NOT NULL, state text NOT NULL CHECK(state IN ('reserved','referenced','orphan')),
+       created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+       PRIMARY KEY(tenant_id,project_id,id),
+       FOREIGN KEY(tenant_id,project_id,digest) REFERENCES evidence_objects(tenant_id,project_id,digest)
+     )`,
+    `CREATE TABLE evidence_references (
+       tenant_id uuid NOT NULL, project_id uuid NOT NULL, source_id uuid NOT NULL, digest text NOT NULL,
+       publication_id uuid, PRIMARY KEY(tenant_id,project_id,source_id),
+       FOREIGN KEY(tenant_id,project_id,source_id) REFERENCES sources(tenant_id,project_id,id),
+       FOREIGN KEY(tenant_id,project_id,digest) REFERENCES evidence_objects(tenant_id,project_id,digest),
+       FOREIGN KEY(tenant_id,project_id,publication_id) REFERENCES evidence_publications(tenant_id,project_id,id)
+     )`,
+    // Preserve every historical locator/reference without attesting its bytes or admission.
+    `INSERT INTO evidence_objects(tenant_id,project_id,digest,byte_size,storage_key)
+       SELECT DISTINCT ON(tenant_id,project_id,digest) tenant_id,project_id,digest,byte_size,storage_key
+       FROM sources ORDER BY tenant_id,project_id,digest,project_seq`,
+    `INSERT INTO evidence_references(tenant_id,project_id,source_id,digest)
+       SELECT tenant_id,project_id,id,digest FROM sources`,
+    COMMON_TENANT_TABLE_FOOTER('evidence_objects'),
+    COMMON_TENANT_TABLE_FOOTER('evidence_publications'),
+    COMMON_TENANT_TABLE_FOOTER('evidence_references'),
+    `CREATE FUNCTION pending_evidence_publications() RETURNS TABLE(tenant_id uuid,project_id uuid)
+       LANGUAGE sql SECURITY DEFINER SET search_path=threadline_memory,pg_temp AS $$
+         SELECT DISTINCT p.tenant_id,p.project_id FROM evidence_publications p WHERE state='reserved' LIMIT 257
+       $$`,
+    `REVOKE ALL ON FUNCTION pending_evidence_publications() FROM PUBLIC`,
+  ] },
 ];
 
 export const LATEST_SQL_SCHEMA_VERSION = MEMORY_SQL_MIGRATIONS.reduce(

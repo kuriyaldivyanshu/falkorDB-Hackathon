@@ -26,7 +26,7 @@ import { silentLogger } from '../log.js';
 import { canonicalDigest, sha256Hex } from '../storage/digest.js';
 import type { SourceFileStore } from '../storage/files.js';
 import type { SqlDatabase, TxClient } from '../storage/pg.js';
-import { withProjectWriteLock } from '../storage/pg.js';
+import { createPublicationService, type PublicationService } from './publication.js';
 import type { AuthenticatedCall } from './auth.js';
 import { requirePermission } from './permissions.js';
 import { ADMISSION_SCANNER_VERSION } from './admission.js';
@@ -37,18 +37,19 @@ import { createReleaseService, RELEASE_LIMITS, type ReleaseService } from './rel
 /**
  * Source capture and history.
  *
- * An append normalizes and bounds its records first, publishes the permitted
- * bytes as immutable files, and only then takes the short project-scoped SQL
- * transaction that deduplicates, allocates ingestion positions and records the
- * Source plus its graph-admission operation. Standalone appends publish before
- * the project lock; an internal atomic caller may publish bounded metadata while
- * joining its existing transaction. Reads may join the same release barrier.
- * A retry of the same delivery is stable while a changed payload refuses.
+ * An append bounds and normalizes the admitted envelope, preflights retry
+ * identity under the authenticated actor namespace, then durably reserves its
+ * objects before publication. The shared coordinator retains project/object
+ * ownership through filesystem durability, catalog commit and outcome recovery.
+ * Internal context callers finalize their occurrence in that same catalog
+ * transaction, after a separate read-only selection transaction has ended.
+ * Reads may join an existing release transaction.
  */
 
 export interface SourceService {
   /** Trusted metadata-only publication, never reachable through public append input. */
-  appendContextManifest(call: AuthenticatedCall, manifest: unknown, nonce: string, transaction: TxClient): Promise<SourceAppendResult>;
+  appendContextManifest<T>(call: AuthenticatedCall, manifest: unknown, nonce: string,
+    finalize: (tx: TxClient, result: SourceAppendResult) => Promise<T>): Promise<T>;
   /** Public append always requires knowledge-write permission. */
   append(call: AuthenticatedCall, input: unknown, transaction?: TxClient): Promise<SourceAppendResult>;
   view(call: AuthenticatedCall, projectId: string, sourceId: string, transaction?: TxClient, deadline?: number): Promise<SourceView>;
@@ -61,6 +62,7 @@ export interface SourceServiceDeps {
   readonly admission: AdmissionService;
   readonly files: SourceFileStore;
   readonly release?: ReleaseService;
+  readonly publication?: PublicationService;
   readonly clock?: () => Date;
   readonly logger?: Logger;
 }
@@ -70,6 +72,8 @@ interface PreparedRecord {
   readonly record: SourceAppendRecord;
   readonly bytes: Buffer;
   readonly digest: string;
+  readonly namespace: string;
+  readonly envelope: string;
 }
 
 interface SourceRow {
@@ -132,6 +136,7 @@ const SOURCE_SELECT = `
 
 export function createSourceService(deps: SourceServiceDeps): SourceService {
   const release = deps.release ?? createReleaseService({ db: deps.db, files: deps.files, policies:deps.admission.policies });
+  const publication = deps.publication ?? createPublicationService(deps);
   const logger = deps.logger ?? silentLogger;
   const clock = deps.clock ?? (() => new Date());
 
@@ -194,14 +199,16 @@ export function createSourceService(deps: SourceServiceDeps): SourceService {
     );
   };
 
-  const appendStored = async (call: AuthenticatedCall, input: unknown, transaction?: TxClient, surface: 'source.append'|'context.manifest' = 'source.append'): Promise<SourceAppendResult> => {
+  const appendStored = async <T = SourceAppendResult>(call: AuthenticatedCall, input: unknown,
+    surface: 'source.append'|'context.manifest' = 'source.append',
+    finalize?: (tx: TxClient, result: SourceAppendResult) => Promise<T>): Promise<T> => {
     const parsed = parseContract(sourceAppendInputSchema, input, 'source append');
     const projectId = parsed.projectId;
     requireProject(call, projectId);
 
     // Bound first: normalize and limit every record before anything durable
     // is written, so an oversized batch fails without a partial publication.
-    const ticket = await deps.admission.check(call, surface, parsed, transaction);
+    const ticket = await deps.admission.check(call, surface, parsed);
     const prepared: PreparedRecord[] = [];
     let batchBytes = 0;
     for (const record of parsed.records) {
@@ -224,54 +231,37 @@ export function createSourceService(deps: SourceServiceDeps): SourceService {
           field: 'gapReason',
         });
       }
-      prepared.push({ record, bytes, digest: createHash('sha256').update(bytes).digest('hex') });
+      const digest = createHash('sha256').update(bytes).digest('hex');
+      prepared.push({ record, bytes, digest, namespace: sourceRetryNamespace(call),
+        envelope: sourceEnvelopeDigest(record, digest, deps.admission.policy(ticket).revision) });
     }
 
-    // Immutable bytes are published before the catalog row exists. A crash
-    // between the two leaves a verified orphan object, never a dangling row.
-    const stored = new Map<string, { storageKey: string }>();
-    for (const item of prepared) {
-      stored.set(item.record.deliveryId, await deps.files.publish({
-        tenantId: call.scope.tenantId,
-        projectId,
-        digest: item.digest,
-        bytes: item.bytes,
-        maxBytes: SOURCE_LIMITS.maxSourceBytes,
-      }));
-    }
-
-    const catalog = async (tx: TxClient): Promise<SourceAppendOutcome[]> => {
-      await deps.admission.revalidate(ticket, tx);
-      const results: SourceAppendOutcome[] = [];
-      for (const item of prepared) {
-        results.push(await appendOne(tx, call, projectId, item, stored.get(item.record.deliveryId), clock()));
-      }
-      return results;
+    const summarize = (outcomes: SourceAppendOutcome[]): SourceAppendResult => {
+      let highest: string | null = null;
+      for (const outcome of outcomes) if(outcome.status!=='rejected' && (highest===null || compareDecimalStrings(outcome.projectSeq,highest)>0)) highest=outcome.projectSeq;
+      return parseContract(sourceAppendResultSchema,{outcomes,projectSeq:highest},'source append result');
     };
-    const outcomes = transaction === undefined
-      ? await withProjectWriteLock(deps.db, call.scope.tenantId, projectId, catalog)
-      : await catalog(transaction);
-
-    let highest: string | null = null;
-    for (const outcome of outcomes) {
-      if (outcome.status !== 'rejected' && (highest === null || compareDecimalStrings(outcome.projectSeq, highest) > 0)) {
-        highest = outcome.projectSeq;
+    return publication.run(call.scope.tenantId,projectId,async tx=> {
+      const known = new Map<PreparedRecord,SourceAppendOutcome>();
+      for (const item of prepared) {
+        const outcome=await preflight(tx,call,projectId,item,release);
+        if(outcome)known.set(item,outcome);
       }
-    }
-    if (transaction === undefined) logger.log({
-      level: 'info',
-      message: 'Source append settled.',
-      fields: {
-        accepted: outcomes.filter((outcome) => outcome.status === 'accepted').length,
-        duplicates: outcomes.filter((outcome) => outcome.status === 'duplicate').length,
-        rejected: outcomes.filter((outcome) => outcome.status === 'rejected').length,
-      },
-    });
-    return parseContract(
-      sourceAppendResultSchema,
-      { outcomes, projectSeq: highest },
-      'source append result',
-    );
+      return { value:known, inputs:prepared.filter(item=>!known.has(item)).map(item=>({
+        tenantId:call.scope.tenantId,projectId,digest:item.digest,bytes:item.bytes,maxBytes:SOURCE_LIMITS.maxSourceBytes,
+      })) };
+    }, async(tx,known,stored)=> {
+      const outcomes:SourceAppendOutcome[]=[];
+      for(const item of prepared) {
+        // Transactional race and attribution/current-release recheck, including
+        // known duplicates, precedes receipt disclosure.
+        const current=await preflight(tx,call,projectId,item,release);
+        outcomes.push(current ?? known.get(item) ?? await appendOne(tx,call,projectId,item,stored.get(item.digest),clock()));
+      }
+      const result=summarize(outcomes);
+      logger.log({level:'info',message:'Source append settled.',fields:{accepted:outcomes.filter(o=>o.status==='accepted').length}});
+      return finalize ? finalize(tx,result) : result as T;
+    },tx=>deps.admission.revalidate(ticket,tx));
   };
 
   return {
@@ -281,18 +271,20 @@ export function createSourceService(deps: SourceServiceDeps): SourceService {
       if (parsed.records.some((record) => isContextManifestSourceKind(record.kind))) {
         throw new ThreadlineError('scope_denied', 'Context manifests require the trusted audit path.');
       }
-      return appendStored(call, input, transaction);
+      if(transaction)throw new ThreadlineError('invalid_request','Source publication requires its own durable preparation boundary.');
+      return appendStored(call, input);
     },
-    async appendContextManifest(call, input, nonce, transaction) {
+    async appendContextManifest(call, input, nonce, finalize) {
       requirePermission(call, 'context.audit');
       const manifest = parseContract(contextManifestSchema, input, 'context manifest');
       requireProject(call, manifest.projectId);
       const bytes = Buffer.from(JSON.stringify(manifest));
       return appendStored(call, { projectId: manifest.projectId, records: [{
         deliveryId: `context:${nonce}`, originKey: `threadline:context:${nonce}`, originRevision: '1',
-        kind: 'context_manifest', mediaType: 'application/json', bytesBase64: bytes.toString('base64'),
+        kind: 'context_manifest', nativeSessionId: call.scope.nativeSessionId,
+        mediaType: 'application/json', bytesBase64: bytes.toString('base64'),
         observedAtMs: clock().getTime(), completeness: 'complete',
-      }] }, transaction, 'context.manifest');
+      }] }, 'context.manifest', finalize);
     },
 
     async view(call: AuthenticatedCall, projectId: string, sourceId: string, transaction?: TxClient, deadline?: number): Promise<SourceView> {
@@ -420,40 +412,6 @@ async function appendOne(
     throw new ThreadlineError('internal_error', 'Source bytes were not published before catalog insertion.');
   }
 
-  // Validate attribution even on a byte-identical delivery retry. A duplicate
-  // identity must not turn an unauthorized supplied session into an accepted
-  // request, or keep accepting a now-closed session.
-  if (record.nativeSessionId != null) {
-    try { await requireNativeSession(tx, call, record.nativeSessionId); }
-    catch (error) {
-      if (!(error instanceof ThreadlineError) || error.code !== 'scope_denied') throw error;
-      return {
-        status: 'rejected', deliveryId: record.deliveryId, code: 'unknown_native_session',
-        detail: 'No active native session belongs to this principal and binding.',
-      };
-    }
-  }
-
-  const duplicate = await findExisting(tx, call.scope.tenantId, projectId, record);
-  if (duplicate !== null) {
-    if (duplicate.digest === item.digest) {
-      return {
-        status: 'duplicate',
-        deliveryId: record.deliveryId,
-        sourceId: duplicate.id,
-        projectSeq: duplicate.project_seq,
-      };
-    }
-    return {
-      status: 'rejected',
-      deliveryId: record.deliveryId,
-      code: 'idempotency_mismatch',
-      detail: duplicate.same_delivery
-        ? 'This delivery identity already exists with different bytes.'
-        : 'This origin revision already exists with different bytes.',
-    };
-  }
-
   let parentOriginKey: string | null = null;
   if (record.parentOriginKey != null && record.parentOriginKey.length > 0) {
     // The parent is resolved under the appending principal's own visibility: an
@@ -529,6 +487,9 @@ async function appendOne(
     ],
   );
 
+  await tx.rows(`UPDATE threadline_memory.sources SET retry_namespace=$4,envelope_digest=$5
+    WHERE tenant_id=$1 AND project_id=$2 AND id=$3`,[call.scope.tenantId,projectId,sourceId,item.namespace,item.envelope]);
+
   {
     await tx.rows(`UPDATE threadline_memory.sources SET release_state='eligible',sanitizer_version=$4
       WHERE tenant_id=$1 AND project_id=$2 AND id=$3`, [call.scope.tenantId, projectId, sourceId,ADMISSION_SCANNER_VERSION]);
@@ -564,8 +525,8 @@ async function appendOne(
       call.scope.tenantId,
       projectId,
       sourceId,
-      `source.append:${record.deliveryId}`,
-      canonicalDigest({ digest: item.digest, kind: record.kind, originKey: record.originKey, originRevision: record.originRevision }),
+      `source.append:${item.namespace}:${sha256Hex(record.deliveryId)}`,
+      item.envelope,
       call.scope.principalId,
       call.tokenId,
       record.nativeSessionId ?? null,
@@ -579,21 +540,62 @@ async function appendOne(
   return { status: 'accepted', deliveryId: record.deliveryId, sourceId, projectSeq };
 }
 
-async function findExisting(
-  tx: TxClient,
-  tenantId: string,
-  projectId: string,
-  record: SourceAppendRecord,
-): Promise<{ id: string; digest: string; project_seq: string; same_delivery: boolean } | null> {
-  const rows = await tx.rows<{ id: string; digest: string; project_seq: string; same_delivery: boolean }>(
-    `SELECT id, digest, project_seq::text AS project_seq, (delivery_id = $3) AS same_delivery
-       FROM threadline_memory.sources
-      WHERE tenant_id = $1 AND project_id = $2
-        AND (delivery_id = $3 OR (origin_key = $4 AND origin_revision = $5))
-      ORDER BY (delivery_id = $3) DESC, project_seq ASC LIMIT 1`,
-    [tenantId, projectId, record.deliveryId, record.originKey, record.originRevision],
-  );
-  return rows[0] ?? null;
+/** Full normalized admitted metadata; bytes are represented by their verified digest. */
+export function sourceEnvelopeDigest(record: SourceAppendRecord, digest: string, policyRevision: string): string {
+  return canonicalDigest({version:1,digest,kind:record.kind,deliveryId:record.deliveryId,
+    originKey:record.originKey,originRevision:record.originRevision,
+    nativeSessionId:record.nativeSessionId??null,nativeTurnRef:record.nativeTurnRef??null,
+    nativeItemRef:record.nativeItemRef??null,nativeToolRef:record.nativeToolRef??null,
+    nativeOrder:record.nativeOrder??null,parentOriginKey:record.parentOriginKey??null,
+    observedAtMs:record.observedAtMs,mediaType:record.mediaType??'application/octet-stream',
+    completeness:record.completeness,visibility:record.visibility??'project',retention:record.retention??'raw_expiring',
+    gapReason:record.gapReason??null,policyRevision,sanitizer:ADMISSION_SCANNER_VERSION});
+}
+export function sourceRetryNamespace(call:AuthenticatedCall):string {
+  return canonicalDigest({version:1,principal:call.scope.principalId,credential:call.tokenId,
+    session:call.scope.nativeSessionId,enrollment:call.enrollmentId,binding:call.bindingGeneration});
+}
+async function preflight(tx:TxClient,call:AuthenticatedCall,projectId:string,item:PreparedRecord,release:ReleaseService):Promise<SourceAppendOutcome|null> {
+  const reject=(code:string,detail:string):SourceAppendOutcome=>({status:'rejected',deliveryId:item.record.deliveryId,code,detail});
+  try {await requireNativeSession(tx,call,item.record.nativeSessionId??null);}
+  catch(error) {if(!(error instanceof ThreadlineError)||error.code!=='scope_denied')throw error;
+    return reject('unknown_native_session','No active native session belongs to this principal and binding.');}
+  const rows=await tx.rows<{id:string;project_seq:string;envelope_digest:string}>(`SELECT id,project_seq::text,envelope_digest
+    FROM threadline_memory.sources WHERE tenant_id=$1 AND project_id=$2 AND retry_namespace=$3 AND delivery_id=$4`,
+  [call.scope.tenantId,projectId,item.namespace,item.record.deliveryId]);
+  let duplicate=rows[0];
+  if(!duplicate) {
+    const legacy=await tx.rows<{[key:string]:unknown;id:string;project_seq:string;actor_token_id:string|null;policy_revision:string|null;sanitizer_version:string;release_state:string;digest:string}>(`SELECT s.*,s.project_seq::text,a.policy_revision::text,
+      o.actor_token_id FROM threadline_memory.sources s LEFT JOIN threadline_memory.operations o
+        ON o.tenant_id=s.tenant_id AND o.project_id=s.project_id AND o.id=s.id AND o.kind='source.append'
+        AND o.intent_source_id=s.id AND o.actor_principal_id=s.producer_principal_id
+        AND o.admission_id=s.admission_id AND o.native_session_id IS NOT DISTINCT FROM s.producer_session_id
+      LEFT JOIN threadline_memory.ingress_admissions a ON a.tenant_id=s.tenant_id AND a.id=s.admission_id
+        AND a.state='accepted' AND a.token_id=o.actor_token_id AND a.principal_id=s.producer_principal_id
+      WHERE s.tenant_id=$1 AND s.project_id=$2 AND s.retry_namespace IS NULL AND s.delivery_id=$3 LIMIT 2`,
+    [call.scope.tenantId,projectId,item.record.deliveryId]);
+    if(legacy.length) {
+      const old=legacy[0]!;
+      if(legacy.length!==1 || old.actor_token_id!==call.tokenId || old.producer_principal_id!==call.scope.principalId
+        || old.sanitizer_version!==ADMISSION_SCANNER_VERSION || !old.policy_revision || old.release_state!=='eligible'
+        || !await release.eligible(call,[{projectId,kind:'source',id:old.id}],tx))
+        return reject('legacy_retry_unavailable','This historical delivery requires an explicit safe transition.');
+      const envelope=sourceEnvelopeDigest({deliveryId:String(old.delivery_id),originKey:String(old.origin_key),originRevision:String(old.origin_revision),
+        kind:old.kind as SourceAppendRecord['kind'],nativeSessionId:old.producer_session_id as string|null,
+        nativeTurnRef:old.native_turn_ref as string|null,nativeItemRef:old.native_item_ref as string|null,nativeToolRef:old.native_tool_ref as string|null,
+        nativeOrder:old.native_order===null?null:String(old.native_order),parentOriginKey:old.parent_origin_key as string|null,
+        observedAtMs:(old.observed_at as Date).getTime(),bytesBase64:'',mediaType:String(old.media_type),
+        completeness:old.completeness as SourceAppendRecord['completeness'],visibility:old.visibility as SourceAppendRecord['visibility'],
+        retention:old.retention as SourceAppendRecord['retention'],gapReason:old.gap_reason as string|null},old.digest,old.policy_revision);
+      await tx.rows(`UPDATE threadline_memory.sources SET retry_namespace=$4,envelope_digest=$5
+        WHERE tenant_id=$1 AND project_id=$2 AND id=$3 AND retry_namespace IS NULL`,[call.scope.tenantId,projectId,old.id,item.namespace,envelope]);
+      duplicate={id:old.id,project_seq:old.project_seq,envelope_digest:envelope};
+    }
+  }
+  if(!duplicate)return null;
+  if(!await release.eligible(call,[{projectId,kind:'source',id:duplicate.id}],tx))return reject('source_unavailable','The prior source is not currently eligible.');
+  if(duplicate.envelope_digest!==item.envelope)return reject('idempotency_mismatch','This delivery identity already names a different admitted envelope.');
+  return {status:'duplicate',deliveryId:item.record.deliveryId,sourceId:duplicate.id,projectSeq:duplicate.project_seq};
 }
 
 function decodeBase64(value: string): Buffer {

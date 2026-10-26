@@ -66,13 +66,14 @@ export type SourceRetention = (typeof SOURCE_RETENTION)[number];
 /** One normalized record offered for durable capture. */
 export const sourceAppendRecordSchema = z.object({
   /**
-   * Stable delivery identity for this record. Reusing it with the same payload
-   * is an idempotent retry; reusing it with different bytes refuses.
+   * Occurrence identity in the authenticated server-issued actor/credential/session
+   * scope. Reusing it requires equality of the entire admitted envelope.
+   * Distinct delivery IDs preserve distinct observations even when bytes match.
    */
   deliveryId: byteBoundedText(200),
   /**
-   * Native occurrence identity: harness + installation + item/turn identity.
-   * Not the delivery id, not the import job id, and not a content digest.
+   * Origin/provenance hint supplied by the harness or importer. Multiple observed
+   * occurrences may share this origin and revision; it is not a dedupe key.
    */
   originKey: byteBoundedText(512),
   originRevision: byteBoundedText(128),
