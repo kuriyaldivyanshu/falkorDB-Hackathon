@@ -210,7 +210,7 @@ export async function readSchemaStatus(deps: ReadSchemaDeps): Promise<SchemaStat
  * functions match no rows and authentication, claiming and backlog all fail
  * silently. These are the only names that may hold that privilege.
  */
-export const PRIVILEGED_FUNCTIONS = ['token_lookup', 'claim_operations', 'operation_backlog'] as const;
+export const PRIVILEGED_FUNCTIONS = ['token_lookup', 'claim_operations', 'operation_backlog', 'pending_evidence_publications'] as const;
 
 export interface PrivilegedFunctionOwner {
   readonly functionName: string;
@@ -405,6 +405,9 @@ async function grantToApplicationRole(connection: SqlDatabase, applicationRole: 
   );
   await connection.query(
     `GRANT EXECUTE ON FUNCTION ${THREADLINE_SQL_SCHEMA}.operation_backlog() TO "${applicationRole}"`,
+  );
+  await connection.query(
+    `GRANT EXECUTE ON FUNCTION ${THREADLINE_SQL_SCHEMA}.pending_evidence_publications() TO "${applicationRole}"`,
   );
   await connection.query(
     `ALTER DEFAULT PRIVILEGES IN SCHEMA ${THREADLINE_SQL_SCHEMA}

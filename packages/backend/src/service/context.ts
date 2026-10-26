@@ -63,11 +63,11 @@ export function createContextService(deps: ContextServiceDeps): ContextService {
     return { graphEpoch: root.graphEpoch, graphHead: root.eventHead, privacyRevision: root.privacyRevision };
   };
 
-  const taskFor = async (call: AuthenticatedCall, taskId: string | null | undefined): Promise<TaskView | null> => {
+  const taskFor = async (call: AuthenticatedCall, taskId: string | null | undefined, transaction?: TxClient): Promise<TaskView | null> => {
     if (taskId == null) return null;
     const ids = await withGraphRead(() => readContextRequirementIds(graphFor(call), projectRootIdFor(call.scope.projectId!), taskId));
     if (ids.length > CONTEXT_MAX_MANDATORY_ITEMS) throw new ContextRefusal('mandatory_overflow');
-    const task = await deps.tasks.view(call, call.scope.projectId!, taskId);
+    const task = await deps.tasks.view(call, call.scope.projectId!, taskId, transaction);
     if (task.state !== 'open') throw new ContextRefusal('missing_current_authority');
     return task;
   };
@@ -177,7 +177,7 @@ export function createContextService(deps: ContextServiceDeps): ContextService {
     const manifest = parseContract(contextManifestSchema, JSON.parse(Buffer.from(range.base64, 'base64').toString('utf8')), 'context manifest');
     if (manifest.rendererVersion !== CONTEXT_RENDERER_VERSION) throw new ContextRefusal('stale_preparation');
     if (manifest.graphEpoch !== before.graphEpoch || manifest.privacyRevision !== before.privacyRevision) throw new ContextRefusal('stale_preparation');
-    const task = await taskFor(call, parsed.taskId);
+    const task = await taskFor(call, parsed.taskId, tx);
     if ((task?.revision ?? null) !== manifest.taskRevision) throw new ContextRefusal('stale_preparation');
     const items: ContextItem[] = [];
     for (const meta of manifest.items) {
@@ -217,7 +217,7 @@ export function createContextService(deps: ContextServiceDeps): ContextService {
       const requestDigest = canonicalDigest(request);
       for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
         try {
-          return await withContextLock(deps.db, call, async (tx) => {
+          const selected = await withContextLock(deps.db, call, async (tx) => {
             await deps.admission.revalidate(ticket, tx);
             // A bounded database lock wait; no indefinite release barrier.
             await releaseScope(tx, call);
@@ -240,10 +240,10 @@ export function createContextService(deps: ContextServiceDeps): ContextService {
               if(row.request_digest!==requestDigest)throw new ThreadlineError('idempotency_mismatch','The context identity already names another request.');
               const result = await replay(tx, call, row, parsed);
               await releaseScope(tx, call);
-              return result;
+              return {replay:result};
             }
             const before = await rootFor(call);
-            const task = await taskFor(call, parsed.taskId);
+            const task = await taskFor(call, parsed.taskId, tx);
             if ((task?.requiredMemoryIds.length ?? 0) > CONTEXT_MAX_MANDATORY_ITEMS) throw new ContextRefusal('mandatory_overflow');
             const items: ContextItem[] = [];
             const omissions: ContextManifest['omissions'] = [
@@ -325,7 +325,22 @@ export function createContextService(deps: ContextServiceDeps): ContextService {
             await releaseScope(tx, call);
             await checkTask(call, manifest);
             if (canonicalDigest(before) !== canonicalDigest(await rootFor(call))) throw new ContextRefusal('stale_snapshot');
-            const outcome = (await deps.sources.appendContextManifest(call, manifest, nonce, tx)).outcomes[0];
+            return {publish: async () => deps.sources.appendContextManifest(call, manifest, nonce, async (tx, appended) => {
+            await deps.admission.revalidate(ticket, tx);
+            await releaseScope(tx,call);
+            await requireNativeSession(tx,call,parsed.nativeSessionId??null);
+            const concurrent=await tx.rows<OccurrenceRow>(`SELECT * FROM threadline_memory.context_occurrences
+              WHERE tenant_id=$1 AND project_id=$2 AND nonce=$3`,[call.scope.tenantId,parsed.projectId,nonce]);
+            if(concurrent[0]) {
+              const row=concurrent[0];
+              if(row.principal_id!==call.scope.principalId || row.token_id!==call.tokenId || row.request_digest!==requestDigest)
+                throw new ThreadlineError('idempotency_mismatch','Context preparation identity changed.');
+              return replay(tx,call,row,parsed);
+            }
+            await checkItemSources(tx,call,items);
+            await checkTask(call,manifest);
+            if(canonicalDigest(before)!==canonicalDigest(await rootFor(call)))throw new ContextRefusal('stale_snapshot');
+            const outcome = appended.outcomes[0];
             if (outcome === undefined || outcome.status === 'rejected') throw new ThreadlineError('idempotency_mismatch', 'The context manifest identity is unavailable.');
             const dependencies = [
               ...items.map((item) => ({kind:'version',id:item.versionId})),
@@ -356,7 +371,9 @@ export function createContextService(deps: ContextServiceDeps): ContextService {
             // reading graph state and validating the complete released packet.
             await releaseScope(tx, call);
             return result;
+            })};
           });
+          return 'replay' in selected ? selected.replay! : await selected.publish();
         } catch (error) {
           const refusal = classifyRefusal(error);
           if (refusal === null) throw error;

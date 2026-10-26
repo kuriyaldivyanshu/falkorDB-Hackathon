@@ -1,3 +1,5 @@
+import { acquireHomeLock, type HomeLock } from './storage/homeLock.js';
+import { createPublicationService, type PublicationService } from './service/publication.js';
 import {
   ThreadlineError,
   type CapabilityReport,
@@ -177,6 +179,10 @@ export function createMemoryService(deps: MemoryServiceDeps): MemoryService {
   const logger = deps.logger ?? silentLogger;
   const clock = deps.clock ?? (() => new Date());
 
+  let startup:Promise<ServiceAddress>|null=null;
+  let stopping:Promise<void>|null=null;
+  let homeLock:HomeLock|null=null;
+  let publication:PublicationService|null=null;
   let state: ServiceState = 'created';
   let startedAtMs: number | null = null;
   let server: ApiServerHandle | null = null;
@@ -333,6 +339,10 @@ export function createMemoryService(deps: MemoryServiceDeps): MemoryService {
     files ??= createSourceFileStore({ root: deps.config.paths.sourceRoot, logger });
     filesReady = await files.probe();
 
+    if(sqlReady() && privilegedSql.ready) {
+      publication=createPublicationService({db:database,files});
+      await publication.reconcile();
+    }
     policies = createPolicyService({db:database,policyHome:deps.config.paths.home});
     release = createReleaseService({db: database, files, policies, ...(graphStore === null ? {} : {graphStore})});
     const admission = createAdmissionService({ db: database, policyHome: deps.config.paths.home, policies });
@@ -340,10 +350,10 @@ export function createMemoryService(deps: MemoryServiceDeps): MemoryService {
     access = createAccessService({ db: database, admission });
     nativeAccess = createNativeAccessService({ db: database, admission });
     projects = createProjectService({ db: database, admission, clock, logger });
-    sources = createSourceService({ db: database, admission, files, release, clock, logger });
+    sources = createSourceService({ db: database, admission, files, release, ...(publication ? {publication}:{}), clock, logger });
     operations = createOperationService({ db: database, policies });
     if (graphStore !== null && sqlReady()) {
-      memories = createSemanticMemoryService({ db: database, admission, files, graphStore, release, clock, logger });
+      memories = createSemanticMemoryService({ db: database, admission, files, graphStore, release, ...(publication ? {publication}:{}), clock, logger });
       tasks = createTaskService({ db: database, admission, graphStore, release, clock, logger });
       context = createContextService({ db: database, admission, graphStore, sources, tasks, release, clock });
       worker = createOperationsWorker({
@@ -369,9 +379,10 @@ export function createMemoryService(deps: MemoryServiceDeps): MemoryService {
   };
 
   const closeStorage = async (): Promise<void> => {
+    await publication?.close();
     const closers: Promise<void>[] = [];
     if (worker !== null) {
-      await worker.stop().catch(() => undefined);
+      await worker.stop();
       worker = null;
     }
     if (graphStore !== null) {
@@ -575,16 +586,18 @@ export function createMemoryService(deps: MemoryServiceDeps): MemoryService {
     capabilities: () => buildCapabilityReport(),
 
     async start(): Promise<ServiceAddress> {
-      if (state !== 'created') {
+      if (state !== 'created' || stopping !== null) {
         throw new ThreadlineError('invalid_request', 'The service has already been started.');
       }
       state = 'starting';
-      await openStorage();
+      startup=(async()=>{
+      try {homeLock=acquireHomeLock(deps.config.paths.home);}
+      catch(error) {state='stopped';throw error;}
+      try {await openStorage();} catch(error) {await closeStorage();homeLock.release();homeLock=null;state='stopped';throw error;}
       logger.log({
         level: 'info',
         message: 'Starting the memory service.',
         fields: {
-          home: deps.config.paths.home,
           host: deps.config.host,
           port: deps.config.port,
           database: deps.config.postgres.database,
@@ -602,6 +615,7 @@ export function createMemoryService(deps: MemoryServiceDeps): MemoryService {
         await server.close().catch(() => undefined);
         server = null;
         await closeStorage();
+        homeLock?.release();homeLock=null;
         state = 'stopped';
         throw error;
       }
@@ -614,9 +628,16 @@ export function createMemoryService(deps: MemoryServiceDeps): MemoryService {
         fields: { url: address.url, state },
       });
       return address;
+      })();
+      return startup;
     },
 
     async stop(): Promise<void> {
+      if(stopping)return stopping;
+      stopping=(async()=>{
+      // Startup owns the home until it either admits serving or finishes its
+      // failure cleanup. It must never resume after shutdown releases ownership.
+      await startup?.catch(()=>undefined);
       if (state === 'stopped') {
         return;
       }
@@ -629,12 +650,15 @@ export function createMemoryService(deps: MemoryServiceDeps): MemoryService {
         await live.close();
       }
       if (worker !== null) {
-        await worker.stop().catch(() => undefined);
+        await worker.stop();
       }
       await closeStorage();
+      homeLock?.release();homeLock=null;
       startedAtMs = null;
       state = 'stopped';
       logger.log({ level: 'info', message: 'Memory service stopped.' });
+      })();
+      return stopping;
     },
   };
   return service;
@@ -649,3 +673,7 @@ export type { AdmissionService, AdmissionTicket } from './service/admission.js';
 
 export { createPolicyService } from './service/policy.js';
 export type { PolicyService, EffectivePolicySnapshot } from './service/policy.js';
+
+export { createPublicationService } from './service/publication.js';
+export type { PublicationService, PublicationPlan, PublicationInput } from './service/publication.js';
+export { acquireHomeLock } from './storage/homeLock.js';
